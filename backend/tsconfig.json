@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "types": [
+      "bun"
+    ],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "paths": {
+      "@/env": [
+        "./env.ts"
+      ],
+      "@/db": [
+        "./db.ts"
+      ],
+      "@/route-manifest": [
+        "../generated/route-manifest.gen.ts"
+      ],
+      "@/shared/*": [
+        "../shared/*"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../shared/**/*.ts",
+    "../shared/**/*.tsx",
+    "../generated/route-manifest.gen.ts"
+  ]
+}

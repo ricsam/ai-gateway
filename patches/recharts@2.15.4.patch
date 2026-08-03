@@ -1,0 +1,50 @@
+diff --git a/es6/util/ChartUtils.js b/es6/util/ChartUtils.js
+index 76b3f5c2e897f4e11635f1e04f841be88164b5e3..444bf65ad71d1109629fc3d28abc364b5498eb5f 100644
+--- a/es6/util/ChartUtils.js
++++ b/es6/util/ChartUtils.js
+@@ -10,7 +10,7 @@ function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t =
+ function _defineProperty(obj, key, value) { key = _toPropertyKey(key); if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
+ function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" == _typeof(i) ? i : i + ""; }
+ function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != _typeof(i)) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
+-import * as d3Scales from 'victory-vendor/d3-scale';
++import { scaleBand, scalePoint, scaleIdentity, scaleLinear, scaleLog, scaleSymlog, scaleOrdinal, scalePow, scaleSqrt, scaleRadial, scaleQuantile, scaleQuantize, scaleThreshold, scaleTime, scaleUtc, scaleSequential, scaleSequentialLog, scaleSequentialPow, scaleSequentialSqrt, scaleSequentialSymlog, scaleSequentialQuantile, scaleDiverging, scaleDivergingLog, scaleDivergingPow, scaleDivergingSqrt, scaleDivergingSymlog } from 'victory-vendor/d3-scale';
+ import { stack as shapeStack, stackOffsetExpand, stackOffsetNone, stackOffsetSilhouette, stackOffsetWiggle, stackOrderNone } from 'victory-vendor/d3-shape';
+ import max from 'lodash/max';
+ import min from 'lodash/min';
+@@ -34,6 +34,36 @@ import { getLegendProps } from './getLegendProps';
+ 
+ // Exported for backwards compatibility
+ export { getLegendProps };
++// Bun's ESM namespace interop can mis-handle this re-exported module, so use
++// named imports and rebuild the lookup object locally.
++var d3Scales = {
++  scaleBand: scaleBand,
++  scalePoint: scalePoint,
++  scaleIdentity: scaleIdentity,
++  scaleLinear: scaleLinear,
++  scaleLog: scaleLog,
++  scaleSymlog: scaleSymlog,
++  scaleOrdinal: scaleOrdinal,
++  scalePow: scalePow,
++  scaleSqrt: scaleSqrt,
++  scaleRadial: scaleRadial,
++  scaleQuantile: scaleQuantile,
++  scaleQuantize: scaleQuantize,
++  scaleThreshold: scaleThreshold,
++  scaleTime: scaleTime,
++  scaleUtc: scaleUtc,
++  scaleSequential: scaleSequential,
++  scaleSequentialLog: scaleSequentialLog,
++  scaleSequentialPow: scaleSequentialPow,
++  scaleSequentialSqrt: scaleSequentialSqrt,
++  scaleSequentialSymlog: scaleSequentialSymlog,
++  scaleSequentialQuantile: scaleSequentialQuantile,
++  scaleDiverging: scaleDiverging,
++  scaleDivergingLog: scaleDivergingLog,
++  scaleDivergingPow: scaleDivergingPow,
++  scaleDivergingSqrt: scaleDivergingSqrt,
++  scaleDivergingSymlog: scaleDivergingSymlog
++};
+ export function getValueByDataKey(obj, dataKey, defaultValue) {
+   if (isNil(obj) || isNil(dataKey)) {
+     return defaultValue;

@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-llm_proxy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llm_proxy}
+      POSTGRES_DB: ${POSTGRES_DB:-llm_proxy}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    image: ${APP_IMAGE:-llm-proxy:local}
+    build:
+      context: .
+      target: runtime
+    command: ["bun", "run", "db:migrate"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-llm_proxy}:${POSTGRES_PASSWORD:-llm_proxy}@postgres:5432/${POSTGRES_DB:-llm_proxy}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    image: ${APP_IMAGE:-llm-proxy:local}
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-llm_proxy}:${POSTGRES_PASSWORD:-llm_proxy}@postgres:5432/${POSTGRES_DB:-llm_proxy}
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:3000/healthz');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

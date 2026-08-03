@@ -1,0 +1,108 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/example/llm-proxy
+  tag: latest
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: traefik
+  host: proxy.example.com
+  annotations: {}
+  path: /
+  pathType: Prefix
+
+config:
+  baseUrl: https://proxy.example.com
+  awsRegion: us-east-1
+  oidc:
+    issuer: https://id.example.com
+    discoveryUrl: ""
+    providerId: oidc
+    providerLabel: Company SSO
+    scopes: openid,profile,email
+    pkce: true
+    strictIssuerValidation: false
+  bootstrapAdminSubjects: ""
+  bootstrapAdminEmails: ""
+  brand:
+    name: LLM Proxy
+    tagline: Secure, metered access to AI models
+    logoUrl: ""
+    faviconUrl: ""
+    primaryColor: "#2563eb"
+    primaryForegroundColor: "#ffffff"
+
+secrets:
+  existingSecret: ""
+  keys:
+    databaseUrl: DATABASE_URL
+    authSecret: BETTER_AUTH_SECRET
+    oidcClientId: OIDC_CLIENT_ID
+    oidcClientSecret: OIDC_CLIENT_SECRET
+    awsAccessKeyId: AWS_ACCESS_KEY_ID
+    awsSecretAccessKey: AWS_SECRET_ACCESS_KEY
+    awsSessionToken: AWS_SESSION_TOKEN
+  values:
+    databaseUrl: ""
+    authSecret: ""
+    oidcClientId: ""
+    oidcClientSecret: ""
+    awsAccessKeyId: ""
+    awsSecretAccessKey: ""
+    awsSessionToken: ""
+
+postgresql:
+  enabled: false
+  externalSecret: false
+  image: postgres:17-alpine
+  database: llm_proxy
+  username: llm_proxy
+  password: change-me
+  persistence:
+    size: 10Gi
+    storageClass: rook-ceph-block
+
+migration:
+  enabled: true
+  backoffLimit: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+postgresqlResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
