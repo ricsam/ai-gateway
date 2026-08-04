@@ -3,9 +3,6 @@ image:
   tag: latest
 config:
   baseUrl: https://proxy-35xkhylwd67f.r5d.app
-  oidc:
-    issuer: https://id.example.com
-  bootstrapAdminEmails: admin@example.com
 secrets:
   existingSecret: llm-proxy-secrets
 postgresql:

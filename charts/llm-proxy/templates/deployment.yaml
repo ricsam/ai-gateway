@@ -58,13 +58,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "llm-proxy.secretName" . }}
                   key: {{ include "llm-proxy.databaseKey" . }}
-            {{- range $name, $key := dict "BETTER_AUTH_SECRET" .Values.secrets.keys.authSecret "OIDC_CLIENT_ID" .Values.secrets.keys.oidcClientId "OIDC_CLIENT_SECRET" .Values.secrets.keys.oidcClientSecret "AWS_ACCESS_KEY_ID" .Values.secrets.keys.awsAccessKeyId "AWS_SECRET_ACCESS_KEY" .Values.secrets.keys.awsSecretAccessKey "AWS_SESSION_TOKEN" .Values.secrets.keys.awsSessionToken }}
+            {{- range $name, $key := dict "BETTER_AUTH_SECRET" .Values.secrets.keys.authSecret "SETTINGS_ENCRYPTION_KEY" .Values.secrets.keys.settingsEncryptionKey }}
             - name: {{ $name }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "llm-proxy.secretName" $ }}
                   key: {{ $key }}
-                  optional: {{ eq $name "AWS_SESSION_TOKEN" }}
             {{- end }}
           readinessProbe:
             httpGet: { path: /readyz, port: http }

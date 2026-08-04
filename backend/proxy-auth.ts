@@ -68,6 +68,7 @@ export async function authenticateApiKeyPrincipal(request: Request): Promise<Pro
 export async function authenticateSessionPrincipal(request: Request): Promise<ProxyAuthResult> {
   const session = await authenticateRequest(request);
   if (!session) return { ok: false, status: 401, message: "Unauthorized", code: "unauthorized" };
+  if (session.mustChangePassword) return { ok: false, status: 403, message: "Password change required", code: "password_change_required" };
   return {
     ok: true,
     principal: {

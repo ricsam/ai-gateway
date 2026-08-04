@@ -40,6 +40,8 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-llm_proxy}:${POSTGRES_PASSWORD:-llm_proxy}@postgres:5432/${POSTGRES_DB:-llm_proxy}
       BASE_URL: ${BASE_URL:-http://localhost:3000}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?SETTINGS_ENCRYPTION_KEY is required}
     depends_on:
       postgres:
         condition: service_healthy

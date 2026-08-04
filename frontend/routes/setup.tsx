@@ -1,0 +1,18 @@
+import { createFileRoute, useNavigate } from "@richie-router/react";
+import { useEffect, useState } from "react";
+import { IconShieldCheck } from "@tabler/icons-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { loadPublicConfig } from "../config";
+
+export const Route = createFileRoute("/setup")({ component: Setup });
+function Setup() {
+  const navigate = useNavigate(); const [error, setError] = useState<string | null>(null); const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ username: "", email: "", name: "", password: "", confirm: "" });
+  useEffect(() => { void loadPublicConfig(true).then((config) => { if (!config.setup.required) navigate({ to: "/" }); }); }, [navigate]);
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); setError(null); if (form.password !== form.confirm) { setError("Passwords do not match"); return; } setSaving(true); try { const response = await fetch("/api/setup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(form) }); const data = await response.json() as any; if (!response.ok) throw new Error(data.error?.message || "Setup failed"); await loadPublicConfig(true); window.location.href = data.next || "/admin"; } catch (reason) { setError(reason instanceof Error ? reason.message : "Setup failed"); setSaving(false); } };
+  const field = (name: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [name]: event.target.value }));
+  return <main className="min-h-screen grid place-items-center p-6 bg-muted/30"><Card className="w-full max-w-lg"><CardHeader><div className="h-11 w-11 rounded-xl bg-primary text-primary-foreground grid place-items-center mb-3"><IconShieldCheck /></div><CardTitle className="text-2xl">Create the first administrator</CardTitle><CardDescription>This installation is unconfigured. The first successful setup request permanently claims it. Do not expose this page publicly before an operator completes setup.</CardDescription></CardHeader><CardContent><form className="grid gap-4" onSubmit={submit}><div className="grid sm:grid-cols-2 gap-4"><div className="space-y-2"><Label htmlFor="username">Username</Label><Input id="username" value={form.username} onChange={field("username")} autoComplete="username" required /></div><div className="space-y-2"><Label htmlFor="name">Display name</Label><Input id="name" value={form.name} onChange={field("name")} required /></div></div><div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={form.email} onChange={field("email")} required /></div><div className="grid sm:grid-cols-2 gap-4"><div className="space-y-2"><Label htmlFor="password">Password</Label><Input id="password" type="password" minLength={12} value={form.password} onChange={field("password")} autoComplete="new-password" required /></div><div className="space-y-2"><Label htmlFor="confirm">Confirm password</Label><Input id="confirm" type="password" minLength={12} value={form.confirm} onChange={field("confirm")} autoComplete="new-password" required /></div></div><p className="text-xs text-muted-foreground">Use 12–128 characters with at least one letter and one number.</p>{error && <p className="rounded-md bg-destructive/10 text-destructive p-3 text-sm">{error}</p>}<Button size="lg" disabled={saving}>{saving ? "Creating administrator…" : "Create administrator"}</Button></form></CardContent></Card></main>;
+}

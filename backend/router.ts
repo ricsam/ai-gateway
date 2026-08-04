@@ -4,22 +4,26 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import db from "@/db";
 import { contract } from "@/shared/contract";
 import { requireAdmin } from "./admin-guard";
-import { authenticateRequest, updateUserAccessSafely } from "./auth";
+import { authenticateRequest } from "./auth";
+import { updateUser } from "./user-service";
+import type { ManagementPrincipal } from "./management-auth";
 import { addCredits, calculateCost } from "./credit-service";
 import { hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
 import {
   apiKeysTable,
+  auditEventsTable,
   creditEventsTable,
   modelsTable,
-  teamMembersTable,
-  teamsTable,
+  groupMembersTable,
+  groupsTable,
   userTable,
 } from "./schema";
 
 interface RouterContext { getUserId: () => string }
-const teamRoleValues = new Set(["owner", "admin", "member"]);
+const groupRoleValues = new Set(["owner", "admin", "member"]);
+function adminPrincipal(userId: string): ManagementPrincipal { return { actorType: "user", actorId: userId, userId, scopes: new Set(["*"]) }; }
 
 function modelResponse(model: typeof modelsTable.$inferSelect) {
   return {
@@ -137,22 +141,33 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
 
   adminCreateModel: async ({ body, request }) => {
-    await requireAdmin(request);
-    const [model] = await db.insert(modelsTable).values(body).returning();
+    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    const [model] = await db.transaction(async (tx) => {
+      const created = await tx.insert(modelsTable).values(body).returning();
+      await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.created", targetType: "model", targetId: created[0]!.id, requestId, metadata: { modelId: created[0]!.modelId } });
+      return created;
+    });
     return { status: Status.Created, body: modelResponse(model!) };
   },
 
   adminUpdateModel: async ({ params, body, request }) => {
-    await requireAdmin(request);
-    const [model] = await db.update(modelsTable).set({ ...body, updatedAt: new Date() })
-      .where(eq(modelsTable.id, params.id)).returning();
+    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    const model = await db.transaction(async (tx) => {
+      const [changed] = await tx.update(modelsTable).set({ ...body, updatedAt: new Date() }).where(eq(modelsTable.id, params.id)).returning();
+      if (changed) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.updated", targetType: "model", targetId: changed.id, requestId, metadata: { fields: Object.keys(body) } });
+      return changed;
+    });
     if (!model) return { status: Status.NotFound, body: { error: "Model not found" } };
     return { status: Status.OK, body: modelResponse(model) };
   },
 
   adminDeleteModel: async ({ params, request }) => {
-    await requireAdmin(request);
-    const removed = await db.delete(modelsTable).where(eq(modelsTable.id, params.id)).returning({ id: modelsTable.id });
+    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    const removed = await db.transaction(async (tx) => {
+      const rows = await tx.delete(modelsTable).where(eq(modelsTable.id, params.id)).returning({ id: modelsTable.id, modelId: modelsTable.modelId });
+      if (rows[0]) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.deleted", targetType: "model", targetId: rows[0].id, requestId, metadata: { modelId: rows[0].modelId } });
+      return rows;
+    });
     if (!removed.length) return { status: Status.NotFound, body: { error: "Model not found" } };
     return { status: Status.OK, body: { success: true } };
   },
@@ -160,7 +175,7 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   adminTestModel: async ({ body, request }) => {
     await requireAdmin(request);
     try {
-      const client: BedrockRuntimeClient = getBedrockClient(body.region);
+      const client: BedrockRuntimeClient = await getBedrockClient(body.region);
       const response = await client.send(new ConverseCommand({
         modelId: body.modelId,
         messages: [{ role: "user", content: [{ text: body.prompt }] }],
@@ -182,14 +197,14 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     await requireAdmin(request);
     const users = await db.select().from(userTable).orderBy(asc(userTable.email));
     const memberships = await db.select({
-      userId: teamMembersTable.userId, teamId: teamsTable.id, teamName: teamsTable.name, role: teamMembersTable.role,
-    }).from(teamMembersTable).innerJoin(teamsTable, eq(teamMembersTable.teamId, teamsTable.id));
+      userId: groupMembersTable.userId, groupId: groupsTable.id, groupName: groupsTable.name, role: groupMembersTable.role,
+    }).from(groupMembersTable).innerJoin(groupsTable, eq(groupMembersTable.groupId, groupsTable.id));
     return { status: Status.OK, body: users.map((user) => ({
       id: user.id, name: user.name, email: user.email, role: user.role as "user" | "admin",
       creditBalance: user.creditBalance, defaultMonthlyCredits: user.defaultMonthlyCredits,
       enabled: user.enabled, apiEnabled: user.apiEnabled, createdAt: user.createdAt.toISOString(),
-      teams: memberships.filter((entry) => entry.userId === user.id).map((entry) => ({
-        id: entry.teamId, name: entry.teamName, role: entry.role as "owner" | "admin" | "member",
+      groups: memberships.filter((entry) => entry.userId === user.id).map((entry) => ({
+        id: entry.groupId, name: entry.groupName, role: entry.role as "owner" | "admin" | "member",
       })),
     })) };
   },
@@ -210,7 +225,8 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   adminUpdateUser: async ({ params, body, request }) => {
     await requireAdmin(request);
     try {
-      const updated = await updateUserAccessSafely(params.id, body);
+      const actor = await requireAdmin(request);
+      const updated = await updateUser(params.id, body, adminPrincipal(actor.id), request.headers.get("x-request-id") || crypto.randomUUID());
       if (!updated) return { status: Status.NotFound, body: { error: "User not found" } };
     } catch (error) {
       return { status: Status.BadRequest, body: { error: error instanceof Error ? error.message : "Unsafe administrator update" } };
@@ -223,66 +239,66 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     catch (error) { return { status: Status.BadRequest, body: { error: error instanceof Error ? error.message : "Reset failed" } }; }
   },
 
-  adminListTeams: async ({ request }) => {
+  adminListGroups: async ({ request }) => {
     await requireAdmin(request);
-    const teams = await db.select({
-      id: teamsTable.id, name: teamsTable.name, description: teamsTable.description, createdAt: teamsTable.createdAt,
-      memberCount: sql<number>`count(${teamMembersTable.userId})::int`,
-    }).from(teamsTable).leftJoin(teamMembersTable, eq(teamMembersTable.teamId, teamsTable.id))
-      .groupBy(teamsTable.id).orderBy(asc(teamsTable.name));
-    return { status: Status.OK, body: teams.map((team) => ({ ...team, createdAt: team.createdAt.toISOString() })) };
+    const groups = await db.select({
+      id: groupsTable.id, name: groupsTable.name, description: groupsTable.description, createdAt: groupsTable.createdAt,
+      memberCount: sql<number>`count(${groupMembersTable.userId})::int`,
+    }).from(groupsTable).leftJoin(groupMembersTable, eq(groupMembersTable.groupId, groupsTable.id))
+      .groupBy(groupsTable.id).orderBy(asc(groupsTable.name));
+    return { status: Status.OK, body: groups.map((group) => ({ ...group, createdAt: group.createdAt.toISOString() })) };
   },
 
-  adminCreateTeam: async ({ body, request }) => {
+  adminCreateGroup: async ({ body, request }) => {
     await requireAdmin(request);
-    const [team] = await db.insert(teamsTable).values(body).returning();
-    return { status: Status.Created, body: { id: team!.id, name: team!.name, description: team!.description, createdAt: team!.createdAt.toISOString() } };
+    const [group] = await db.insert(groupsTable).values(body).returning();
+    return { status: Status.Created, body: { id: group!.id, name: group!.name, description: group!.description, createdAt: group!.createdAt.toISOString() } };
   },
 
-  adminDeleteTeam: async ({ params, request }) => {
+  adminDeleteGroup: async ({ params, request }) => {
     await requireAdmin(request);
-    const removed = await db.delete(teamsTable).where(eq(teamsTable.id, params.id)).returning({ id: teamsTable.id });
-    if (!removed.length) return { status: Status.NotFound, body: { error: "Team not found" } };
+    const removed = await db.delete(groupsTable).where(eq(groupsTable.id, params.id)).returning({ id: groupsTable.id });
+    if (!removed.length) return { status: Status.NotFound, body: { error: "Group not found" } };
     return { status: Status.OK, body: { success: true } };
   },
 
-  adminGetTeam: async ({ params, request }) => {
+  adminGetGroup: async ({ params, request }) => {
     await requireAdmin(request);
-    const [team] = await db.select().from(teamsTable).where(eq(teamsTable.id, params.id)).limit(1);
-    if (!team) return { status: Status.NotFound, body: { error: "Team not found" } };
+    const [group] = await db.select().from(groupsTable).where(eq(groupsTable.id, params.id)).limit(1);
+    if (!group) return { status: Status.NotFound, body: { error: "Group not found" } };
     const members = await db.select({
-      userId: userTable.id, name: userTable.name, email: userTable.email, role: teamMembersTable.role, joinedAt: teamMembersTable.joinedAt,
-    }).from(teamMembersTable).innerJoin(userTable, eq(teamMembersTable.userId, userTable.id))
-      .where(eq(teamMembersTable.teamId, team.id));
+      userId: userTable.id, name: userTable.name, email: userTable.email, role: groupMembersTable.role, joinedAt: groupMembersTable.joinedAt,
+    }).from(groupMembersTable).innerJoin(userTable, eq(groupMembersTable.userId, userTable.id))
+      .where(eq(groupMembersTable.groupId, group.id));
     return { status: Status.OK, body: {
-      id: team.id, name: team.name, description: team.description, createdAt: team.createdAt.toISOString(),
+      id: group.id, name: group.name, description: group.description, createdAt: group.createdAt.toISOString(),
       members: members.map((member) => ({ ...member, role: member.role as "owner" | "admin" | "member", joinedAt: member.joinedAt.toISOString() })),
     } };
   },
 
-  adminAddTeamMember: async ({ params, body, request }) => {
+  adminAddGroupMember: async ({ params, body, request }) => {
     await requireAdmin(request);
-    if (!teamRoleValues.has(body.role)) return { status: Status.BadRequest, body: { error: "Invalid team role" } };
+    if (!groupRoleValues.has(body.role)) return { status: Status.BadRequest, body: { error: "Invalid group role" } };
     try {
-      await db.insert(teamMembersTable).values({ teamId: params.id, userId: body.userId, role: body.role });
+      await db.insert(groupMembersTable).values({ groupId: params.id, userId: body.userId, role: body.role });
       return { status: Status.Created, body: { success: true } };
-    } catch { return { status: Status.BadRequest, body: { error: "Could not add team member" } }; }
+    } catch { return { status: Status.BadRequest, body: { error: "Could not add group member" } }; }
   },
 
-  adminUpdateTeamMember: async ({ params, body, request }) => {
+  adminUpdateGroupMember: async ({ params, body, request }) => {
     await requireAdmin(request);
-    const changed = await db.update(teamMembersTable).set({ role: body.role }).where(and(
-      eq(teamMembersTable.teamId, params.id), eq(teamMembersTable.userId, params.userId),
-    )).returning({ userId: teamMembersTable.userId });
+    const changed = await db.update(groupMembersTable).set({ role: body.role }).where(and(
+      eq(groupMembersTable.groupId, params.id), eq(groupMembersTable.userId, params.userId),
+    )).returning({ userId: groupMembersTable.userId });
     if (!changed.length) return { status: Status.NotFound, body: { error: "Membership not found" } };
     return { status: Status.OK, body: { success: true } };
   },
 
-  adminRemoveTeamMember: async ({ params, request }) => {
+  adminRemoveGroupMember: async ({ params, request }) => {
     await requireAdmin(request);
-    const removed = await db.delete(teamMembersTable).where(and(
-      eq(teamMembersTable.teamId, params.id), eq(teamMembersTable.userId, params.userId),
-    )).returning({ userId: teamMembersTable.userId });
+    const removed = await db.delete(groupMembersTable).where(and(
+      eq(groupMembersTable.groupId, params.id), eq(groupMembersTable.userId, params.userId),
+    )).returning({ userId: groupMembersTable.userId });
     if (!removed.length) return { status: Status.NotFound, body: { error: "Membership not found" } };
     return { status: Status.OK, body: { success: true } };
   },

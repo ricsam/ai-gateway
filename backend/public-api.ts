@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import db from "@/db";
-import env from "@/env";
+import { getPublicConfig } from "./config-service";
 import { handleOpenAIProxy } from "./openai-proxy/handler";
 import {
   authenticateApiKeyPrincipal,
@@ -73,25 +73,8 @@ export async function handleCredits(request: Request): Promise<Response> {
   });
 }
 
-export function handlePublicConfig(): Response {
-  return Response.json({
-    brand: {
-      name: env.BRAND_NAME,
-      tagline: env.BRAND_TAGLINE,
-      logoUrl: env.BRAND_LOGO_URL || null,
-      faviconUrl: env.BRAND_FAVICON_URL || null,
-      primaryColor: env.BRAND_PRIMARY_COLOR,
-      primaryForegroundColor: env.BRAND_PRIMARY_FOREGROUND_COLOR,
-    },
-    auth: {
-      mode: "oidc",
-      providerId: env.OIDC_PROVIDER_ID,
-      providerLabel: env.OIDC_PROVIDER_LABEL,
-    },
-    api: {
-      baseUrl: `${env.BASE_URL}/v1`,
-    },
-  });
+export async function handlePublicConfig(): Promise<Response> {
+  return Response.json(await getPublicConfig(), { headers: { "cache-control": "no-store" } });
 }
 
 export function handleHealth(): Response {

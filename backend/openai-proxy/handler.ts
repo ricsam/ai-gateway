@@ -63,8 +63,11 @@ function errorResponse(
  * Map AWS SDK errors to OpenAI error format
  */
 function mapAwsError(error: Error): Response {
-  console.warn("[OpenAI Proxy] AWS error:", { name: error.name, message: error.message });
   const errorName = error.name || "";
+  if (errorName === "ProviderNotConfiguredError") {
+    return errorResponse("AWS Bedrock is not configured", "server_error", 503, "provider_not_configured");
+  }
+  console.warn("[OpenAI Proxy] AWS error:", { name: error.name, message: error.message });
   const message = error.message || "Unknown error";
   
   switch (errorName) {
@@ -221,7 +224,7 @@ export async function handleOpenAIProxy(
   }
 
   // Create region-specific Bedrock client
-  const bedrockClient = getBedrockClient(modelInfo.region);
+  const bedrockClient = await getBedrockClient(modelInfo.region);
 
   try {
     if (body.stream === true) {

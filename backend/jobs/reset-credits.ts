@@ -1,9 +1,10 @@
 import db from "@/db";
 import { userTable, creditEventsTable } from "../schema";
-import { eq, gt } from "drizzle-orm";
+import { eq, gt, sql } from "drizzle-orm";
 
 export default async function resetCredits() {
   return await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('llm-proxy:credit-reset'))`);
     // Query all users with their individual monthly quotas (skip users with quota = 0)
     const users = await tx
       .select({

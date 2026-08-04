@@ -23,7 +23,7 @@ const modelSchema = z.object({
   updatedAt: z.string(),
 });
 
-const teamSummarySchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["owner", "admin", "member"]) });
+const groupSummarySchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["owner", "admin", "member"]) });
 const usageLogSchema = z.object({
   id: z.string(),
   creditsAdded: z.number(),
@@ -140,7 +140,7 @@ export const contract = defineContract({
     responses: { [Status.OK]: z.array(z.object({
       id: z.string(), name: z.string(), email: z.string(), role: z.enum(["user", "admin"]), creditBalance: z.number(),
       defaultMonthlyCredits: z.number(), enabled: z.boolean(), apiEnabled: z.boolean(), createdAt: z.string(),
-      teams: z.array(teamSummarySchema),
+      groups: z.array(groupSummarySchema),
     })) },
   },
   adminUpdateUserCredits: {
@@ -160,42 +160,42 @@ export const contract = defineContract({
     responses: { [Status.OK]: z.object({ usersReset: z.number() }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
-  adminListTeams: {
-    type: "standard", method: "GET", path: "/admin/teams",
+  adminListGroups: {
+    type: "standard", method: "GET", path: "/admin/groups",
     responses: { [Status.OK]: z.array(z.object({ id: z.string(), name: z.string(), description: z.string().nullable(), memberCount: z.number(), createdAt: z.string() })) },
   },
-  adminCreateTeam: {
-    type: "standard", method: "POST", path: "/admin/teams",
+  adminCreateGroup: {
+    type: "standard", method: "POST", path: "/admin/groups",
     body: z.object({ name: z.string().min(1), description: z.string().optional() }),
     responses: { [Status.Created]: z.object({ id: z.string(), name: z.string(), description: z.string().nullable(), createdAt: z.string() }) },
   },
-  adminDeleteTeam: {
-    type: "standard", method: "DELETE", path: "/admin/teams/:id", params: z.object({ id: z.string() }),
+  adminDeleteGroup: {
+    type: "standard", method: "DELETE", path: "/admin/groups/:id", params: z.object({ id: z.string() }),
     responses: { [Status.OK]: z.object({ success: z.boolean() }) },
     errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
   },
-  adminGetTeam: {
-    type: "standard", method: "GET", path: "/admin/teams/:id", params: z.object({ id: z.string() }),
+  adminGetGroup: {
+    type: "standard", method: "GET", path: "/admin/groups/:id", params: z.object({ id: z.string() }),
     responses: { [Status.OK]: z.object({
       id: z.string(), name: z.string(), description: z.string().nullable(), createdAt: z.string(),
       members: z.array(z.object({ userId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "member"]), joinedAt: z.string() })),
     }) },
     errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
   },
-  adminAddTeamMember: {
-    type: "standard", method: "POST", path: "/admin/teams/:id/members", params: z.object({ id: z.string() }),
+  adminAddGroupMember: {
+    type: "standard", method: "POST", path: "/admin/groups/:id/members", params: z.object({ id: z.string() }),
     body: z.object({ userId: z.string(), role: z.enum(["owner", "admin", "member"]).default("member") }),
     responses: { [Status.Created]: z.object({ success: z.boolean() }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }), [Status.NotFound]: z.object({ error: z.string() }) },
   },
-  adminUpdateTeamMember: {
-    type: "standard", method: "PATCH", path: "/admin/teams/:id/members/:userId", params: z.object({ id: z.string(), userId: z.string() }),
+  adminUpdateGroupMember: {
+    type: "standard", method: "PATCH", path: "/admin/groups/:id/members/:userId", params: z.object({ id: z.string(), userId: z.string() }),
     body: z.object({ role: z.enum(["owner", "admin", "member"]) }),
     responses: { [Status.OK]: z.object({ success: z.boolean() }) },
     errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
   },
-  adminRemoveTeamMember: {
-    type: "standard", method: "DELETE", path: "/admin/teams/:id/members/:userId", params: z.object({ id: z.string(), userId: z.string() }),
+  adminRemoveGroupMember: {
+    type: "standard", method: "DELETE", path: "/admin/groups/:id/members/:userId", params: z.object({ id: z.string(), userId: z.string() }),
     responses: { [Status.OK]: z.object({ success: z.boolean() }) },
     errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
   },

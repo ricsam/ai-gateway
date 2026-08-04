@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@richie-router/react";
 import { useEffect, useState, type ReactNode } from "react";
-import { IconActivity, IconAdjustments, IconKey, IconLogout, IconMessage, IconShield, IconUsersGroup } from "@tabler/icons-react";
+import { IconActivity, IconAdjustments, IconChartBar, IconKey, IconLockCog, IconLogout, IconMessage, IconSettings, IconShield, IconShieldLock, IconUsersGroup } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { signOut, useSession } from "../auth-client";
 import { loadPublicConfig } from "../config";
@@ -13,7 +13,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const role = (session?.user as { role?: string } | undefined)?.role;
 
   useEffect(() => { void loadPublicConfig().then((config) => setBrandName(config.brand.name)); }, []);
-  useEffect(() => { if (!isPending && !session) navigate({ to: "/" }); }, [isPending, session, navigate]);
+  useEffect(() => { if (!isPending && !session) navigate({ to: "/" }); else if (!isPending && (session?.user as { mustChangePassword?: boolean } | undefined)?.mustChangePassword) navigate({ to: "/change-password" }); }, [isPending, session, navigate]);
 
   if (isPending || !session) return <div className="min-h-screen grid place-items-center text-muted-foreground">Loading...</div>;
   const logout = async () => { await signOut(); navigate({ to: "/" }); };
@@ -40,5 +40,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 export const adminLinks = [
   { to: "/admin/models" as const, label: "Models", icon: IconAdjustments },
   { to: "/admin/users" as const, label: "Users", icon: IconActivity },
-  { to: "/admin/teams" as const, label: "Teams", icon: IconUsersGroup },
+  { to: "/admin/groups" as const, label: "Groups", icon: IconUsersGroup },
+  { to: "/admin/usage" as const, label: "Usage", icon: IconChartBar },
+  { to: "/admin/authentication" as const, label: "Authentication", icon: IconLockCog },
+  { to: "/admin/settings" as const, label: "Brand & AWS", icon: IconSettings },
+  { to: "/admin/security" as const, label: "Keys & Audit", icon: IconShieldLock },
 ];

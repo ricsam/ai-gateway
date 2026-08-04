@@ -1,25 +1,34 @@
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
-import env from "@/env";
+import { eq } from "drizzle-orm";
+import db from "./db";
+import { awsConfigurationTable } from "./schema";
+import { decryptSetting } from "./settings-crypto";
 
-// Default BedrockRuntimeClient using global AWS_REGION
-const defaultClient = new BedrockRuntimeClient({
-  region: env.AWS_REGION,
-  credentials: {
-    accessKeyId: env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-    sessionToken: env.AWS_SESSION_TOKEN,
-  },
-});
+export class ProviderNotConfiguredError extends Error {
+  override name = "ProviderNotConfiguredError";
+  code = "provider_not_configured";
+  constructor() { super("AWS Bedrock credentials and default region are not configured"); }
+}
 
-// Get a region-specific BedrockRuntimeClient for proxy endpoints
-export function getBedrockClient(region?: string | null) {
-  if (!region || region === env.AWS_REGION) return defaultClient;
-  return new BedrockRuntimeClient({
-    region,
-    credentials: {
-      accessKeyId: env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: env.AWS_SESSION_TOKEN,
-    },
-  });
+const clients = new Map<string, BedrockRuntimeClient>();
+
+export function invalidateBedrockClients(): void {
+  for (const client of clients.values()) client.destroy();
+  clients.clear();
+}
+
+export async function getBedrockClient(regionOverride?: string | null): Promise<BedrockRuntimeClient> {
+  const [configuration] = await db.select().from(awsConfigurationTable).where(eq(awsConfigurationTable.id, "main")).limit(1);
+  if (!configuration?.defaultRegion || !configuration.accessKeyId || !configuration.secretAccessKeyEnvelope) throw new ProviderNotConfiguredError();
+  const region = regionOverride || configuration.defaultRegion;
+  const cacheKey = `${configuration.revision}:${region}`;
+  const cached = clients.get(cacheKey);
+  if (cached) return cached;
+  const secretAccessKey = await decryptSetting(configuration.secretAccessKeyEnvelope, "aws:secret-access-key");
+  const sessionToken = configuration.sessionTokenEnvelope
+    ? await decryptSetting(configuration.sessionTokenEnvelope, "aws:session-token")
+    : undefined;
+  const client = new BedrockRuntimeClient({ region, credentials: { accessKeyId: configuration.accessKeyId, secretAccessKey, sessionToken } });
+  clients.set(cacheKey, client);
+  return client;
 }

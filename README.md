@@ -1,139 +1,64 @@
 # White-Label LLM Proxy
 
-A self-hosted, runtime-brandable proxy for AWS Bedrock. It exposes an OpenAI-compatible API, OIDC user login, user-owned credits, scoped API keys, usage attribution, model administration, teams, and a deliberately small stateless model playground.
+A self-hosted AWS Bedrock proxy with an OpenAI-compatible inference API and database-backed administrative control plane. Administrators manage local users, groups, models/pricing, branding, login integrations, AWS credentials, credits, management keys, and audit history at runtime.
 
-This project is the proxy and billing/authorization boundary. It is not a full chat or document-writing product.
+## First boot
 
-## API
+The application needs only four deployment values:
 
-The stable client base URL is `https://your-proxy.example/v1`.
+```dotenv
+BASE_URL=https://proxy.example.com
+DATABASE_URL=postgres://...
+BETTER_AUTH_SECRET=<strong random secret>
+SETTINGS_ENCRYPTION_KEY=v1:<base64 of exactly 32 random bytes>
+```
 
-| Method | Endpoint | Required API-key scope |
+Run migrations, start the service, and visit `/setup`. The first successful visitor creates the initial local administrator and permanently closes setup. **Do not expose an unconfigured installation's Ingress until an operator can immediately complete setup.** A safe rollout creates the database and private service first, completes setup through a protected tunnel/port-forward, then enables public Ingress.
+
+The encryption key protects OIDC, trusted-header, and AWS secret material. Back it up with the database; losing it makes encrypted settings unrecoverable. Do not rotate it by replacing the environment value alone—decrypt/re-encrypt all envelopes in a maintenance operation first.
+
+## Management API
+
+The stable management base is `/management/v1`; its OpenAPI document is `/management/v1/openapi.json`. Browser calls use an enabled administrator session and same-origin mutation checks. Automation uses one-time-displayed `llma_` management keys with granular scopes. Management keys cannot invoke `/v1` inference.
+
+```sh
+curl https://proxy.example.com/management/v1/users \
+  -H 'Authorization: Bearer llma_...'
+```
+
+Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
+
+## Inference API
+
+| Method | Endpoint | Inference-key scope |
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | `llm.invoke` |
 | `GET` | `/v1/models` | `models.read` |
 | `GET` | `/v1/credits` | `credits.read` |
 
-API keys begin with `llmp_`, are shown once, and are stored only as SHA-256 digests. Keys can be scoped, expired, and revoked. Both streaming SSE and non-streaming chat completions are supported, including the implemented OpenAI tools subset.
+Inference keys begin with `llmp_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 
-```sh
-curl https://proxy.example.com/v1/chat/completions \
-  -H 'Authorization: Bearer llmp_...' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "configured-bedrock-model-id",
-    "messages": [{"role":"user","content":"Hello"}]
-  }'
-```
+## Authentication and groups
 
-OpenAI-compatible clients such as OpenCode or Pi can use:
+Local username/password login is always the recovery path. Public registration is disabled after the atomic first-boot transaction. Administrators create local users, choose initial passwords, and may force password change on first login. Disabling a user invalidates sessions. Final enabled-administrator safeguards cover demotion, disablement, and deletion.
 
-```sh
-OPENAI_BASE_URL=https://proxy.example.com/v1
-OPENAI_API_KEY=llmp_...
-```
+Groups organize membership and reporting; credits remain user-owned. The Groups screen can select multiple groups and apply monthly quota, API-access, or account-enablement changes to the union of their members. External identities are anchored by provider and immutable subject. Implicit email-based account linking is disabled.
 
-## Breaking fresh-database release
+The Authentication screen and management API configure generic OIDC and trusted-header providers, encrypted secrets, discovery tests, claim/header mapping, provisioning policy, and no-restart revisions. Trusted-header authentication is an explicit advanced mode: the immediate TCP peer must match a configured CIDR, the proxy must strip client-supplied identity headers, and every request must carry the configured shared secret. Forwarded client-IP headers are never used as the trusted source address.
 
-This version intentionally does not migrate the former product database. Use a new database or a new persistent volume. Do not run the reset command against data you need.
+## Operations
 
-For an explicit local reset:
-
-```sh
-ALLOW_DATABASE_RESET=true DATABASE_URL=postgres://... bun run db:reset
-bun run db:migrate
-```
-
-Startup never drops data and does not run migrations implicitly.
-
-## OIDC login
-
-Register one confidential OpenID Connect client at the customer identity provider. The callback URI is:
-
-```text
-${BASE_URL}/api/auth/oauth2/callback/${OIDC_PROVIDER_ID}
-```
-
-The default provider ID is `oidc`. Discovery defaults to `${OIDC_ISSUER}/.well-known/openid-configuration`. Authorization code flow, optional PKCE, issuer validation, and the standard `openid profile email` scopes are configured through environment variables.
-
-Users are provisioned on first successful OIDC login. Role, enabled state, API access, and credits are server-owned fields and are never accepted from arbitrary IdP claims.
-
-### Bootstrap administrators
-
-At deployment, provide comma-separated immutable OIDC subjects:
-
-```sh
-BOOTSTRAP_ADMIN_SUBJECTS=00u123,00u456
-```
-
-Verified normalized emails are supported as a convenience fallback:
-
-```sh
-BOOTSTRAP_ADMIN_EMAILS=admin@example.com
-```
-
-A match promotes the user after login and configuration changes never implicitly demote anyone. Existing administrators can promote or demote users in the admin UI. The backend rejects attempts to disable or demote the final enabled administrator.
-
-## Runtime branding
-
-Branding is read at runtime, so one image can serve many installations:
-
-- `BRAND_NAME`
-- `BRAND_TAGLINE`
-- `BRAND_LOGO_URL`
-- `BRAND_FAVICON_URL`
-- `BRAND_PRIMARY_COLOR` (six-digit hex)
-- `BRAND_PRIMARY_FOREGROUND_COLOR` (six-digit hex)
-- `BASE_URL`
-
-See [`.env.example`](.env.example) for the complete environment contract.
-
-## Local development
-
-Prerequisites: Bun 1.3.14+, Docker, and an OIDC client.
+### Local development / Compose
 
 ```sh
 cp .env.example .env
-# Fill in OIDC, AWS, and secret values.
-docker compose up -d postgres
-bun install --frozen-lockfile
-bun run db:migrate
-bun run dev
-```
-
-Open `http://localhost:3000`. AWS credentials need `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` permissions for configured model IDs/regions.
-
-Useful commands:
-
-```sh
-bun run typecheck
-bun test
-bun run routes:generate
-bun run db:generate
-bun run db:migrate
-docker compose config
-helm lint charts/llm-proxy
-```
-
-## Docker Compose deployment
-
-Compose provides:
-
-- `postgres`: PostgreSQL 17 with a named volume
-- `migrate`: one-shot Drizzle migration
-- `app`: the proxy and UI, started after migration succeeds
-
-```sh
-cp .env.example .env
-# Set production values and a strong random BETTER_AUTH_SECRET.
+# Generate strong BETTER_AUTH_SECRET and SETTINGS_ENCRYPTION_KEY values.
 docker compose up --build -d
 ```
 
-Back up the `postgres_data` volume/database before upgrades. For this breaking release, choose a new volume instead of attaching an old product database.
+Compose runs PostgreSQL, a one-shot migration, and the app. No OIDC, AWS, bootstrap-admin, or branding values belong in Compose.
 
-## Helm deployment
-
-The chart is at [`charts/llm-proxy`](charts/llm-proxy). External PostgreSQL and an existing Kubernetes Secret are recommended for production.
+### Helm
 
 ```sh
 helm upgrade --install proxy charts/llm-proxy \
@@ -141,48 +66,39 @@ helm upgrade --install proxy charts/llm-proxy \
   --set image.repository=ghcr.io/your-org/llm-proxy \
   --set image.tag=0.1.0 \
   --set config.baseUrl=https://proxy.example.com \
-  --set config.oidc.issuer=https://id.example.com \
   --set secrets.existingSecret=llm-proxy-secrets \
   --set ingress.enabled=true \
   --set ingress.host=proxy.example.com
 ```
 
-The existing Secret must contain keys configured under `secrets.keys` (defaults: `DATABASE_URL`, `BETTER_AUTH_SECRET`, OIDC client ID/secret, and AWS credentials). With bundled PostgreSQL, the chart normally creates that Secret and also stores `POSTGRES_PASSWORD`; if you set `secrets.existingSecret`, include `POSTGRES_PASSWORD` in it as well. Set `postgresql.externalSecret=true` only when another secret controller creates the named Secret. The chart also has an optional single-node PostgreSQL StatefulSet for small installations:
+The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. Bundled PostgreSQL is intended for small installations and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external PostgreSQL for HA. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support.
+
+### Backups and recovery
+
+Back up PostgreSQL and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Test restores regularly.
+
+With database access, recover a local administrator offline:
 
 ```sh
---set postgresql.enabled=true \
---set postgresql.persistence.storageClass=rook-ceph-block
+DATABASE_URL=postgres://... bun run admin:recover -- username 'new-strong-password'
 ```
 
-It uses `ReadWriteOnce`, mounts the complete volume without `subPath`, and defaults to `rook-ceph-block`. Use a managed external database for high availability and operational backups. The chart includes probes, security contexts, configurable resources, an optional migration Job, Service, and Ingress. No TLS block is emitted; use the ingress controller or edge termination appropriate for the cluster.
+This promotes/enables the user, replaces or creates its credential account, revokes sessions, and requires another password change after login. It does not reopen first-boot setup.
 
-## Authentication extension contract
+Rotate AWS keys by saving replacement credentials in Admin → Brand & AWS, testing a configured model, then revoking the former key in AWS. Clearing credentials makes enabled models unavailable. Secret values and sensitive test errors are excluded from API responses and audit metadata.
 
-Inference and billing receive a normalized principal:
+## Development checks
 
-```ts
-interface ProxyPrincipal {
-  userId: string;
-  credentialType: "api_key" | "session";
-  credentialId: string;
-  scopes: ReadonlySet<string>;
-}
+```sh
+bun install --frozen-lockfile
+bun run routes:generate
+bun run typecheck
+bun test
+bun run db:migrate
+
+docker compose config
+helm lint charts/llm-proxy
+helm template proxy charts/llm-proxy --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
 ```
 
-API keys implement the public API verifier today; sessions adapt to the same principal for the playground. Future integrations should add a verifier that produces this principal rather than changing model or billing code.
-
-A later independent chat application can register one deployment client, authenticate its user with customer OIDC, and exchange that signed identity at an RFC 8693 token endpoint. Planned, not currently implemented:
-
-- `POST /oauth/token` token exchange
-- proxy-issued short-lived JWT access tokens
-- `/.well-known/oauth-authorization-server` and `/.well-known/jwks.json`
-- optional direct external-OIDC API tokens
-- explicitly enabled trusted identity assertions
-
-The intended pairing model is one manually provisioned client ID/secret per chat installation. The deployment credential authenticates the installation; the signed OIDC token authenticates the human. A future verifier should validate the deployment's allowed issuer, audience, signature, expiry, and requested scopes, map `(deployment, issuer, subject)` to a proxy user/team, and then emit the same `ProxyPrincipal` consumed today. The short-lived proxy token should carry user, team, deployment/client, audience, scope, and expiry claims.
-
-Direct external-OIDC bearer acceptance is an advanced alternative when the customer can issue an access token specifically for this proxy audience. Trusted-identity assertions are a separate weaker mode for upstream trusted-header deployments: they trust the chat backend to authenticate users, must use authenticated deployment credentials, and must remain disabled by default. The proxy and chat installations never need to share a database, Kubernetes namespace, session secret, or OIDC implementation.
-
-## Data and billing
-
-Credits are owned by users. Teams organize membership and reporting but do not fund requests. Every billed request records user, API-key credential (when applicable), source (`api` or `playground`), model, token/cache usage, component costs, and credits charged in an append-only PostgreSQL ledger. Settlements lock the user row so concurrent completions cannot charge beyond the available balance.
+This is an intentionally breaking pre-release baseline. Use a fresh database/PVC; the baseline contains no legacy organization terminology or deploy-time identity configuration.

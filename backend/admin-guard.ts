@@ -19,6 +19,7 @@ export async function requireAuth(request: Request) {
     .where(eq(userTable.id, principal.userId))
     .limit(1);
   if (!user?.enabled) throw new AccessDeniedError(403, "Account disabled");
+  if (user.mustChangePassword) throw new AccessDeniedError(403, "Password change required");
   return user;
 }
 
