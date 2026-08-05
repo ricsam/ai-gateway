@@ -34,6 +34,9 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
         fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
@@ -56,16 +59,23 @@ spec:
                   name: {{ include "llm-proxy.secretName" . }}
                   key: POSTGRES_PASSWORD
             - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
+            periodSeconds: 5
+            failureThreshold: 120
+            timeoutSeconds: 3
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
-            initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
-            initialDelaySeconds: 20
             periodSeconds: 10
+            failureThreshold: 6
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.postgresqlResources | nindent 12 }}
           volumeMounts:
