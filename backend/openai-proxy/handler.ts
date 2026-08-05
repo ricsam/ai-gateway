@@ -178,7 +178,10 @@ export async function handleOpenAIProxy(
     return errorResponse("Insufficient credit balance", "invalid_request_error", 402, "insufficient_credits");
   }
 
-  const requestId = generateChatCompletionId();
+  const suppliedRequestId = request.headers.get("x-request-id")?.trim();
+  const requestId = suppliedRequestId && /^[A-Za-z0-9._:-]{1,128}$/.test(suppliedRequestId)
+    ? suppliedRequestId
+    : generateChatCompletionId();
   console.log(`[OpenAI Proxy] request=${requestId} user=${userId.slice(0, 8)} model=${body.model} stream=${body.stream === true} messages=${body.messages.length} tools=${body.tools?.length ?? 0}`);
 
   // 5. Transform request to Bedrock format and enforce the configured output limit.
@@ -223,10 +226,9 @@ export async function handleOpenAIProxy(
     bedrockRequest = addConverseCachePoints(bedrockRequest);
   }
 
-  // Create region-specific Bedrock client
-  const bedrockClient = await getBedrockClient(modelInfo.region);
-
   try {
+    // Create region-specific Bedrock client lazily inside the mapped error boundary.
+    const bedrockClient = await getBedrockClient(modelInfo.region);
     if (body.stream === true) {
       // 7. Streaming request
       return await handleStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, request.signal);
@@ -602,6 +604,22 @@ async function handleStreamingRequest(
             const delta = event.contentBlockDelta.delta;
             const blockIndex = event.contentBlockDelta.contentBlockIndex ?? 0;
             
+            // Bedrock thinking-capable models can emit reasoning blocks. Keep
+            // them separate from visible answer text for the model playground.
+            if (delta && "reasoningContent" in delta && delta.reasoningContent) {
+              const reasoning = "text" in delta.reasoningContent ? delta.reasoningContent.text : undefined;
+              if (reasoning) {
+                const enqueued = sendChunk({
+                  id,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: { reasoning_content: reasoning }, finish_reason: null, logprobs: null }],
+                });
+                if (!enqueued) break;
+              }
+            }
+
             // Handle text delta
             if (delta && "text" in delta && delta.text !== undefined) {
               const enqueued = sendChunk({

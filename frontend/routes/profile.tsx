@@ -1,57 +1,21 @@
-import { createFileRoute } from "@richie-router/react";
+import { createFileRoute, Link } from "@richie-router/react";
 import { useState } from "react";
 import { IconCopy, IconKey, IconPlus, IconTrash } from "@tabler/icons-react";
 import { api, queryClient } from "../api";
 import { AppShell } from "../ui/app-shell";
+import { AnalyticsControls } from "../ui/analytics-controls";
+import { BalanceBurndownChart, CreditsConsumedChart, TokensConsumedChart, UsageByModelChart, formatTokenCount } from "../ui/analytics-charts";
+import { useAnalyticsPreferences } from "../ui/use-analytics-preferences";
+import { ModelDeepDiveTable } from "../ui/model-deep-dive-table";
+import { UsageHistoryTable } from "../ui/usage-history-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { loadPublicConfig } from "../config";
-
-export const Route = createFileRoute("/profile")({ component: ApiAndUsage });
-
-function ApiAndUsage() {
-  const { data: profileData } = api.getProfile.useQuery({ queryKey: ["getProfile"], queryData: {} });
-  const { data: keyData } = api.listApiKeys.useQuery({ queryKey: ["listApiKeys"], queryData: {} });
-  const { data: usageData } = api.getUserUsageLogs.useQuery({ queryKey: ["usage"], queryData: { query: { limit: "25", offset: "0" } } });
-  const createKey = api.createApiKey.useMutation();
-  const deleteKey = api.deleteApiKey.useMutation();
-  const [name, setName] = useState("");
-  const [created, setCreated] = useState<string | null>(null);
-  const profile = profileData?.payload;
-  const keys = keyData?.payload ?? [];
-  const logs = usageData?.payload.logs ?? [];
-
-  const create = async () => {
-    const result = await createKey.mutateAsync({ body: { name, scopes: ["llm.invoke", "models.read", "credits.read"] } });
-    if (result.payload) setCreated(result.payload.key);
-    setName(""); void queryClient.invalidateQueries({ queryKey: ["listApiKeys"] });
-  };
-  const revoke = async (id: string) => { await deleteKey.mutateAsync({ params: { id } }); void queryClient.invalidateQueries({ queryKey: ["listApiKeys"] }); };
-
-  return <AppShell><main className="max-w-6xl mx-auto p-5 md:p-8 space-y-6">
-    <div><h1 className="text-2xl font-semibold">API & usage</h1><p className="text-muted-foreground text-sm">Create client credentials and review your metered model use.</p></div>
-    <div className="grid sm:grid-cols-3 gap-4">
-      <Card><CardHeader><CardDescription>Credit balance</CardDescription><CardTitle>${(profile?.creditBalance ?? 0).toFixed(2)}</CardTitle></CardHeader></Card>
-      <Card><CardHeader><CardDescription>Monthly allocation</CardDescription><CardTitle>${(profile?.defaultMonthlyCredits ?? 0).toFixed(2)}</CardTitle></CardHeader></Card>
-      <Card><CardHeader><CardDescription>Access</CardDescription><CardTitle className="flex gap-2"><Badge>{profile?.role ?? "user"}</Badge><Badge variant={profile?.apiEnabled ? "secondary" : "destructive"}>{profile?.apiEnabled ? "API enabled" : "API disabled"}</Badge></CardTitle></CardHeader></Card>
-    </div>
-
-    <Card><CardHeader><CardTitle className="flex gap-2 items-center"><IconKey /> API keys</CardTitle><CardDescription>Keys are displayed once, stored as SHA-256 hashes, and can be revoked at any time.</CardDescription></CardHeader><CardContent className="space-y-4">
-      {created && <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 space-y-2"><p className="text-sm font-medium">Copy this key now. It cannot be shown again.</p><div className="flex gap-2"><code className="text-xs flex-1 break-all bg-background p-3 rounded">{created}</code><Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(created)}><IconCopy /></Button></div><Button variant="outline" size="sm" onClick={() => setCreated(null)}>Done</Button></div>}
-      <div className="flex gap-2"><Input placeholder="Key name, e.g. OpenCode" value={name} onChange={(event) => setName(event.target.value)} /><Button onClick={create} disabled={!name.trim() || createKey.isPending}><IconPlus /> Create</Button></div>
-      <div className="divide-y">{keys.map((key) => <div key={key.id} className="py-3 flex items-center gap-3"><div className="flex-1"><p className="font-medium">{key.name}</p><p className="text-xs text-muted-foreground"><code>{key.keyPrefix}…</code> · {key.scopes.join(", ")}{key.lastUsedAt ? ` · used ${new Date(key.lastUsedAt).toLocaleDateString()}` : ""}</p></div><Button size="icon" variant="ghost" onClick={() => revoke(key.id)}><IconTrash /></Button></div>)}</div>
-      <ClientExample />
-    </CardContent></Card>
-
-    <Card><CardHeader><CardTitle>Recent usage</CardTitle><CardDescription>{usageData?.payload.total ?? 0} ledger events</CardDescription></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-muted-foreground border-b"><th className="py-2">Time</th><th>Source</th><th>Model</th><th className="text-right">Tokens</th><th className="text-right">Credits</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id} className="border-b last:border-0"><td className="py-3">{new Date(log.time).toLocaleString()}</td><td>{log.source}</td><td className="font-mono text-xs">{log.model ?? "—"}</td><td className="text-right">{(log.inputTokens + log.outputTokens).toLocaleString()}</td><td className="text-right">${log.creditsConsumed.toFixed(6)}</td></tr>)}</tbody></table></div></CardContent></Card>
-  </main></AppShell>;
-}
-
-function ClientExample() {
-  const [baseUrl, setBaseUrl] = useState("/v1");
-  useState(() => { void loadPublicConfig().then((config) => setBaseUrl(config.api.baseUrl)); });
-  return <div className="rounded-lg bg-muted p-4 space-y-2"><Label>OpenAI-compatible base URL</Label><code className="block text-xs break-all">{baseUrl}</code><pre className="text-xs overflow-x-auto">{`OPENAI_BASE_URL=${baseUrl}\nOPENAI_API_KEY=llmp_...`}</pre></div>;
-}
+export const Route = createFileRoute("/profile")({ component: Profile });
+function Profile() { const { timeRange, setTimeRange, bucketSize, setBucketSize } = useAnalyticsPreferences(); const [offset, setOffset] = useState(0); const [name, setName] = useState(""); const [created, setCreated] = useState<string | null>(null); const profileQuery = api.getProfile.useQuery({ queryKey: ["getProfile"], queryData: {} }); const keyQuery = api.listApiKeys.useQuery({ queryKey: ["listApiKeys"], queryData: {} }); const usageQuery = api.getUserUsageLogs.useQuery({ queryKey: ["usage", offset], queryData: { query: { limit: "25", offset: String(offset) } } }); const baseQuery = { timeRange, bucketSize }; const burndown = api.getAnalyticsBurndown.useQuery({ queryKey: ["analytics-burndown", baseQuery], queryData: { query: baseQuery } }); const consumed = api.getAnalyticsConsumed.useQuery({ queryKey: ["analytics-consumed", baseQuery], queryData: { query: baseQuery } }); const byModel = api.getAnalyticsByModel.useQuery({ queryKey: ["analytics-model", baseQuery], queryData: { query: { ...baseQuery, topN: "5" } } }); const models = api.getAnalyticsModelSummary.useQuery({ queryKey: ["analytics-model-summary", baseQuery], queryData: { query: baseQuery } }); const tokens = api.getAnalyticsTokensConsumed.useQuery({ queryKey: ["analytics-tokens", baseQuery], queryData: { query: baseQuery } }); const createKey = api.createApiKey.useMutation(); const deleteKey = api.deleteApiKey.useMutation(); const profile = profileQuery.data?.payload; const logs = usageQuery.data?.payload; const refresh = () => void queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).includes("analytics") || query.queryKey[0] === "usage" }); return <AppShell><main className="mx-auto max-w-7xl space-y-6 p-5 md:p-8"><div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-2xl font-semibold">Profile, API & usage</h1><p className="text-sm text-muted-foreground">Identity, access, credits, credentials, and detailed metering.</p></div><AnalyticsControls timeRange={timeRange} onTimeRangeChange={setTimeRange} bucketSize={bucketSize} onBucketSizeChange={setBucketSize} onRefresh={refresh} /></div><div className="grid gap-4 sm:grid-cols-3"><Metric label="Credit balance" value={`$${(profile?.creditBalance ?? 0).toFixed(2)}`} /><Metric label="Monthly allocation" value={`$${(profile?.defaultMonthlyCredits ?? 0).toFixed(2)}`} /><Card><CardHeader><CardDescription>Identity & access</CardDescription><CardTitle className="flex gap-2"><Badge>{profile?.role ?? "user"}</Badge><Badge variant={profile?.apiEnabled ? "secondary" : "destructive"}>{profile?.apiEnabled ? "API enabled" : "API disabled"}</Badge></CardTitle></CardHeader></Card></div><div className="grid gap-5 xl:grid-cols-2"><ChartCard title="Credit balance"><BalanceBurndownChart data={burndown.data?.payload.data ?? []} currentBalance={burndown.data?.payload.currentBalance ?? 0} timeRange={timeRange} isLoading={burndown.isLoading} /></ChartCard><ChartCard title="Credits consumed"><CreditsConsumedChart data={consumed.data?.payload.data ?? []} timeRange={timeRange} isLoading={consumed.isLoading} /></ChartCard><ChartCard title="Token usage"><TokensConsumedChart data={tokens.data?.payload.data ?? []} timeRange={timeRange} isLoading={tokens.isLoading} /></ChartCard><ChartCard title="Usage by model"><UsageByModelChart data={byModel.data?.payload.data ?? []} models={byModel.data?.payload.models ?? []} timeRange={timeRange} isLoading={byModel.isLoading} /></ChartCard></div><Card><CardHeader><CardTitle>Token summary</CardTitle><CardDescription>{formatTokenCount(tokens.data?.payload.summary.total ?? 0)} total tokens in this range</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-5">{Object.entries(tokens.data?.payload.summary ?? {}).filter(([key]) => key !== "total").map(([key, value]) => <div key={key}><p className="text-xs text-muted-foreground">{key.replace(/Tokens$/, "").replace(/[A-Z]/g, (c) => ` ${c}`).trim()}</p><p className="font-mono">{formatTokenCount(Number(value))}</p></div>)}</CardContent></Card><Card><CardHeader><CardTitle>Model breakdown</CardTitle></CardHeader><CardContent><ModelDeepDiveTable models={models.data?.payload.models ?? []} isLoading={models.isLoading} /></CardContent></Card><ApiKeys name={name} setName={setName} created={created} setCreated={setCreated} keys={keyQuery.data?.payload ?? []} create={async () => { const result = await createKey.mutateAsync({ body: { name, scopes: ["llm.invoke", "models.read", "credits.read"] } }); if (result.payload) setCreated(result.payload.key); setName(""); void queryClient.invalidateQueries({ queryKey: ["listApiKeys"] }); }} revoke={async (id: string) => { await deleteKey.mutateAsync({ params: { id } }); void queryClient.invalidateQueries({ queryKey: ["listApiKeys"] }); }} /><Card><CardHeader><CardTitle>Usage history</CardTitle><CardDescription>Complete token and component-cost ledger detail.</CardDescription></CardHeader><CardContent><UsageHistoryTable logs={logs?.logs ?? []} total={logs?.total ?? 0} isLoading={usageQuery.isLoading} offset={offset} limit={25} onOffsetChange={setOffset} /></CardContent></Card></main></AppShell> }
+function Metric({ label, value }: { label: string; value: string }) { return <Card><CardHeader><CardDescription>{label}</CardDescription><CardTitle>{value}</CardTitle></CardHeader></Card> }
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) { return <Card><CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader><CardContent>{children}</CardContent></Card> }
+function ApiKeys({ name, setName, created, setCreated, keys, create, revoke }: any) { const [baseUrl, setBaseUrl] = useState("/v1"); useState(() => { void loadPublicConfig().then((config) => setBaseUrl(config.api.baseUrl)); }); return <Card><CardHeader><CardTitle className="flex items-center gap-2"><IconKey />API keys</CardTitle><CardDescription>Keys are shown once and stored as hashes. OpenAI base URL: <code>{baseUrl}</code>. <Link className="underline" to="/models">View model pricing</Link>.</CardDescription></CardHeader><CardContent className="space-y-4">{created && <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"><p className="text-sm font-medium">Copy this key now.</p><div className="flex gap-2"><code className="flex-1 break-all p-2 text-xs">{created}</code><Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(created)}><IconCopy /></Button></div><Button size="sm" variant="outline" onClick={() => setCreated(null)}>Done</Button></div>}<div className="flex gap-2"><Input placeholder="Key name" value={name} onChange={(e) => setName(e.target.value)} /><Button disabled={!name.trim()} onClick={create}><IconPlus />Create</Button></div>{keys.map((key: any) => <div key={key.id} className="flex items-center border-t py-3"><div className="flex-1"><p>{key.name}</p><p className="text-xs text-muted-foreground"><code>{key.keyPrefix}…</code> · {key.scopes.join(", ")}</p></div><Button size="icon" variant="ghost" onClick={() => revoke(key.id)}><IconTrash /></Button></div>)}<Label>Client configuration</Label><pre className="overflow-x-auto rounded bg-muted p-3 text-xs">{`OPENAI_BASE_URL=${baseUrl}\nOPENAI_API_KEY=llmp_...`}</pre></CardContent></Card> }

@@ -173,6 +173,8 @@ export interface OpenAIChatCompletionResponse {
 export interface OpenAIDeltaMessage {
   role?: "assistant";
   content?: string | null;
+  /** Non-standard compatibility extension used by the built-in model playground. */
+  reasoning_content?: string;
   tool_calls?: OpenAIToolCallDelta[];
 }
 

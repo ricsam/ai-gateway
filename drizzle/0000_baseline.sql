@@ -208,11 +208,11 @@ CREATE TABLE "management_api_keys" (
 );
 --> statement-breakpoint
 CREATE TABLE "credit_events" (
-  "id" text PRIMARY KEY NOT NULL,
+  "id" text NOT NULL,
   "time" timestamp with time zone NOT NULL,
   "request_id" text NOT NULL,
-  "user_id" text NOT NULL REFERENCES "user"("id") ON DELETE restrict,
-  "api_key_id" text REFERENCES "api_keys"("id") ON DELETE set null,
+  "user_id" text NOT NULL,
+  "api_key_id" text,
   "model" text,
   "source" text DEFAULT 'api' NOT NULL,
   "type" text NOT NULL,
@@ -228,14 +228,33 @@ CREATE TABLE "credit_events" (
   "output_cost" numeric(20,8) DEFAULT 0 NOT NULL,
   "cache_read_cost" numeric(20,8) DEFAULT 0 NOT NULL,
   "cache_write_5m_cost" numeric(20,8) DEFAULT 0 NOT NULL,
-  "cache_write_1h_cost" numeric(20,8) DEFAULT 0 NOT NULL
+  "cache_write_1h_cost" numeric(20,8) DEFAULT 0 NOT NULL,
+  CONSTRAINT "credit_events_id_time_pk" PRIMARY KEY ("id", "time")
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX "credit_events_request_id_unique" ON "credit_events" ("request_id");
+CREATE UNIQUE INDEX "credit_events_request_time_unique" ON "credit_events" ("request_id", "time");
 --> statement-breakpoint
-CREATE INDEX "credit_events_user_time_idx" ON "credit_events" ("user_id", "time");
+CREATE INDEX "credit_events_user_time_idx" ON "credit_events" ("user_id", "time" DESC);
 --> statement-breakpoint
-CREATE INDEX "credit_events_model_time_idx" ON "credit_events" ("model", "time");
+CREATE INDEX "credit_events_model_time_idx" ON "credit_events" ("model", "time" DESC) WHERE "model" IS NOT NULL;
+--> statement-breakpoint
+CREATE TABLE "usage_request_receipts" (
+  "request_id" text PRIMARY KEY NOT NULL,
+  "user_id" text NOT NULL,
+  "requested_amount" numeric(20,8) NOT NULL,
+  "status" text DEFAULT 'pending' NOT NULL,
+  "credits_charged" numeric(20,8),
+  "balance_after" numeric(20,8),
+  "partially_charged" boolean,
+  "event_id" text,
+  "event_time" timestamp with time zone,
+  "created_at" timestamp with time zone NOT NULL,
+  "completed_at" timestamp with time zone,
+  CONSTRAINT "usage_request_receipts_status_check" CHECK ("status" in ('pending', 'complete')),
+  CONSTRAINT "usage_request_receipts_amount_check" CHECK ("requested_amount" >= 0)
+);
+--> statement-breakpoint
+CREATE INDEX "usage_request_receipts_user_created_idx" ON "usage_request_receipts" ("user_id", "created_at");
 --> statement-breakpoint
 CREATE TABLE "audit_events" (
   "id" text PRIMARY KEY NOT NULL,

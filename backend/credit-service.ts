@@ -1,5 +1,5 @@
 import db from "@/db";
-import { userTable, creditEventsTable } from "./schema";
+import { userTable, creditEventsTable, usageRequestReceiptsTable } from "./schema";
 import { eq, sql } from "drizzle-orm";
 import { calculateCreditSettlement, type CreditSettlement } from "./credit-settlement";
 
@@ -42,7 +42,35 @@ export async function deductCredits(params: {
   cacheWrite5mCost?: number;
   cacheWrite1hCost?: number;
 }): Promise<CreditSettlement> {
+  if (!Number.isFinite(params.amount) || params.amount < 0) throw new Error("Credit deduction must be finite and non-negative");
+  const requestId = params.requestId ?? crypto.randomUUID();
+
   return await db.transaction(async (tx) => {
+    // A normal PostgreSQL receipt table provides global request-id uniqueness;
+    // Timescale hypertable unique constraints must include their time column.
+    const [claimed] = await tx.insert(usageRequestReceiptsTable).values({
+      requestId,
+      userId: params.userId,
+      requestedAmount: params.amount,
+    }).onConflictDoNothing().returning({ requestId: usageRequestReceiptsTable.requestId });
+
+    if (!claimed) {
+      const [existing] = await tx.select().from(usageRequestReceiptsTable)
+        .where(eq(usageRequestReceiptsTable.requestId, requestId)).limit(1).for("update");
+      if (!existing || existing.status !== "complete" || existing.creditsCharged === null || existing.balanceAfter === null || existing.partiallyCharged === null) {
+        throw new Error("Usage request settlement is still pending");
+      }
+      if (existing.userId !== params.userId || Math.abs(existing.requestedAmount - params.amount) > 1e-8) {
+        throw new Error("Usage request ID was already used for a different settlement");
+      }
+      return {
+        actualCost: existing.requestedAmount,
+        creditsCharged: existing.creditsCharged,
+        balanceAfter: existing.balanceAfter,
+        partiallyCharged: existing.partiallyCharged,
+      };
+    }
+
     // Serialize settlements per user so concurrent completions see the latest balance.
     const user = await tx
       .select({ creditBalance: userTable.creditBalance })
@@ -52,20 +80,19 @@ export async function deductCredits(params: {
       .for("update")
       .then((rows) => rows[0]);
 
-    if (!user) {
-      throw new Error("User not found");
-    }
+    if (!user) throw new Error("User not found");
 
     const settlement = calculateCreditSettlement(user.creditBalance, params.amount);
+    const eventId = crypto.randomUUID();
+    const eventTime = new Date();
 
-    await tx
-      .update(userTable)
-      .set({ creditBalance: settlement.balanceAfter })
-      .where(eq(userTable.id, params.userId));
+    await tx.update(userTable).set({ creditBalance: settlement.balanceAfter }).where(eq(userTable.id, params.userId));
 
     await tx.insert(creditEventsTable).values({
+      id: eventId,
+      time: eventTime,
       userId: params.userId,
-      requestId: params.requestId ?? crypto.randomUUID(),
+      requestId,
       apiKeyId: params.apiKeyId,
       source: params.source ?? (params.type === "chat" ? "playground" : "api"),
       creditsConsumed: settlement.creditsCharged,
@@ -84,6 +111,16 @@ export async function deductCredits(params: {
       cacheWrite5mCost: params.cacheWrite5mCost ?? 0,
       cacheWrite1hCost: params.cacheWrite1hCost ?? 0,
     });
+
+    await tx.update(usageRequestReceiptsTable).set({
+      status: "complete",
+      creditsCharged: settlement.creditsCharged,
+      balanceAfter: settlement.balanceAfter,
+      partiallyCharged: settlement.partiallyCharged,
+      eventId,
+      eventTime,
+      completedAt: new Date(),
+    }).where(eq(usageRequestReceiptsTable.requestId, requestId));
 
     return settlement;
   });

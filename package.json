@@ -13,6 +13,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:reset": "bun scripts/reset-database.ts",
+    "timescale:verify": "bun scripts/verify-timescale.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts"
   },
   "dependencies": {
@@ -46,6 +47,7 @@
     "radix-ui": "1.4.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "recharts": "2.15.4",
     "shadcn": "3.8.5",
     "shiki": "3.21.0",
     "streamdown": "2.4.0",
@@ -61,5 +63,8 @@
     "@types/react-dom": "19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260305.1",
     "drizzle-kit": "0.31.5"
+  },
+  "patchedDependencies": {
+    "recharts@2.15.4": "patches/recharts@2.15.4.patch"
   }
 }

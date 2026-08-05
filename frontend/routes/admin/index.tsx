@@ -8,7 +8,7 @@ export const Route = createFileRoute("/admin/")({
 function AdminIndex() {
   const navigate = useNavigate();
   useEffect(() => {
-    navigate({ to: "/admin/models" });
+    navigate({ to: "/admin/analytics" });
   }, [navigate]);
   return null;
 }

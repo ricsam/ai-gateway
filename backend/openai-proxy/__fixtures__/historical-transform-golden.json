@@ -1,0 +1,365 @@
+{
+  "request": {
+    "openai": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "system",
+          "content": "System"
+        },
+        {
+          "role": "developer",
+          "content": "Developer"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Use a tool"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "arguments": "{\"q\":\"x\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "content": "result"
+        }
+      ],
+      "temperature": 0.2,
+      "top_p": 0.8,
+      "max_tokens": 512,
+      "stop": [
+        "STOP"
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "lookup",
+            "description": "Lookup",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "q": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "q"
+              ]
+            }
+          }
+        }
+      ],
+      "tool_choice": {
+        "type": "function",
+        "function": {
+          "name": "lookup"
+        }
+      }
+    },
+    "bedrock": {
+      "modelId": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "text": "Use a tool"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "call_1",
+                "name": "lookup",
+                "input": {
+                  "q": "x"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "toolResult": {
+                "toolUseId": "call_1",
+                "content": [
+                  {
+                    "text": "result"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "system": [
+        {
+          "text": "System"
+        },
+        {
+          "text": "Developer"
+        }
+      ],
+      "inferenceConfig": {
+        "maxTokens": 512,
+        "temperature": 0.2,
+        "topP": 0.8,
+        "stopSequences": [
+          "STOP"
+        ]
+      },
+      "toolConfig": {
+        "tools": [
+          {
+            "toolSpec": {
+              "name": "lookup",
+              "description": "Lookup",
+              "inputSchema": {
+                "json": {
+                  "type": "object",
+                  "properties": {
+                    "q": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "q"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "toolChoice": {
+          "tool": {
+            "name": "lookup"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "bedrock": {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "text": "Answer"
+            },
+            {
+              "toolUse": {
+                "toolUseId": "call_2",
+                "name": "lookup",
+                "input": {
+                  "q": "y"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "stopReason": "tool_use",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 4
+      },
+      "$metadata": {}
+    },
+    "openai": {
+      "id": "chatcmpl_fixture",
+      "object": "chat.completion",
+      "created": 1785930104,
+      "model": "fixture-model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Answer",
+            "tool_calls": [
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "lookup",
+                  "arguments": "{\"q\":\"y\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": "tool_calls",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 4,
+        "total_tokens": 16
+      }
+    }
+  },
+  "stream": [
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null,\"logprobs\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"\"}}]},\"finish_reason\":null,\"logprobs\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"q\\\"\"}}]},\"finish_reason\":null,\"logprobs\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\":\\\"y\\\"}\"}}]},\"finish_reason\":null,\"logprobs\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\",\"logprobs\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl_fixture\",\"object\":\"chat.completion.chunk\",\"created\":1785930104,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
+    "data: [DONE]\n\n"
+  ],
+  "cache": {
+    "converse": {
+      "modelId": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "text": "Use a tool"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "call_1",
+                "name": "lookup",
+                "input": {
+                  "q": "x"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "toolResult": {
+                "toolUseId": "call_1",
+                "content": [
+                  {
+                    "text": "result"
+                  }
+                ]
+              }
+            },
+            {
+              "cachePoint": {
+                "type": "default",
+                "ttl": "5m"
+              }
+            }
+          ]
+        }
+      ],
+      "system": [
+        {
+          "text": "System"
+        },
+        {
+          "text": "Developer"
+        },
+        {
+          "cachePoint": {
+            "type": "default",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "inferenceConfig": {
+        "maxTokens": 512,
+        "temperature": 0.2,
+        "topP": 0.8,
+        "stopSequences": [
+          "STOP"
+        ]
+      },
+      "toolConfig": {
+        "tools": [
+          {
+            "toolSpec": {
+              "name": "lookup",
+              "description": "Lookup",
+              "inputSchema": {
+                "json": {
+                  "type": "object",
+                  "properties": {
+                    "q": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "q"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "cachePoint": {
+              "type": "default",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "toolChoice": {
+          "tool": {
+            "name": "lookup"
+          }
+        }
+      }
+    },
+    "invoke": {
+      "anthropic_version": "bedrock-2023-05-31",
+      "system": [
+        {
+          "type": "text",
+          "text": "system",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

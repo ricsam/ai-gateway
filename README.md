@@ -35,6 +35,12 @@ Core resources include users and passwords, groups/memberships and bulk user con
 | `POST` | `/v1/chat/completions` | `llm.invoke` |
 | `GET` | `/v1/models` | `models.read` |
 | `GET` | `/v1/credits` | `credits.read` |
+| `POST` | `/api/proxy/bedrock/invoke` | `llm.invoke` |
+| `POST` | `/api/proxy/bedrock/invoke-stream` | `llm.invoke` |
+| `POST` | `/api/proxy/bedrock/converse` | `llm.invoke` |
+| `POST` | `/api/proxy/bedrock/converse-stream` | `llm.invoke` |
+
+The four native compatibility endpoints retain Bedrock request/response shapes, managed prompt caching, raw NDJSON/binary streaming, cancellation, and metered settlement. Send a stable `X-Request-ID` when a client may retry a completed request; settlement receipts make the same request ID exactly-once. The OpenAI endpoint accepts the same header.
 
 Inference keys begin with `llmp_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 
@@ -56,7 +62,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-Compose runs PostgreSQL, a one-shot migration, and the app. No OIDC, AWS, bootstrap-admin, or branding values belong in Compose.
+Compose runs the pinned `timescale/timescaledb:2.19.3-pg17` distribution, a one-shot migration, and the app. No OIDC, AWS, bootstrap-admin, or branding values belong in Compose. Set `POSTGRES_PORT` only when host access to PostgreSQL is needed; application traffic uses the internal service.
 
 ### Helm
 
@@ -71,11 +77,11 @@ helm upgrade --install proxy charts/llm-proxy \
   --set ingress.host=proxy.example.com
 ```
 
-The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. Bundled PostgreSQL is intended for small installations and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external PostgreSQL for HA. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support.
+The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support.
 
 ### Backups and recovery
 
-Back up PostgreSQL and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Test restores regularly.
+Back up TimescaleDB and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Use Timescale-aware logical backups (`pg_dump`/`pg_restore` with the extension installed at the same compatible version) or a storage/database snapshot that includes extension catalogs. Restore into an empty database, install TimescaleDB first, restore, then run migrations and verify `timescaledb_information.hypertables`, all three `credit_events_*` continuous aggregates, refresh jobs, and the compression policy. Test restores regularly; do not reset by dropping extension-owned views individually.
 
 With database access, recover a local administrator offline:
 
@@ -95,10 +101,11 @@ bun run routes:generate
 bun run typecheck
 bun test
 bun run db:migrate
+TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 
 docker compose config
 helm lint charts/llm-proxy
 helm template proxy charts/llm-proxy --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
 ```
 
-This is an intentionally breaking pre-release baseline. Use a fresh database/PVC; the baseline contains no legacy organization terminology or deploy-time identity configuration.
+This is an intentionally breaking pre-release baseline. The database migration also upgrades the short-lived plain-PostgreSQL control-plane baseline in place: foreign keys incompatible with append-only history are removed, existing ledger rows are migrated into the hypertable, and request settlement moves to a Timescale-compatible receipt table. Back up before upgrading. The product intentionally excludes Anocca integration, RAG/documents/embeddings, and persistent full-chat features; groups replace historical cores throughout the retained analytics and control plane. Current group analytics use current-membership attribution, so a user in multiple groups contributes to every applicable group summary.

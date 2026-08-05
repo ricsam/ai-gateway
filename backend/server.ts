@@ -9,6 +9,7 @@ import { getSetupStatus, handleSetup } from "./setup";
 import { handleManagementApi } from "./management-api";
 import { handleBrandingAsset } from "./config-service";
 import { handleTrustedHeaderSignIn } from "./trusted-header-auth";
+import { handleBedrockProxy, type BedrockProxyEndpoint } from "./bedrock-proxy";
 import {
   handleCredits,
   handleHealth,
@@ -61,6 +62,10 @@ serve({
     }
     if (url.pathname === "/api/playground/chat/completions" && request.method === "POST") {
       return handlePlaygroundChatCompletions(request);
+    }
+    const nativeBedrockMatch = url.pathname.match(/^\/api\/proxy\/bedrock\/(invoke|invoke-stream|converse|converse-stream)$/);
+    if (nativeBedrockMatch && request.method === "POST") {
+      return handleBedrockProxy(request, nativeBedrockMatch[1] as BedrockProxyEndpoint);
     }
 
     const headRequest = await handleHeadTagRequest(request, {

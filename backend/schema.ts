@@ -207,11 +207,13 @@ export const managementApiKeysTable = pgTable("management_api_keys", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
 });
 
+// Append-only TimescaleDB hypertable. Hypertable uniqueness must include the
+// partitioning column, and historical usage must survive user/key deletion, so
+// userId and apiKeyId intentionally do not have foreign keys.
 export const creditEventsTable = pgTable("credit_events", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").notNull().$defaultFn(() => crypto.randomUUID()),
   time: timestamp("time", { withTimezone: true }).notNull().$defaultFn(() => new Date()), requestId: text("request_id").notNull(),
-  userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "restrict" }),
-  apiKeyId: text("api_key_id").references(() => apiKeysTable.id, { onDelete: "set null" }), model: text("model"),
+  userId: text("user_id").notNull(), apiKeyId: text("api_key_id"), model: text("model"),
   source: text("source").notNull().default("api"), type: text("type").notNull(), description: text("description"),
   creditsAdded: numeric("credits_added", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   creditsConsumed: numeric("credits_consumed", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
@@ -223,7 +225,33 @@ export const creditEventsTable = pgTable("credit_events", {
   cacheReadCost: numeric("cache_read_cost", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   cacheWrite5mCost: numeric("cache_write_5m_cost", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   cacheWrite1hCost: numeric("cache_write_1h_cost", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
-}, (table) => [uniqueIndex("credit_events_request_id_unique").on(table.requestId), index("credit_events_user_time_idx").on(table.userId, table.time), index("credit_events_model_time_idx").on(table.model, table.time)]);
+}, (table) => [
+  primaryKey({ columns: [table.id, table.time], name: "credit_events_id_time_pk" }),
+  uniqueIndex("credit_events_request_time_unique").on(table.requestId, table.time),
+  index("credit_events_user_time_idx").on(table.userId, table.time),
+  index("credit_events_model_time_idx").on(table.model, table.time),
+]);
+
+// Normal PostgreSQL table used to provide request-level exactly-once settlement.
+// TimescaleDB requires every hypertable unique key to include the partitioning
+// time, so request IDs cannot be made globally unique on credit_events itself.
+export const usageRequestReceiptsTable = pgTable("usage_request_receipts", {
+  requestId: text("request_id").primaryKey(),
+  userId: text("user_id").notNull(),
+  requestedAmount: numeric("requested_amount", { precision: 20, scale: 8, mode: "number" }).notNull(),
+  status: text("status").notNull().default("pending"),
+  creditsCharged: numeric("credits_charged", { precision: 20, scale: 8, mode: "number" }),
+  balanceAfter: numeric("balance_after", { precision: 20, scale: 8, mode: "number" }),
+  partiallyCharged: boolean("partially_charged"),
+  eventId: text("event_id"),
+  eventTime: timestamp("event_time", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  index("usage_request_receipts_user_created_idx").on(table.userId, table.createdAt),
+  check("usage_request_receipts_status_check", sql`${table.status} in ('pending', 'complete')`),
+  check("usage_request_receipts_amount_check", sql`${table.requestedAmount} >= 0`),
+]);
 
 export const auditEventsTable = pgTable("audit_events", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),

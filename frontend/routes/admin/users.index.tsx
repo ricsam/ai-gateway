@@ -1,4 +1,4 @@
-import { createFileRoute } from "@richie-router/react";
+import { createFileRoute, Link } from "@richie-router/react";
 import { useEffect, useMemo, useState } from "react";
 import { IconKey, IconPencil, IconPlus, IconRefresh, IconTrash, IconUsersGroup } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
@@ -195,7 +195,7 @@ function Users() {
               const draft = creditDrafts[user.id] ?? { balance: String(user.creditBalance), monthly: String(user.defaultMonthlyCredits) };
               const creditsChanged = Number(draft.balance) !== user.creditBalance || Number(draft.monthly) !== user.defaultMonthlyCredits;
               return <tr key={user.id} className="border-t align-top">
-                <td className="p-3"><p className="font-medium">{user.name} <span className="font-normal text-muted-foreground">@{user.username}</span></p><p className="text-xs text-muted-foreground">{user.email}</p>{user.mustChangePassword && <Badge variant="outline" className="mt-1">Password change required</Badge>}</td>
+                <td className="p-3"><Link to="/admin/users/$userId" params={{ userId: user.id }} className="font-medium hover:underline">{user.name} <span className="font-normal text-muted-foreground">@{user.username}</span></Link><p className="text-xs text-muted-foreground">{user.email}</p>{user.mustChangePassword && <Badge variant="outline" className="mt-1">Password change required</Badge>}</td>
                 <td className="p-3 text-center"><Button variant="outline" size="sm" disabled={saving} onClick={() => void changeAccess(user, { role: user.role === "admin" ? "user" : "admin" })}>{user.role}</Button></td>
                 <td className="p-3"><div className="flex max-w-64 flex-wrap justify-center gap-1">{user.groups.map((group) => <Badge variant="outline" key={group.id}>{group.name}</Badge>)}{!user.groups.length && <span className="text-xs text-muted-foreground">None</span>}</div></td>
                 <td className="p-3"><Input className="w-28" type="number" min="0" step="0.01" value={draft.balance} onChange={(event) => setCreditDrafts({ ...creditDrafts, [user.id]: { ...draft, balance: event.target.value } })} /></td>

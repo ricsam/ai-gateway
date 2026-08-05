@@ -1,6 +1,11 @@
 import { createFileRoute, Link } from "@richie-router/react";
 import { useEffect, useState } from "react";
 import { IconArrowLeft, IconCheck, IconPencil, IconPlus, IconTrash } from "@tabler/icons-react";
+import { api, queryClient } from "../../api";
+import { AnalyticsControls } from "../../ui/analytics-controls";
+import { useAnalyticsPreferences } from "../../ui/use-analytics-preferences";
+import { GroupUserBurndownChart } from "../../ui/analytics-charts";
+import { UserSummaryTable } from "../../ui/analytics-summary-tables";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +44,15 @@ function GroupPage() {
   const [groupForm, setGroupForm] = useState({ name: "", description: "" });
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const { timeRange, setTimeRange, bucketSize, setBucketSize } = useAnalyticsPreferences();
+  const burndowns = api.adminGetGroupUserBurndowns.useQuery({
+    queryKey: ["admin-group-burndowns", groupId, timeRange, bucketSize],
+    queryData: { query: { groupId, timeRange, bucketSize } },
+  });
+  const summary = api.adminGetAnalyticsUserSummary.useQuery({
+    queryKey: ["admin-group-user-summary", groupId, timeRange],
+    queryData: { query: { groupId, timeRange } },
+  });
 
   const load = async () => {
     try {
@@ -95,6 +109,9 @@ function GroupPage() {
 
       {error && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {message && <p className="rounded-md bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">{message}</p>}
+
+      <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-5"><div><h2 className="text-xl font-semibold">Group analytics</h2><p className="text-sm text-muted-foreground">Current-membership user balances and usage attribution.</p></div><AnalyticsControls timeRange={timeRange} onTimeRangeChange={setTimeRange} bucketSize={bucketSize} onBucketSizeChange={setBucketSize} onRefresh={() => void queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith("admin-group") })} /></div>
+      <div className="grid gap-5 xl:grid-cols-2"><Card><CardHeader><CardTitle className="text-base">Per-user balance</CardTitle></CardHeader><CardContent><GroupUserBurndownChart users={burndowns.data?.payload.users ?? []} timeRange={timeRange} isLoading={burndowns.isLoading} /></CardContent></Card><Card><CardHeader><CardTitle className="text-base">Per-user usage summary</CardTitle></CardHeader><CardContent><UserSummaryTable users={summary.data?.payload.users ?? []} isLoading={summary.isLoading} /></CardContent></Card></div>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Add member</CardTitle></CardHeader>

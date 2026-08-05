@@ -1,5 +1,5 @@
 diff --git a/es6/util/ChartUtils.js b/es6/util/ChartUtils.js
-index 76b3f5c2e897f4e11635f1e04f841be88164b5e3..444bf65ad71d1109629fc3d28abc364b5498eb5f 100644
+index 76b3f5c2e897f4e11635f1e04f841be88164b5e3..f875374df5fc20c6e7c469df791e789a135392a2 100644
 --- a/es6/util/ChartUtils.js
 +++ b/es6/util/ChartUtils.js
 @@ -10,7 +10,7 @@ function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t =

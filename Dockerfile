@@ -1,6 +1,7 @@
 FROM oven/bun:1.3.14-alpine AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run routes:generate && bun run typecheck

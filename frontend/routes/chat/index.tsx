@@ -1,4 +1,4 @@
-import { createFileRoute } from "@richie-router/react";
+import { createFileRoute, Link } from "@richie-router/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconBrain, IconPlayerStop, IconRefresh, IconSend } from "@tabler/icons-react";
 import env from "@/env";
@@ -10,7 +10,7 @@ import { api, queryClient } from "../../api";
 import { AppShell } from "../../ui/app-shell";
 import { MessageResponse } from "../../ui/components/message";
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
+type ChatMessage = { role: "user" | "assistant"; content: string; reasoning?: string };
 type Usage = { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 
 export const Route = createFileRoute("/chat/")({ component: Playground });
@@ -26,7 +26,12 @@ function Playground() {
   const [error, setError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => { if (!model && models[0]) setModel(models[0].modelId); }, [models, model]);
+  useEffect(() => {
+    if (model || !models[0]) return;
+    const saved = localStorage.getItem("chat-last-model");
+    setModel(saved && models.some((entry) => entry.modelId === saved) ? saved : models[0].modelId);
+  }, [models, model]);
+  useEffect(() => { if (model) localStorage.setItem("chat-last-model", model); }, [model]);
   const selected = useMemo(() => models.find((entry) => entry.modelId === model), [models, model]);
   useEffect(() => { if (!selected?.thinking) setThinking(false); }, [selected]);
 
@@ -61,9 +66,10 @@ function Playground() {
         for (const frame of frames) {
           const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
           if (!dataLine || dataLine === "data: [DONE]") continue;
-          const chunk = JSON.parse(dataLine.slice(6)) as { choices?: Array<{ delta?: { content?: string } }>; usage?: Usage };
+          const chunk = JSON.parse(dataLine.slice(6)) as { choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>; usage?: Usage };
           const text = chunk.choices?.[0]?.delta?.content;
-          if (text) setMessages((current) => current.map((entry, index) => index === current.length - 1 ? { ...entry, content: entry.content + text } : entry));
+          const reasoning = chunk.choices?.[0]?.delta?.reasoning_content;
+          if (text || reasoning) setMessages((current) => current.map((entry, index) => index === current.length - 1 ? { ...entry, content: entry.content + (text ?? ""), reasoning: (entry.reasoning ?? "") + (reasoning ?? "") } : entry));
           if (chunk.usage) setUsage(chunk.usage);
         }
       }
@@ -77,7 +83,7 @@ function Playground() {
     <AppShell>
       <main className="max-w-5xl mx-auto p-5 md:p-8 flex flex-col min-h-[calc(100vh-4rem)]">
         <div className="flex flex-wrap items-center gap-3 mb-6">
-          <div className="mr-auto"><h1 className="text-2xl font-semibold">Model playground</h1><p className="text-sm text-muted-foreground">A stateless chat for testing configured models.</p></div>
+          <div className="mr-auto"><h1 className="text-2xl font-semibold">Model playground</h1><p className="text-sm text-muted-foreground">A stateless chat for testing configured models. <Link to="/models" className="underline">Model pricing</Link></p></div>
           <Select value={model} onValueChange={setModel}><SelectTrigger className="w-64"><SelectValue placeholder="Choose a model" /></SelectTrigger><SelectContent>{models.map((entry) => <SelectItem key={entry.modelId} value={entry.modelId}>{entry.displayName}</SelectItem>)}</SelectContent></Select>
           <div className="flex items-center gap-2 text-sm"><IconBrain size={16} /><Switch checked={thinking} disabled={!selected?.thinking} onCheckedChange={setThinking} />Thinking</div>
           <Button variant="outline" size="icon" onClick={reset} title="Reset"><IconRefresh /></Button>
@@ -86,7 +92,7 @@ function Playground() {
         <section className="flex-1 rounded-xl border bg-card overflow-hidden flex flex-col min-h-[520px]">
           <div className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6">
             {!messages.length && <div className="h-full grid place-items-center text-center text-muted-foreground"><div><p className="font-medium text-foreground">Ready to test</p><p className="text-sm">Messages stay in this browser tab and are not saved.</p></div></div>}
-            {messages.map((message, index) => <div key={index} className={message.role === "user" ? "ml-auto max-w-[80%] rounded-2xl bg-primary text-primary-foreground px-4 py-3" : "max-w-[90%] prose dark:prose-invert"}>{message.role === "assistant" ? <MessageResponse>{message.content || (streaming ? "Thinking..." : "No response")}</MessageResponse> : message.content}</div>)}
+            {messages.map((message, index) => <div key={index} className={message.role === "user" ? "ml-auto max-w-[80%] rounded-2xl bg-primary text-primary-foreground px-4 py-3" : "max-w-[90%] prose dark:prose-invert"}>{message.role === "assistant" ? <div>{message.reasoning && <details className="mb-3 rounded-lg border bg-muted/30 p-3 text-sm" open={streaming && index === messages.length - 1}><summary className="cursor-pointer font-medium">Reasoning</summary><div className="mt-2 text-muted-foreground"><MessageResponse>{message.reasoning}</MessageResponse></div></details>}<MessageResponse>{message.content || (streaming ? "Thinking..." : "No response")}</MessageResponse></div> : message.content}</div>)}
           </div>
           <div className="border-t p-4 space-y-3">
             {error && <p className="text-sm text-destructive">{error}</p>}

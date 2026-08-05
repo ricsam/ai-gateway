@@ -12,6 +12,17 @@ import { hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
 import {
+  getBalanceBurndown,
+  getCreditsConsumed,
+  getGroupSummary,
+  getGroupUserBurndowns,
+  getModelSummary,
+  getTokensConsumed,
+  getUsageByModel,
+  getUserSummary,
+  type AnalyticsScope,
+} from "./analytics-service";
+import {
   apiKeysTable,
   auditEventsTable,
   creditEventsTable,
@@ -24,6 +35,44 @@ import {
 interface RouterContext { getUserId: () => string }
 const groupRoleValues = new Set(["owner", "admin", "member"]);
 function adminPrincipal(userId: string): ManagementPrincipal { return { actorType: "user", actorId: userId, userId, scopes: new Set(["*"]) }; }
+
+async function usageLogs(userId: string, rawLimit?: string, rawOffset?: string) {
+  const limit = Math.min(Math.max(Number(rawLimit ?? 20), 1), 100);
+  const offset = Math.max(Number(rawOffset ?? 0), 0);
+  const [events, totalRows, running] = await Promise.all([
+    db.select().from(creditEventsTable).where(eq(creditEventsTable.userId, userId))
+      .orderBy(desc(creditEventsTable.time), desc(creditEventsTable.id)).limit(limit).offset(offset),
+    db.select({ count: count() }).from(creditEventsTable).where(eq(creditEventsTable.userId, userId)),
+    db.executeRaw<{ id: string; balance_after: string }>(`
+      SELECT id, SUM(credits_added - credits_consumed) OVER (PARTITION BY user_id ORDER BY time, id) AS balance_after
+      FROM credit_events WHERE user_id = $1
+    `, [userId]),
+  ]);
+  const balances = new Map(running.rows.map((row) => [row.id, Number(row.balance_after)]));
+  return {
+    logs: events.map((event) => ({
+      id: event.id, creditsAdded: event.creditsAdded, creditsConsumed: event.creditsConsumed,
+      balanceAfter: balances.get(event.id) ?? 0, type: event.type, source: event.source,
+      description: event.description, model: event.model, inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens, cacheReadTokens: event.cacheReadTokens,
+      cacheWrite5mTokens: event.cacheWrite5mTokens, cacheWrite1hTokens: event.cacheWrite1hTokens,
+      inputCost: event.inputCost, outputCost: event.outputCost, cacheReadCost: event.cacheReadCost,
+      cacheWrite5mCost: event.cacheWrite5mCost, cacheWrite1hCost: event.cacheWrite1hCost,
+      time: event.time.toISOString(),
+    })),
+    total: totalRows[0]?.count ?? 0,
+  };
+}
+
+function analyticsScope(scope: "system" | "user" | "group", scopeId?: string): AnalyticsScope {
+  if (scope === "system") return {};
+  if (!scopeId) throw new Error(`scopeId is required for ${scope} analytics`);
+  return scope === "user" ? { userId: scopeId } : { groupId: scopeId };
+}
+
+function analyticsFailure(error: unknown) {
+  return { status: Status.BadRequest, body: { error: error instanceof Error ? error.message : "Analytics query failed" } };
+}
 
 function modelResponse(model: typeof modelsTable.$inferSelect) {
   return {
@@ -70,33 +119,30 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     })) };
   },
 
-  getUserUsageLogs: async ({ query, context }) => {
-    const userId = context.getUserId();
-    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
-    const offset = Math.max(Number(query.offset ?? 0), 0);
-    const [events, totalRows] = await Promise.all([
-      db.select().from(creditEventsTable).where(eq(creditEventsTable.userId, userId))
-        .orderBy(desc(creditEventsTable.time)).limit(limit).offset(offset),
-      db.select({ count: count() }).from(creditEventsTable).where(eq(creditEventsTable.userId, userId)),
-    ]);
-    const running = await db.executeRaw<{ id: string; balance_after: string }>(`
-      SELECT id, SUM(credits_added - credits_consumed) OVER (PARTITION BY user_id ORDER BY time, id) AS balance_after
-      FROM credit_events WHERE user_id = $1
-    `, [userId]);
-    const balances = new Map(running.rows.map((row) => [row.id, Number(row.balance_after)]));
-    return { status: Status.OK, body: {
-      logs: events.map((event) => ({
-        id: event.id, creditsAdded: event.creditsAdded, creditsConsumed: event.creditsConsumed,
-        balanceAfter: balances.get(event.id) ?? 0, type: event.type, source: event.source,
-        description: event.description, model: event.model, inputTokens: event.inputTokens,
-        outputTokens: event.outputTokens, cacheReadTokens: event.cacheReadTokens,
-        cacheWrite5mTokens: event.cacheWrite5mTokens, cacheWrite1hTokens: event.cacheWrite1hTokens,
-        inputCost: event.inputCost, outputCost: event.outputCost, cacheReadCost: event.cacheReadCost,
-        cacheWrite5mCost: event.cacheWrite5mCost, cacheWrite1hCost: event.cacheWrite1hCost,
-        time: event.time.toISOString(),
-      })),
-      total: totalRows[0]?.count ?? 0,
-    } };
+  getUserUsageLogs: async ({ query, context }) => ({
+    status: Status.OK,
+    body: await usageLogs(context.getUserId(), query.limit, query.offset),
+  }),
+
+  getAnalyticsBurndown: async ({ query, context }) => {
+    try { return { status: Status.OK, body: await getBalanceBurndown(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  getAnalyticsConsumed: async ({ query, context }) => {
+    try { return { status: Status.OK, body: { data: await getCreditsConsumed(query.timeRange, query.bucketSize, { userId: context.getUserId() }) } }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  getAnalyticsByModel: async ({ query, context }) => {
+    try { return { status: Status.OK, body: await getUsageByModel(query.timeRange, query.bucketSize, { userId: context.getUserId() }, Number(query.topN ?? 5)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  getAnalyticsModelSummary: async ({ query, context }) => {
+    try { return { status: Status.OK, body: await getModelSummary(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  getAnalyticsTokensConsumed: async ({ query, context }) => {
+    try { return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    catch (error) { return analyticsFailure(error); }
   },
 
   listApiKeys: async ({ context }) => {
@@ -207,6 +253,46 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
         id: entry.groupId, name: entry.groupName, role: entry.role as "owner" | "admin" | "member",
       })),
     })) };
+  },
+
+  adminGetUserUsageLogs: async ({ params, query, request }) => {
+    await requireAdmin(request);
+    const [user] = await db.select({ id: userTable.id }).from(userTable).where(eq(userTable.id, params.id)).limit(1);
+    if (!user) return { status: Status.NotFound, body: { error: "User not found" } };
+    return { status: Status.OK, body: await usageLogs(params.id, query.limit, query.offset) };
+  },
+
+  adminGetAnalyticsBurndown: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getBalanceBurndown(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsConsumed: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: { data: await getCreditsConsumed(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) } }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsByModel: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getUsageByModel(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId), Number(query.topN ?? 5)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsModelSummary: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getModelSummary(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsTokensConsumed: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsUserSummary: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getUserSummary(query.timeRange, query.groupId) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsGroupSummary: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupSummary(query.timeRange) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetGroupUserBurndowns: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupUserBurndowns(query.timeRange, query.bucketSize, query.groupId) }; }
+    catch (error) { return analyticsFailure(error); }
   },
 
   adminUpdateUserCredits: async ({ params, body, request }) => {
