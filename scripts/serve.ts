@@ -355,7 +355,9 @@ async function main() {
   process.env.BASE_URL = baseUrl;
   process.env.BUN_PUBLIC_BASE_URL = baseUrl;
 
-  await generateRoutes(options.projectRoot);
+  if (!isProduction) {
+    await generateRoutes(options.projectRoot);
+  }
   let manifest = readSpaRoutesManifest(options.projectRoot);
   if (!isProduction) {
     setupRouteWatcher(options.projectRoot, () => {
