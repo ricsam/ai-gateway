@@ -1,3 +1,3 @@
-# LLM Proxy Helm repository
+# AI Gateway Helm repository
 
 Managed by the Release Helm chart workflow.
