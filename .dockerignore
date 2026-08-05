@@ -20,5 +20,12 @@ README.md
 LICENSE
 Makefile
 helm-charts
+api-reference/
+api/
+docs/
+logo/
+index.mdx
+docs.json
+favicon.svg
 .editorconfig
 coverage*

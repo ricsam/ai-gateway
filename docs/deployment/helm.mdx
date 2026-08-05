@@ -1,16 +1,16 @@
 ---
 title: "Helm"
-description: "Install LLM Proxy from the GitHub Pages chart repository or a local checkout."
+description: "Install LLM Proxy from the hosted chart repository or a local checkout."
 ---
 
-The project publishes `llm-proxy` as a conventional HTTPS Helm repository on GitHub Pages.
+The project publishes `llm-proxy` as a conventional HTTPS Helm repository at `https://helm-35xkhylwd67f.r5d.app`. GitHub Actions also maintains the packaged chart and `index.yaml` on the `gh-pages` branch as a portable repository snapshot.
 
 ## Install from the chart repository
 
 <Steps>
   <Step title="Add the repository">
     ```bash
-    helm repo add ai-gateway https://ricsam.github.io/ai-gateway
+    helm repo add ai-gateway https://helm-35xkhylwd67f.r5d.app
     helm repo update
     ```
   </Step>
@@ -91,14 +91,16 @@ helm upgrade --install proxy ./charts/llm-proxy \
 
 ## Chart publication
 
-The `Release Helm chart` GitHub Actions workflow publishes every new chart version to the `gh-pages` branch and updates `index.yaml`. It also creates a GitHub release for the chart package.
+The `Release Helm chart` GitHub Actions workflow performs two publication jobs:
 
-After the initial workflow run, configure **Settings → Pages → Build and deployment → Deploy from a branch**, select `gh-pages` and `/(root)`. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release; publishing is skipped when that version already exists.
+1. It packages every new chart version, creates a GitHub release, and updates the `gh-pages` branch's `index.yaml` snapshot.
+2. It builds and pushes a static Nginx repository image to GHCR with `index.yaml` generated for the hosted URL.
 
-The repository URL is:
+The static server is deployed from `deploy/helm-repository.yaml`. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release; the GitHub release step skips versions that already exist, while the repository image always reflects the current chart source.
 
 ```text
-https://ricsam.github.io/ai-gateway
+Repository: https://helm-35xkhylwd67f.r5d.app
+Index:      https://helm-35xkhylwd67f.r5d.app/index.yaml
 ```
 
-The index is available at `https://ricsam.github.io/ai-gateway/index.yaml` after Pages is enabled.
+GitHub Pages cannot serve this private repository on the current GitHub plan, so the public Kubernetes-hosted server is the canonical Helm URL. If the repository becomes public or the plan changes, the existing `gh-pages` branch can be enabled directly under **Settings → Pages**.

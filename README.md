@@ -66,10 +66,10 @@ Compose runs the pinned `timescale/timescaledb:2.19.3-pg17` distribution, a one-
 
 ### Helm
 
-The chart is published to GitHub Pages:
+The chart is published as a public HTTPS Helm repository:
 
 ```sh
-helm repo add ai-gateway https://ricsam.github.io/ai-gateway
+helm repo add ai-gateway https://helm-35xkhylwd67f.r5d.app
 helm repo update
 helm upgrade --install proxy ai-gateway/llm-proxy \
   --namespace llm-proxy --create-namespace \

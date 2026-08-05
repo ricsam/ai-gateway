@@ -5,7 +5,7 @@ Deploys the OpenAI-compatible AWS Bedrock proxy, an optional single-node Timesca
 ## Published repository
 
 ```bash
-helm repo add ai-gateway https://ricsam.github.io/ai-gateway
+helm repo add ai-gateway https://helm-35xkhylwd67f.r5d.app
 helm repo update
 helm search repo ai-gateway/llm-proxy
 ```
@@ -27,4 +27,4 @@ See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, bun
 
 ## Release
 
-Bump `version` in `Chart.yaml` whenever chart templates or default values change. Push to `main`; `.github/workflows/release-helm-chart.yml` packages the chart, creates a GitHub release, and updates the `gh-pages` repository index.
+Bump `version` in `Chart.yaml` whenever chart templates or default values change. Push to `main`; `.github/workflows/release-helm-chart.yml` packages the chart, creates a GitHub release, updates the `gh-pages` repository snapshot, and publishes the static repository server image used by `https://helm-35xkhylwd67f.r5d.app`.
