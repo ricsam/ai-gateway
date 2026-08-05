@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - "charts/**"
-      - "helm-repository/**"
       - ".github/workflows/release-helm-chart.yml"
   workflow_dispatch:
 
@@ -23,7 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,22 +48,3 @@ jobs:
           packages_with_index: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: "${{ github.actor }}"
-          password: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Publish Helm repository server image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: helm-repository/Dockerfile
-          push: true
-          build-args: |
-            REPOSITORY_URL=https://helm-35xkhylwd67f.r5d.app
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/ai-gateway-helm-repository:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/ai-gateway-helm-repository:latest

@@ -27,4 +27,4 @@ See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, bun
 
 ## Release
 
-Bump `version` in `Chart.yaml` whenever chart templates or default values change. Push to `main`; `.github/workflows/release-helm-chart.yml` packages the chart, creates a GitHub release, updates the `gh-pages` repository snapshot, and publishes the static repository server image used by `https://helm-35xkhylwd67f.r5d.app`.
+Bump `version` in `Chart.yaml` whenever chart templates or default values change. Push to `main`; `.github/workflows/release-helm-chart.yml` packages the chart, creates a GitHub release, and updates the `gh-pages` repository snapshot. Build `helm-repository/Dockerfile` with `REPOSITORY_URL=https://helm-35xkhylwd67f.r5d.app`, push an immutable image, and roll out `deploy/helm-repository.yaml` to update the canonical hosted repository.

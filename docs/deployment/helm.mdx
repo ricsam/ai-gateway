@@ -91,12 +91,9 @@ helm upgrade --install proxy ./charts/llm-proxy \
 
 ## Chart publication
 
-The `Release Helm chart` GitHub Actions workflow performs two publication jobs:
+The `Release Helm chart` GitHub Actions workflow packages every new chart version, creates a GitHub release, and updates the `gh-pages` branch's `index.yaml` snapshot.
 
-1. It packages every new chart version, creates a GitHub release, and updates the `gh-pages` branch's `index.yaml` snapshot.
-2. It builds and pushes a static Nginx repository image to GHCR with `index.yaml` generated for the hosted URL.
-
-The static server is deployed from `deploy/helm-repository.yaml`. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release; the GitHub release step skips versions that already exist, while the repository image always reflects the current chart source.
+The canonical HTTPS endpoint is a static Nginx server deployed from `deploy/helm-repository.yaml`. Its image is built from `helm-repository/Dockerfile`, which packages the chart and generates `index.yaml` for the hosted URL. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release, then build, push, and roll out a new immutable repository-server image. The GitHub release step skips chart versions that already exist.
 
 ```text
 Repository: https://helm-35xkhylwd67f.r5d.app
