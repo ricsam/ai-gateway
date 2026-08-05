@@ -13,6 +13,8 @@ metadata:
     app.kubernetes.io/part-of: ai-gateway
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: helm-repository
@@ -32,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: repository
-          image: ghcr.io/ricsam/ai-gateway-helm-repository:chart-0.1.0-483c0384d87d
+          image: ghcr.io/ricsam/ai-gateway-helm-repository:chart-0.1.1-b374ad4e64dd
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

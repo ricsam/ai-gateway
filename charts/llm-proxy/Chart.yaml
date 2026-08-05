@@ -2,7 +2,7 @@ apiVersion: v2
 name: llm-proxy
 description: Runtime-brandable OpenAI-compatible AWS Bedrock proxy
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 home: https://github.com/ricsam/ai-gateway
 sources:
@@ -10,5 +10,3 @@ sources:
 maintainers:
   - name: ricsam
     url: https://github.com/ricsam
-annotations:
-  artifacthub.io/license: MIT
