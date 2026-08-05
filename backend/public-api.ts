@@ -46,7 +46,7 @@ export async function handleListModels(request: Request): Promise<Response> {
       id: model.id,
       object: "model",
       created: Math.floor(model.createdAt.getTime() / 1000),
-      owned_by: "llm-proxy",
+      owned_by: "ai-gateway",
     })),
   });
 }

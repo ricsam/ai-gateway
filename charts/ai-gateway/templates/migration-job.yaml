@@ -2,9 +2,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "llm-proxy.fullname" . }}-migrate-{{ .Release.Revision }}
+  name: {{ include "ai-gateway.fullname" . }}-migrate-{{ .Release.Revision }}
   labels:
-    {{- include "llm-proxy.labels" . | nindent 4 }}
+    {{- include "ai-gateway.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -13,10 +13,10 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "llm-proxy.selectorLabels" . | nindent 8 }}
+        {{- include "ai-gateway.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Never
-      serviceAccountName: {{ include "llm-proxy.serviceAccountName" . }}
+      serviceAccountName: {{ include "ai-gateway.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -46,6 +46,6 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "llm-proxy.secretName" . }}
-                  key: {{ include "llm-proxy.databaseKey" . }}
+                  name: {{ include "ai-gateway.secretName" . }}
+                  key: {{ include "ai-gateway.databaseKey" . }}
 {{- end }}

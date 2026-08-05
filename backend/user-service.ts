@@ -47,7 +47,7 @@ export async function createLocalUser(input: UserCreateInput, principal: Managem
 
 export async function updateUser(id: string, updates: Partial<Omit<UserCreateInput, "password" | "groupIds">>, principal: ManagementPrincipal, requestId: string) {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('llm-proxy:admin-updates'))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:admin-updates'))`);
     const [target] = await tx.select().from(userTable).where(eq(userTable.id, id)).limit(1).for("update");
     if (!target) return null;
     const role = updates.role ?? target.role; const enabled = updates.enabled ?? target.enabled;
@@ -125,7 +125,7 @@ export async function bulkUpdateUsersByGroups(
     throw new Error("Credits cannot be negative or invalid");
   }
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('llm-proxy:admin-updates'))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:admin-updates'))`);
     const targets = await tx.selectDistinct({ id: userTable.id, role: userTable.role, enabled: userTable.enabled })
       .from(groupMembersTable).innerJoin(userTable, eq(groupMembersTable.userId, userTable.id))
       .where(inArray(groupMembersTable.groupId, selectedGroups));
@@ -166,7 +166,7 @@ export async function setUserPassword(id: string, password: string, mustChangePa
 
 export async function deleteUser(id: string, principal: ManagementPrincipal, requestId: string) {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('llm-proxy:admin-updates'))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:admin-updates'))`);
     const [target] = await tx.select().from(userTable).where(eq(userTable.id, id)).limit(1).for("update");
     if (!target) return false;
     if (target.role === "admin" && target.enabled) {

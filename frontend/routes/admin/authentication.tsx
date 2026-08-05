@@ -37,7 +37,7 @@ const blank: Form = {
   scopes: "openid profile email", pkce: true, strictIssuerValidation: true, autoProvision: true,
   subjectClaim: "sub", emailClaim: "email", nameClaim: "name", usernameClaim: "preferred_username",
   subjectHeader: "x-auth-subject", emailHeader: "x-auth-email", nameHeader: "x-auth-name", usernameHeader: "x-auth-username",
-  secretHeader: "x-llm-proxy-proxy-secret", sourceCidrs: "",
+  secretHeader: "x-ai-gateway-proxy-secret", sourceCidrs: "",
 };
 
 export const Route = createFileRoute("/admin/authentication")({ component: Authentication });

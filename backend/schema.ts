@@ -131,7 +131,7 @@ export const authProvidersTable = pgTable("auth_providers", {
 export const applicationSettingsTable = pgTable("application_settings", {
   id: text("id").primaryKey().default("main"),
   revision: integer("revision").notNull().default(1),
-  productName: text("product_name").notNull().default("LLM Proxy"),
+  productName: text("product_name").notNull().default("AI Gateway"),
   tagline: text("tagline").notNull().default("Secure, metered access to AI models"),
   logoUrl: text("logo_url"),
   faviconUrl: text("favicon_url"),
@@ -192,7 +192,7 @@ export const apiKeysTable = pgTable("api_keys", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(), keyHash: text("key_hash").notNull().unique(), keyPrefix: text("key_prefix").notNull(),
-  scopes: text("scopes").array().notNull().default(["llm.invoke", "models.read", "credits.read"]),
+  scopes: text("scopes").array().notNull().default(["ai.invoke", "models.read", "credits.read"]),
   enabled: boolean("enabled").notNull().default(true), expiresAt: timestamp("expires_at", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }), lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),

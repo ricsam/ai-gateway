@@ -30,7 +30,7 @@ Trusted-header mode is intended only for a verified reverse proxy or identity-aw
 4. Every request includes the configured shared-secret header.
 
 <Warning>
-  Forwarded client-IP headers are never trusted as the source address. Configure CIDRs for the proxy that directly connects to LLM Proxy, not for end users.
+  Forwarded client-IP headers are never trusted as the source address. Configure CIDRs for the proxy that directly connects to AI Gateway, not for end users.
 </Warning>
 
 Example edge behavior:
@@ -41,7 +41,7 @@ set:    x-auth-subject=<immutable identity ID>
 set:    x-auth-email=<verified email>
 set:    x-auth-name=<display name>
 set:    x-auth-username=<stable username>
-set:    x-llm-proxy-proxy-secret=<shared secret>
+set:    x-ai-gateway-proxy-secret=<shared secret>
 ```
 
 Create the provider disabled, test it from the expected proxy path, then enable it. Rotate the shared secret at both ends in a coordinated change.

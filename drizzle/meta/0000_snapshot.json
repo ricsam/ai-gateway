@@ -185,7 +185,7 @@
           "type": "text[]",
           "primaryKey": false,
           "notNull": true,
-          "default": "'{\"llm.invoke\",\"models.read\",\"credits.read\"}'"
+          "default": "'{\"ai.invoke\",\"models.read\",\"credits.read\"}'"
         },
         "enabled": {
           "name": "enabled",
@@ -288,7 +288,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'LLM Proxy'"
+          "default": "'AI Gateway'"
         },
         "tagline": {
           "name": "tagline",

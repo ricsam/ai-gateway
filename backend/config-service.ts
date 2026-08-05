@@ -7,7 +7,7 @@ import { getSetupStatus } from "./setup";
 export async function getBranding() {
   const [settings] = await db.select().from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
   return settings ?? {
-    id: "main", revision: 1, productName: "LLM Proxy", tagline: "Secure, metered access to AI models",
+    id: "main", revision: 1, productName: "AI Gateway", tagline: "Secure, metered access to AI models",
     logoUrl: null, faviconUrl: null, primaryColor: "#2563eb", primaryForegroundColor: "#ffffff", updatedAt: new Date(0),
   };
 }

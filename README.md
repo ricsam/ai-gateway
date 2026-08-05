@@ -1,13 +1,13 @@
-# White-Label LLM Proxy
+# AI Gateway
 
-A self-hosted AWS Bedrock proxy with an OpenAI-compatible inference API and database-backed administrative control plane. Administrators manage local users, groups, models/pricing, branding, login integrations, AWS credentials, credits, management keys, and audit history at runtime.
+A self-hosted AI gateway for AWS Bedrock with an OpenAI-compatible inference API and database-backed administrative control plane. Administrators manage local users, groups, models/pricing, branding, login integrations, AWS credentials, credits, management keys, and audit history at runtime.
 
 ## First boot
 
 The application needs only four deployment values:
 
 ```dotenv
-BASE_URL=https://proxy.example.com
+BASE_URL=https://gateway.example.com
 DATABASE_URL=postgres://...
 BETTER_AUTH_SECRET=<strong random secret>
 SETTINGS_ENCRYPTION_KEY=v1:<base64 of exactly 32 random bytes>
@@ -19,11 +19,11 @@ The encryption key protects OIDC, trusted-header, and AWS secret material. Back 
 
 ## Management API
 
-The stable management base is `/management/v1`; its OpenAPI document is `/management/v1/openapi.json`. Browser calls use an enabled administrator session and same-origin mutation checks. Automation uses one-time-displayed `llma_` management keys with granular scopes. Management keys cannot invoke `/v1` inference.
+The stable management base is `/management/v1`; its OpenAPI document is `/management/v1/openapi.json`. Browser calls use an enabled administrator session and same-origin mutation checks. Automation uses one-time-displayed `aigm_` management keys with granular scopes. Management keys cannot invoke `/v1` inference.
 
 ```sh
-curl https://proxy.example.com/management/v1/users \
-  -H 'Authorization: Bearer llma_...'
+curl https://gateway.example.com/management/v1/users \
+  -H 'Authorization: Bearer aigm_...'
 ```
 
 Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
@@ -32,17 +32,17 @@ Core resources include users and passwords, groups/memberships and bulk user con
 
 | Method | Endpoint | Inference-key scope |
 | --- | --- | --- |
-| `POST` | `/v1/chat/completions` | `llm.invoke` |
+| `POST` | `/v1/chat/completions` | `ai.invoke` |
 | `GET` | `/v1/models` | `models.read` |
 | `GET` | `/v1/credits` | `credits.read` |
-| `POST` | `/api/proxy/bedrock/invoke` | `llm.invoke` |
-| `POST` | `/api/proxy/bedrock/invoke-stream` | `llm.invoke` |
-| `POST` | `/api/proxy/bedrock/converse` | `llm.invoke` |
-| `POST` | `/api/proxy/bedrock/converse-stream` | `llm.invoke` |
+| `POST` | `/api/gateway/bedrock/invoke` | `ai.invoke` |
+| `POST` | `/api/gateway/bedrock/invoke-stream` | `ai.invoke` |
+| `POST` | `/api/gateway/bedrock/converse` | `ai.invoke` |
+| `POST` | `/api/gateway/bedrock/converse-stream` | `ai.invoke` |
 
 The four native compatibility endpoints retain Bedrock request/response shapes, managed prompt caching, raw NDJSON/binary streaming, cancellation, and metered settlement. Send a stable `X-Request-ID` when a client may retry a completed request; settlement receipts make the same request ID exactly-once. The OpenAI endpoint accepts the same header.
 
-Inference keys begin with `llmp_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
+Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 
 ## Authentication and groups
 
@@ -69,16 +69,16 @@ Compose runs the pinned `timescale/timescaledb:2.19.3-pg17` distribution, a one-
 The chart is published as a public HTTPS Helm repository:
 
 ```sh
-helm repo add ai-gateway https://helm-35xkhylwd67f.r5d.app
+helm repo add ai-gateway https://ricsam.github.io/ai-gateway
 helm repo update
-helm upgrade --install proxy ai-gateway/llm-proxy \
-  --namespace llm-proxy --create-namespace \
-  --set image.repository=ghcr.io/your-org/llm-proxy \
+helm upgrade --install ai-gateway ai-gateway/ai-gateway \
+  --namespace ai-gateway --create-namespace \
+  --set image.repository=ghcr.io/your-org/ai-gateway \
   --set image.tag=0.1.0 \
-  --set config.baseUrl=https://proxy.example.com \
-  --set secrets.existingSecret=llm-proxy-secrets \
+  --set config.baseUrl=https://gateway.example.com \
+  --set secrets.existingSecret=ai-gateway-secrets \
   --set ingress.enabled=true \
-  --set ingress.host=proxy.example.com
+  --set ingress.host=gateway.example.com
 ```
 
 The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support. See the [Helm deployment guide](docs/deployment/helm.mdx) for repository publication and complete installation options.
@@ -108,8 +108,8 @@ bun run db:migrate
 TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 
 docker compose config
-helm lint charts/llm-proxy
-helm template proxy charts/llm-proxy --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
+helm lint charts/ai-gateway
+helm template ai-gateway charts/ai-gateway --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
 ```
 
 This is a greenfield pre-release baseline. The product intentionally excludes RAG/documents/embeddings and persistent full-chat features. Current group analytics use current-membership attribution, so a user in multiple groups contributes to every applicable group summary.

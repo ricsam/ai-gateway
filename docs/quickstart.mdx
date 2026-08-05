@@ -7,28 +7,28 @@ This guide assumes an administrator has completed setup, configured AWS Bedrock,
 
 <Steps>
   <Step title="Create an inference key">
-    Sign in to the proxy, open **Profile, API & usage**, enter a key name, and select **Create**. Copy the `llmp_` value immediately; it is shown only once.
+    Sign in to AI Gateway, open **Profile, API & usage**, enter a key name, and select **Create**. Copy the `aig_` value immediately; it is shown only once.
   </Step>
   <Step title="Configure your shell">
     Replace the example URL with your deployment's public URL.
 
     ```bash
-    export LLM_PROXY_BASE_URL="https://proxy.example.com/v1"
-    export LLM_PROXY_API_KEY="llmp_..."
+    export AI_GATEWAY_BASE_URL="https://gateway.example.com/v1"
+    export AI_GATEWAY_API_KEY="aig_..."
     ```
   </Step>
   <Step title="Discover an enabled model">
     ```bash
-    curl "$LLM_PROXY_BASE_URL/models" \
-      -H "Authorization: Bearer $LLM_PROXY_API_KEY"
+    curl "$AI_GATEWAY_BASE_URL/models" \
+      -H "Authorization: Bearer $AI_GATEWAY_API_KEY"
     ```
 
     Copy an `id` from the response. The key needs the `models.read` scope.
   </Step>
   <Step title="Create a chat completion">
     ```bash
-    curl "$LLM_PROXY_BASE_URL/chat/completions" \
-      -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+    curl "$AI_GATEWAY_BASE_URL/chat/completions" \
+      -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
       -H "Content-Type: application/json" \
       -d '{
         "model": "your-model-id",
@@ -51,7 +51,7 @@ A successful response uses the OpenAI Chat Completions shape:
   "choices": [
     {
       "index": 0,
-      "message": {"role": "assistant", "content": "Welcome to LLM Proxy."},
+      "message": {"role": "assistant", "content": "Welcome to AI Gateway."},
       "finish_reason": "stop",
       "logprobs": null
     }
@@ -72,8 +72,8 @@ A successful response uses the OpenAI Chat Completions shape:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://proxy.example.com/v1",
-    api_key="llmp_...",
+    base_url="https://gateway.example.com/v1",
+    api_key="aig_...",
 )
 
 completion = client.chat.completions.create(
@@ -87,8 +87,8 @@ print(completion.choices[0].message.content)
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "https://proxy.example.com/v1",
-  apiKey: "llmp_...",
+  baseURL: "https://gateway.example.com/v1",
+  apiKey: "aig_...",
 });
 
 const completion = await client.chat.completions.create({
@@ -101,7 +101,7 @@ console.log(completion.choices[0].message.content);
 </CodeGroup>
 
 <Tip>
-  Keep model IDs configurable. Administrators control the enabled catalog and may add, disable, or replace models without changing the proxy URL.
+  Keep model IDs configurable. Administrators control the enabled catalog and may add, disable, or replace models without changing the gateway URL.
 </Tip>
 
 ## Next steps

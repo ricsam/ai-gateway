@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ghcr.io/example/llm-proxy
+  repository: ghcr.io/example/ai-gateway
   tag: latest
   pullPolicy: IfNotPresent
 imagePullSecrets: []
@@ -10,12 +10,12 @@ service: { type: ClusterIP, port: 80 }
 ingress:
   enabled: false
   className: traefik
-  host: proxy.example.com
+  host: gateway.example.com
   annotations: {}
   path: /
   pathType: Prefix
 config:
-  baseUrl: https://proxy.example.com
+  baseUrl: https://gateway.example.com
 secrets:
   existingSecret: ""
   keys:
@@ -30,8 +30,8 @@ postgresql:
   enabled: false
   externalSecret: false
   image: timescale/timescaledb:2.19.3-pg17
-  database: llm_proxy
-  username: llm_proxy
+  database: ai_gateway
+  username: ai_gateway
   password: change-me
   persistence:
     size: 10Gi

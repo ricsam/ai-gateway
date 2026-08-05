@@ -12,8 +12,8 @@ An unconfigured installation exposes a one-time setup transaction at `/setup`. T
 ## Required deployment values
 
 ```dotenv
-BASE_URL=https://proxy.example.com
-DATABASE_URL=postgres://llm_proxy:strong-password@timescaledb:5432/llm_proxy
+BASE_URL=https://gateway.example.com
+DATABASE_URL=postgres://ai_gateway:strong-password@timescaledb:5432/ai_gateway
 BETTER_AUTH_SECRET=<strong-random-secret>
 SETTINGS_ENCRYPTION_KEY=v1:<base64-of-exactly-32-random-bytes>
 ```

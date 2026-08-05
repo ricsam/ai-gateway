@@ -1,24 +1,24 @@
 ---
 title: "Helm"
-description: "Install LLM Proxy from the hosted chart repository or a local checkout."
+description: "Install AI Gateway from the hosted chart repository or a local checkout."
 ---
 
-The project publishes `llm-proxy` as a conventional HTTPS Helm repository at `https://helm-35xkhylwd67f.r5d.app`. GitHub Actions also maintains the packaged chart and `index.yaml` on the `gh-pages` branch as a portable repository snapshot.
+The project publishes `ai-gateway` as a conventional HTTPS Helm repository on GitHub Pages at `https://ricsam.github.io/ai-gateway`. GitHub Actions packages each chart release, updates the `gh-pages` branch, and deploys that branch with GitHub Pages.
 
 ## Install from the chart repository
 
 <Steps>
   <Step title="Add the repository">
     ```bash
-    helm repo add ai-gateway https://helm-35xkhylwd67f.r5d.app
+    helm repo add ai-gateway https://ricsam.github.io/ai-gateway
     helm repo update
     ```
   </Step>
   <Step title="Create a namespace and deployment secrets">
     ```bash
-    kubectl create namespace llm-proxy
+    kubectl create namespace ai-gateway
 
-    kubectl -n llm-proxy create secret generic llm-proxy-secrets \
+    kubectl -n ai-gateway create secret generic ai-gateway-secrets \
       --from-literal=DATABASE_URL='postgres://...' \
       --from-literal=BETTER_AUTH_SECRET="$(openssl rand -base64 48)" \
       --from-literal=SETTINGS_ENCRYPTION_KEY="v1:$(openssl rand -base64 32)"
@@ -26,21 +26,21 @@ The project publishes `llm-proxy` as a conventional HTTPS Helm repository at `ht
   </Step>
   <Step title="Install the chart">
     ```bash
-    helm upgrade --install proxy ai-gateway/llm-proxy \
-      --namespace llm-proxy \
-      --set image.repository=ghcr.io/your-org/llm-proxy \
+    helm upgrade --install ai-gateway ai-gateway/ai-gateway \
+      --namespace ai-gateway \
+      --set image.repository=ghcr.io/your-org/ai-gateway \
       --set image.tag=0.1.0 \
-      --set config.baseUrl=https://proxy.example.com \
-      --set secrets.existingSecret=llm-proxy-secrets \
+      --set config.baseUrl=https://gateway.example.com \
+      --set secrets.existingSecret=ai-gateway-secrets \
       --set ingress.enabled=true \
       --set ingress.className=traefik \
-      --set ingress.host=proxy.example.com
+      --set ingress.host=gateway.example.com
     ```
   </Step>
   <Step title="Verify the rollout">
     ```bash
-    kubectl -n llm-proxy rollout status deployment/proxy-llm-proxy
-    kubectl -n llm-proxy get pods,service,ingress
+    kubectl -n ai-gateway rollout status deployment/ai-gateway-ai-gateway
+    kubectl -n ai-gateway get pods,service,ingress
     ```
   </Step>
 </Steps>
@@ -54,11 +54,11 @@ The project publishes `llm-proxy` as a conventional HTTPS Helm repository at `ht
 For a small installation, the chart can deploy its pinned TimescaleDB/PostgreSQL 17 image:
 
 ```bash
-helm upgrade --install proxy ai-gateway/llm-proxy \
-  --namespace llm-proxy --create-namespace \
-  --set image.repository=ghcr.io/your-org/llm-proxy \
+helm upgrade --install ai-gateway ai-gateway/ai-gateway \
+  --namespace ai-gateway --create-namespace \
+  --set image.repository=ghcr.io/your-org/ai-gateway \
   --set image.tag=0.1.0 \
-  --set config.baseUrl=https://proxy.example.com \
+  --set config.baseUrl=https://gateway.example.com \
   --set postgresql.enabled=true \
   --set postgresql.password="$(openssl rand -base64 36)" \
   --set postgresql.persistence.storageClass=rook-ceph-block \
@@ -84,20 +84,18 @@ You can rename the key mappings with `secrets.keys.*`.
 ## Install from a checkout
 
 ```bash
-helm upgrade --install proxy ./charts/llm-proxy \
-  --namespace llm-proxy --create-namespace \
+helm upgrade --install ai-gateway ./charts/ai-gateway \
+  --namespace ai-gateway --create-namespace \
   --values my-values.yaml
 ```
 
 ## Chart publication
 
-The `Release Helm chart` GitHub Actions workflow packages every new chart version, creates a GitHub release, and updates the `gh-pages` branch's `index.yaml` snapshot.
+The `Release Helm chart` GitHub Actions workflow lints and packages every new chart version, creates a GitHub release, updates the `gh-pages` branch's `index.yaml`, and deploys the branch through GitHub Pages.
 
-The canonical HTTPS endpoint is a static Nginx server deployed from `deploy/helm-repository.yaml`. Its image is built from `helm-repository/Dockerfile`, which packages the chart and generates `index.yaml` for the hosted URL. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release, then build, push, and roll out a new immutable repository-server image. The GitHub release step skips chart versions that already exist.
+Bump `version` in `charts/ai-gateway/Chart.yaml` whenever the chart changes, then push to `main`. Chart versions are immutable; the release step skips a version that already exists.
 
 ```text
-Repository: https://helm-35xkhylwd67f.r5d.app
-Index:      https://helm-35xkhylwd67f.r5d.app/index.yaml
+Repository: https://ricsam.github.io/ai-gateway
+Index:      https://ricsam.github.io/ai-gateway/index.yaml
 ```
-
-GitHub Pages cannot serve this private repository on the current GitHub plan, so the public Kubernetes-hosted server is the canonical Helm URL. If the repository becomes public or the plan changes, the existing `gh-pages` branch can be enabled directly under **Settings → Pages**.

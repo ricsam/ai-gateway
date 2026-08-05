@@ -118,7 +118,7 @@ CREATE TABLE "auth_providers" (
 CREATE TABLE "application_settings" (
   "id" text PRIMARY KEY DEFAULT 'main' NOT NULL,
   "revision" integer DEFAULT 1 NOT NULL,
-  "product_name" text DEFAULT 'LLM Proxy' NOT NULL,
+  "product_name" text DEFAULT 'AI Gateway' NOT NULL,
   "tagline" text DEFAULT 'Secure, metered access to AI models' NOT NULL,
   "logo_url" text,
   "favicon_url" text,
@@ -184,7 +184,7 @@ CREATE TABLE "api_keys" (
   "name" text NOT NULL,
   "key_hash" text NOT NULL UNIQUE,
   "key_prefix" text NOT NULL,
-  "scopes" text[] DEFAULT '{"llm.invoke","models.read","credits.read"}' NOT NULL,
+  "scopes" text[] DEFAULT '{"ai.invoke","models.read","credits.read"}' NOT NULL,
   "enabled" boolean DEFAULT true NOT NULL,
   "expires_at" timestamp with time zone,
   "revoked_at" timestamp with time zone,

@@ -6,7 +6,7 @@ const adminUrl = process.env.TIMESCALE_ADMIN_URL ?? process.env.DATABASE_URL;
 if (!adminUrl) throw new Error("TIMESCALE_ADMIN_URL or DATABASE_URL is required");
 
 const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-z0-9_]/g, "");
-const names = { fresh: `llm_proxy_fresh_${suffix}`, upgrade: `llm_proxy_upgrade_${suffix}` };
+const names = { fresh: `ai_gateway_fresh_${suffix}`, upgrade: `ai_gateway_upgrade_${suffix}` };
 const admin = new Pool({ connectionString: adminUrl });
 
 function databaseUrl(name: string): string {

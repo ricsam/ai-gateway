@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "llm-proxy.fullname" . }}
+  name: {{ include "ai-gateway.fullname" . }}
   labels:
-    {{- include "llm-proxy.labels" . | nindent 4 }}
+    {{- include "ai-gateway.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   selector:
-    {{- include "llm-proxy.selectorLabels" . | nindent 4 }}
+    {{- include "ai-gateway.selectorLabels" . | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.port }}

@@ -1,13 +1,13 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "LLM Proxy Inference API",
+    "title": "AI Gateway Inference API",
     "version": "1.0.0",
     "description": "OpenAI-compatible and native AWS Bedrock inference endpoints with scoped API keys and credit settlement."
   },
   "servers": [
     {
-      "url": "https://proxy.example.com",
+      "url": "https://gateway.example.com",
       "description": "Replace with your deployment base URL"
     }
   ],
@@ -22,7 +22,7 @@
       "post": {
         "tags": ["OpenAI compatibility"],
         "summary": "Create a chat completion",
-        "description": "Translates an OpenAI Chat Completions request to AWS Bedrock Converse. Requires `llm.invoke`.",
+        "description": "Translates an OpenAI Chat Completions request to AWS Bedrock Converse. Requires `ai.invoke`.",
         "operationId": "createChatCompletion",
         "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
         "requestBody": {
@@ -85,11 +85,11 @@
         }
       }
     },
-    "/api/proxy/bedrock/converse": {
+    "/api/gateway/bedrock/converse": {
       "post": {
         "tags": ["Bedrock compatibility"],
         "summary": "Call Bedrock Converse",
-        "description": "Passes a Bedrock Converse-shaped request through the configured catalog and settlement boundary. Requires `llm.invoke`.",
+        "description": "Passes a Bedrock Converse-shaped request through the configured catalog and settlement boundary. Requires `ai.invoke`.",
         "operationId": "bedrockConverse",
         "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
@@ -101,11 +101,11 @@
         }
       }
     },
-    "/api/proxy/bedrock/converse-stream": {
+    "/api/gateway/bedrock/converse-stream": {
       "post": {
         "tags": ["Bedrock compatibility"],
         "summary": "Stream Bedrock Converse",
-        "description": "Returns Bedrock Converse stream events as newline-delimited JSON. Requires `llm.invoke`.",
+        "description": "Returns Bedrock Converse stream events as newline-delimited JSON. Requires `ai.invoke`.",
         "operationId": "bedrockConverseStream",
         "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
@@ -117,11 +117,11 @@
         }
       }
     },
-    "/api/proxy/bedrock/invoke": {
+    "/api/gateway/bedrock/invoke": {
       "post": {
         "tags": ["Bedrock compatibility"],
         "summary": "Call Bedrock InvokeModel",
-        "description": "Passes a native model body to Bedrock InvokeModel. Requires `llm.invoke`.",
+        "description": "Passes a native model body to Bedrock InvokeModel. Requires `ai.invoke`.",
         "operationId": "bedrockInvoke",
         "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
@@ -133,11 +133,11 @@
         }
       }
     },
-    "/api/proxy/bedrock/invoke-stream": {
+    "/api/gateway/bedrock/invoke-stream": {
       "post": {
         "tags": ["Bedrock compatibility"],
         "summary": "Stream Bedrock InvokeModel",
-        "description": "Passes native provider event bytes through as an octet stream. Requires `llm.invoke`.",
+        "description": "Passes native provider event bytes through as an octet stream. Requires `ai.invoke`.",
         "operationId": "bedrockInvokeStream",
         "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
@@ -155,7 +155,7 @@
       "inferenceKey": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "llmp_",
+        "bearerFormat": "aig_",
         "description": "An inference API key created in Profile, API & usage."
       }
     },
@@ -286,7 +286,7 @@
                 "id": { "type": "string" },
                 "object": { "const": "model" },
                 "created": { "type": "integer" },
-                "owned_by": { "const": "llm-proxy" }
+                "owned_by": { "const": "ai-gateway" }
               }
             }
           }

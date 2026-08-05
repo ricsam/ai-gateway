@@ -10,23 +10,23 @@ The public API supports OpenAI-compatible Chat Completions, model discovery, cre
 Configure OpenAI-compatible clients with:
 
 ```text
-https://proxy.example.com/v1
+https://gateway.example.com/v1
 ```
 
 The native compatibility endpoints are rooted at:
 
 ```text
-https://proxy.example.com/api/proxy/bedrock
+https://gateway.example.com/api/gateway/bedrock
 ```
 
 Replace the example host with the `BASE_URL` of your deployment.
 
 ## Authentication
 
-All API endpoints use an `llmp_` bearer key:
+All API endpoints use an `aig_` bearer key:
 
 ```http
-Authorization: Bearer llmp_...
+Authorization: Bearer aig_...
 ```
 
 Each endpoint also enforces a key scope. See [API keys](/docs/api-keys) for the scope matrix.

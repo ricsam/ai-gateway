@@ -13,7 +13,7 @@ export async function authenticateApiKeyPrincipal(request: Request): Promise<Pro
   if (!rawKey) {
     return { ok: false, status: 401, message: "Missing API key", code: "missing_api_key" };
   }
-  if (!rawKey.startsWith("llmp_")) {
+  if (!rawKey.startsWith("aig_")) {
     return { ok: false, status: 401, message: "Invalid API key", code: "invalid_api_key" };
   }
 

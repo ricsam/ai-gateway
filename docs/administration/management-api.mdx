@@ -7,11 +7,11 @@ The stable management base is `/management/v1`. It covers users, groups, login p
 
 ## Create a management key
 
-An enabled administrator creates keys in **Admin → Security**. Select only the scopes the automation needs, add an expiry when possible, and copy the one-time `llma_` value.
+An enabled administrator creates keys in **Admin → Security**. Select only the scopes the automation needs, add an expiry when possible, and copy the one-time `aigm_` value.
 
 ```bash
-curl https://proxy.example.com/management/v1/users \
-  -H "Authorization: Bearer $LLM_PROXY_MANAGEMENT_KEY"
+curl https://gateway.example.com/management/v1/users \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY"
 ```
 
 <Warning>
@@ -74,7 +74,7 @@ Plaintext secrets are never returned.
 Every deployment serves its management specification at:
 
 ```text
-https://proxy.example.com/management/v1/openapi.json
+https://gateway.example.com/management/v1/openapi.json
 ```
 
 The runtime document is the source of truth for the management routes in your installed version.

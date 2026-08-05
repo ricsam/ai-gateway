@@ -3,7 +3,7 @@ title: "API keys"
 description: "Create, scope, store, and revoke inference credentials."
 ---
 
-Inference keys authenticate application requests. They begin with `llmp_`, are displayed once, and are stored only as SHA-256 digests.
+Inference keys authenticate application requests. They begin with `aig_`, are displayed once, and are stored only as SHA-256 digests.
 
 ## Create a key
 
@@ -22,8 +22,8 @@ Inference keys authenticate application requests. They begin with `llmp_`, are d
 Store the key in your secret manager and expose it to the application as an environment variable:
 
 ```dotenv
-OPENAI_BASE_URL=https://proxy.example.com/v1
-OPENAI_API_KEY=llmp_...
+OPENAI_BASE_URL=https://gateway.example.com/v1
+OPENAI_API_KEY=aig_...
 ```
 
 <Warning>
@@ -34,7 +34,7 @@ OPENAI_API_KEY=llmp_...
 
 | Scope | Allows |
 | --- | --- |
-| `llm.invoke` | Chat Completions and native Bedrock compatibility calls |
+| `ai.invoke` | Chat Completions and native Bedrock compatibility calls |
 | `models.read` | `GET /v1/models` |
 | `credits.read` | `GET /v1/credits` |
 
@@ -45,7 +45,7 @@ Keys created by the current dashboard receive all three scopes. API clients that
 Send the key as an HTTP bearer token:
 
 ```http
-Authorization: Bearer llmp_...
+Authorization: Bearer aig_...
 ```
 
 A missing, invalid, expired, or revoked key returns `401`. A valid key returns `403` when the owning account is disabled, API access is disabled, or the key lacks the endpoint's scope.

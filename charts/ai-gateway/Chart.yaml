@@ -1,8 +1,8 @@
 apiVersion: v2
-name: llm-proxy
-description: Runtime-brandable OpenAI-compatible AWS Bedrock proxy
+name: ai-gateway
+description: Runtime-brandable OpenAI-compatible AI gateway for AWS Bedrock
 type: application
-version: 0.1.1
+version: 0.1.0
 appVersion: "0.1.0"
 home: https://github.com/ricsam/ai-gateway
 sources:

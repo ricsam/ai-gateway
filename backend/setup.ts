@@ -47,7 +47,7 @@ export async function createInitialAdministrator(input: SetupInput, requestId: s
   const normalized = validateLocalAccount(input);
   const passwordHash = await hashPassword(normalized.password);
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('llm-proxy:first-setup'))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:first-setup'))`);
     const [installation] = await tx.select().from(installationTable).where(eq(installationTable.id, "main")).limit(1).for("update");
     const [users] = await tx.select({ value: count() }).from(userTable);
     if (!installation || installation.setupCompletedAt || (users?.value ?? 0) !== 0) throw new SetupError("Installation setup is already complete", 409);

@@ -31,13 +31,13 @@ export async function handleTrustedHeaderSignIn(request: Request, providerKey: s
   const [provider] = await db.select().from(authProvidersTable).where(and(eq(authProvidersTable.providerKey, providerKey), eq(authProvidersTable.type, "trusted_header"), eq(authProvidersTable.enabled, true))).limit(1);
   if (!provider?.secretEnvelope) return Response.json({ error: "Trusted-header provider is unavailable" }, { status: 404 });
   const config = provider.config as Record<string, unknown>;
-  const secretHeader = typeof config.secretHeader === "string" ? config.secretHeader.toLowerCase() : "x-llm-proxy-proxy-secret";
+  const secretHeader = typeof config.secretHeader === "string" ? config.secretHeader.toLowerCase() : "x-ai-gateway-proxy-secret";
   const suppliedSecret = request.headers.get(secretHeader) ?? "";
   const expectedSecret = await decryptSetting(provider.secretEnvelope, `auth-provider:${provider.providerKey}`);
   if (!suppliedSecret || !constantTimeSecretEqual(suppliedSecret, expectedSecret)) return Response.json({ error: "Trusted proxy authentication failed" }, { status: 401 });
 
   const sourceCidrs = Array.isArray(config.sourceCidrs) ? config.sourceCidrs.filter((value): value is string => typeof value === "string") : [];
-  const sourceIp = request.headers.get("x-llm-proxy-peer-ip")?.trim() || "";
+  const sourceIp = request.headers.get("x-ai-gateway-peer-ip")?.trim() || "";
   if (!sourceCidrs.length || !sourceIp || !sourceCidrs.some((cidr) => ipMatchesCidr(sourceIp, cidr))) return Response.json({ error: "Trusted proxy source is not allowed" }, { status: 403 });
 
   const headerName = (key: string, fallback: string) => typeof config[key] === "string" ? String(config[key]).toLowerCase() : fallback;

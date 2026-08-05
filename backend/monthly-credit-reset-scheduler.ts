@@ -6,7 +6,7 @@ function monthKey(date: Date): string { return `${date.getUTCFullYear()}-${Strin
 
 async function tick(now = new Date()): Promise<void> {
   if (now.getUTCDate() !== 1) return;
-  const month = monthKey(now); const lock = `llm-proxy:monthly-credit-reset:${month}`;
+  const month = monthKey(now); const lock = `ai-gateway:monthly-credit-reset:${month}`;
   const result = await db.executeRaw<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [lock]);
   if (!result.rows[0]?.locked) return;
   try {

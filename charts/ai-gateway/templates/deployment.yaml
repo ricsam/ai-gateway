@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "llm-proxy.fullname" . }}
+  name: {{ include "ai-gateway.fullname" . }}
   labels:
-    {{- include "llm-proxy.labels" . | nindent 4 }}
+    {{- include "ai-gateway.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "llm-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "ai-gateway.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -16,12 +16,12 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "llm-proxy.selectorLabels" . | nindent 8 }}
+        {{- include "ai-gateway.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "llm-proxy.serviceAccountName" . }}
+      serviceAccountName: {{ include "ai-gateway.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -51,18 +51,18 @@ spec:
               containerPort: 3000
           envFrom:
             - configMapRef:
-                name: {{ include "llm-proxy.fullname" . }}
+                name: {{ include "ai-gateway.fullname" . }}
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "llm-proxy.secretName" . }}
-                  key: {{ include "llm-proxy.databaseKey" . }}
+                  name: {{ include "ai-gateway.secretName" . }}
+                  key: {{ include "ai-gateway.databaseKey" . }}
             {{- range $name, $key := dict "BETTER_AUTH_SECRET" .Values.secrets.keys.authSecret "SETTINGS_ENCRYPTION_KEY" .Values.secrets.keys.settingsEncryptionKey }}
             - name: {{ $name }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "llm-proxy.secretName" $ }}
+                  name: {{ include "ai-gateway.secretName" $ }}
                   key: {{ $key }}
             {{- end }}
           readinessProbe:

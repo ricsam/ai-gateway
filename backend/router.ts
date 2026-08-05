@@ -157,10 +157,10 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
 
   createApiKey: async ({ body, context }) => {
-    const scopes = body.scopes ?? ["llm.invoke", "models.read", "credits.read"];
+    const scopes = body.scopes ?? ["ai.invoke", "models.read", "credits.read"];
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
     if (expiresAt && expiresAt <= new Date()) return { status: Status.BadRequest, body: { error: "Expiry must be in the future" } };
-    const rawKey = `llmp_${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    const rawKey = `aig_${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
     const keyHash = await hashApiKey(rawKey);
     const [key] = await db.insert(apiKeysTable).values({
       userId: context.getUserId(), name: body.name, keyHash, keyPrefix: rawKey.slice(0, 13), scopes, expiresAt,

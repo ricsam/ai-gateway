@@ -125,7 +125,7 @@ export const contract = defineContract({
     type: "standard", method: "POST", path: "/api-keys",
     body: z.object({
       name: z.string().min(1).max(100),
-      scopes: z.array(z.enum(["llm.invoke", "models.read", "credits.read"])).min(1).optional(),
+      scopes: z.array(z.enum(["ai.invoke", "models.read", "credits.read"])).min(1).optional(),
       expiresAt: z.string().datetime().optional(),
     }),
     responses: { [Status.Created]: z.object({

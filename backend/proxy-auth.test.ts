@@ -4,15 +4,15 @@ import { PROXY_SCOPES, requireProxyScope, type ProxyAuthResult } from "./proxy-p
 
 describe("API key primitives", () => {
   test("parses case-insensitive bearer authorization", () => {
-    expect(extractBearerToken(new Request("https://proxy.example/v1/models", {
-      headers: { Authorization: "bearer llmp_example" },
-    }))).toBe("llmp_example");
-    expect(extractBearerToken(new Request("https://proxy.example/v1/models"))).toBeNull();
+    expect(extractBearerToken(new Request("https://gateway.example/v1/models", {
+      headers: { Authorization: "bearer aig_example" },
+    }))).toBe("aig_example");
+    expect(extractBearerToken(new Request("https://gateway.example/v1/models"))).toBeNull();
   });
 
   test("uses deterministic SHA-256 key digests", async () => {
-    expect(await hashApiKey("llmp_example")).toBe(
-      "63f380cdd99052c817c36c106ff535a3a043249e756bdc5737cceaf9fe96057a",
+    expect(await hashApiKey("aig_example")).toBe(
+      "e049e571b241ef24ea3026bd113dff4af69fbc577a6501e75ac1318c6e7d05fc",
     );
   });
 });
@@ -28,15 +28,15 @@ describe("proxy scope authorization", () => {
   });
 
   test("returns a forbidden result for a missing endpoint scope", () => {
-    expect(requireProxyScope(principal, "llm.invoke")).toEqual({
+    expect(requireProxyScope(principal, "ai.invoke")).toEqual({
       ok: false,
       status: 403,
-      message: "Missing required scope: llm.invoke",
+      message: "Missing required scope: ai.invoke",
       code: "insufficient_scope",
     });
   });
 
   test("defines stable public scopes", () => {
-    expect(PROXY_SCOPES).toEqual(["llm.invoke", "models.read", "credits.read"]);
+    expect(PROXY_SCOPES).toEqual(["ai.invoke", "models.read", "credits.read"]);
   });
 });

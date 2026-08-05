@@ -37,8 +37,8 @@ serve({
     if (trustedHeaderMatch && request.method === "POST") {
       const peerIp = server.requestIP(request)?.address;
       const headers = new Headers(request.headers);
-      headers.delete("x-llm-proxy-peer-ip");
-      if (peerIp) headers.set("x-llm-proxy-peer-ip", peerIp);
+      headers.delete("x-ai-gateway-peer-ip");
+      if (peerIp) headers.set("x-ai-gateway-peer-ip", peerIp);
       return handleTrustedHeaderSignIn(new Request(request, { headers }), trustedHeaderMatch[1]!);
     }
 
@@ -63,7 +63,7 @@ serve({
     if (url.pathname === "/api/playground/chat/completions" && request.method === "POST") {
       return handlePlaygroundChatCompletions(request);
     }
-    const nativeBedrockMatch = url.pathname.match(/^\/api\/proxy\/bedrock\/(invoke|invoke-stream|converse|converse-stream)$/);
+    const nativeBedrockMatch = url.pathname.match(/^\/api\/gateway\/bedrock\/(invoke|invoke-stream|converse|converse-stream)$/);
     if (nativeBedrockMatch && request.method === "POST") {
       return handleBedrockProxy(request, nativeBedrockMatch[1] as BedrockProxyEndpoint);
     }

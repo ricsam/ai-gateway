@@ -3,13 +3,13 @@ title: "How it works"
 description: "Understand the inference path, control plane, credentials, and credit ledger."
 ---
 
-LLM Proxy separates inference credentials from administrative credentials and keeps operational configuration in TimescaleDB.
+AI Gateway separates inference credentials from administrative credentials and keeps operational configuration in TimescaleDB.
 
 ## Request path
 
 <Steps>
   <Step title="Authenticate">
-    The proxy hashes the bearer token and loads its owner, expiry, enabled state, and scopes. Inference keys begin with `llmp_`.
+    The proxy hashes the bearer token and loads its owner, expiry, enabled state, and scopes. Inference keys begin with `aig_`.
   </Step>
   <Step title="Authorize and select a model">
     The endpoint checks its required scope and resolves the requested ID against the enabled Bedrock model catalog.
@@ -29,8 +29,8 @@ LLM Proxy separates inference credentials from administrative credentials and ke
 
 | Credential | Prefix | Purpose | Where it works |
 | --- | --- | --- | --- |
-| Inference key | `llmp_` | Model calls, model discovery, and balance lookup | `/v1` and native Bedrock compatibility endpoints |
-| Management key | `llma_` | Administrative automation | `/management/v1` |
+| Inference key | `aig_` | Model calls, model discovery, and balance lookup | `/v1` and native Bedrock compatibility endpoints |
+| Management key | `aigm_` | Administrative automation | `/management/v1` |
 | Browser session | Cookie | Dashboard and built-in playground | Browser-facing application routes |
 
 Management keys cannot invoke models. Inference keys cannot call the management API.

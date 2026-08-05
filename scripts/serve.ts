@@ -68,7 +68,7 @@ function resolveServeBaseUrl(options: Pick<ServeOptions, "host" | "port" | "base
     if (error instanceof Error && error.message.startsWith("Invalid BASE_URL protocol")) {
       throw error;
     }
-    throw new Error(`Invalid BASE_URL "${candidate}". Use a full URL like https://proxy.example.com.`);
+    throw new Error(`Invalid BASE_URL "${candidate}". Use a full URL like https://gateway.example.com.`);
   }
 }
 

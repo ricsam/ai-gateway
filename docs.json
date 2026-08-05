@@ -1,8 +1,8 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "LLM Proxy",
-  "description": "Deploy, operate, and integrate with the self-hosted AWS Bedrock proxy.",
+  "name": "AI Gateway",
+  "description": "Deploy, operate, and integrate with the self-hosted AI gateway for AWS Bedrock.",
   "colors": {
     "primary": "#2563EB",
     "light": "#60A5FA",
@@ -172,7 +172,7 @@
     ]
   },
   "search": {
-    "prompt": "Search LLM Proxy docs"
+    "prompt": "Search AI Gateway docs"
   },
   "metadata": {
     "timestamp": true

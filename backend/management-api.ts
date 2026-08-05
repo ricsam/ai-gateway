@@ -61,10 +61,10 @@ function secretWrite(value: unknown): SecretWrite | undefined {
 
 const managementSecurity = [{ cookieSession: [] }, { managementKey: [] }];
 const OPENAPI = {
-  openapi: "3.1.0", info: { title: "LLM Proxy Management API", version: "1.0.0" },
+  openapi: "3.1.0", info: { title: "AI Gateway Management API", version: "1.0.0" },
   servers: [{ url: "/management/v1" }], security: managementSecurity,
   components: {
-    securitySchemes: { managementKey: { type: "http", scheme: "bearer", bearerFormat: "llma_" }, cookieSession: { type: "apiKey", in: "cookie", name: "better-auth.session_token" } },
+    securitySchemes: { managementKey: { type: "http", scheme: "bearer", bearerFormat: "aigm_" }, cookieSession: { type: "apiKey", in: "cookie", name: "better-auth.session_token" } },
     schemas: {
       Error: { type: "object", required: ["error"], properties: { error: { type: "object", required: ["code", "message", "requestId"], properties: { code: { type: "string" }, message: { type: "string" }, requestId: { type: "string" } } } } },
       TimePoint: { type: "object", required: ["time"], properties: { time: { type: "string", format: "date-time" } } },
@@ -380,7 +380,7 @@ export async function handleManagementApi(request: Request): Promise<Response> {
       const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
       if (!data.name?.trim() || !data.scopes?.length || data.scopes.some((scope) => !MANAGEMENT_SCOPES.includes(scope as ManagementScope))) return failure(requestId, 400, "validation_error", "Name and valid management scopes are required");
       if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date())) return failure(requestId, 400, "validation_error", "Expiry must be a future date");
-      const rawKey = `llma_${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, ""); const [key] = await db.insert(managementApiKeysTable).values({ name: data.name.trim(), keyHash: await hashApiKey(rawKey), keyPrefix: rawKey.slice(0, 13), scopes: [...new Set(data.scopes)], expiresAt, createdByUserId: principal.userId }).returning();
+      const rawKey = `aigm_${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, ""); const [key] = await db.insert(managementApiKeysTable).values({ name: data.name.trim(), keyHash: await hashApiKey(rawKey), keyPrefix: rawKey.slice(0, 13), scopes: [...new Set(data.scopes)], expiresAt, createdByUserId: principal.userId }).returning();
       await audit(principal, requestId, "management_key.created", "management_api_key", key!.id, { name: key!.name, scopes: key!.scopes }); const { keyHash: _, ...publicKey } = key!; return response(requestId, { data: { ...publicKey, key: rawKey } }, 201);
     }
     if ((match = path.match(/^\/management-keys\/([^/]+)$/)) && request.method === "DELETE") {

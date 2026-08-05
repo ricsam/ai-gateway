@@ -9,7 +9,7 @@ import { ModeToggle } from "./mode-toggle";
 export function AppShell({ children }: { children: ReactNode }) {
   const { data: session, isPending } = useSession();
   const navigate = useNavigate();
-  const [brandName, setBrandName] = useState("LLM Proxy");
+  const [brandName, setBrandName] = useState("AI Gateway");
   const role = (session?.user as { role?: string } | undefined)?.role;
 
   useEffect(() => { void loadPublicConfig().then((config) => setBrandName(config.brand.name)); }, []);

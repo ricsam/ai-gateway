@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "white-label-llm-proxy",
+      "name": "ai-gateway",
       "dependencies": {
         "@aws-sdk/client-bedrock-runtime": "3.1003.0",
         "@fontsource-variable/geist": "5.2.8",

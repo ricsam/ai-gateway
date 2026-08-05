@@ -118,7 +118,7 @@ async function settle(params: {
 }
 
 export async function handleBedrockProxy(request: Request, endpoint: BedrockProxyEndpoint): Promise<Response> {
-  const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "llm.invoke");
+  const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "ai.invoke");
   if (!auth.ok) return failure(auth.message, auth.status, auth.code);
 
   let body: ProxyBody;

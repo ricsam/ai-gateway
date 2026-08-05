@@ -3,15 +3,15 @@ title: "Chat Completions"
 description: "Use messages, streaming, vision inputs, reasoning controls, and request IDs."
 ---
 
-Send OpenAI-compatible requests to `POST /v1/chat/completions`. The key requires `llm.invoke`.
+Send OpenAI-compatible requests to `POST /v1/chat/completions`. The key requires `ai.invoke`.
 
 ## Messages
 
 Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`. System and developer messages become Bedrock system blocks. Consecutive user or assistant messages are consolidated because Bedrock Converse expects alternating roles.
 
 ```bash
-curl https://proxy.example.com/v1/chat/completions \
-  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+curl https://gateway.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "your-model-id",
@@ -31,8 +31,8 @@ Supported generation controls include `max_tokens`, `temperature`, `top_p`, and 
 Set `stream` to `true` to receive server-sent events:
 
 ```bash
-curl -N https://proxy.example.com/v1/chat/completions \
-  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+curl -N https://gateway.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "your-model-id",

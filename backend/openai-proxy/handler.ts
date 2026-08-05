@@ -100,7 +100,7 @@ export async function handleOpenAIProxy(
     authMode === "session"
       ? await authenticateSessionPrincipal(request)
       : await authenticateApiKeyPrincipal(request),
-    "llm.invoke",
+    "ai.invoke",
   );
   if (!authResult.ok) {
     return errorResponse(

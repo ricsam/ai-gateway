@@ -8,8 +8,8 @@ Credits are denominated in USD and owned by users. Every model has separate pric
 ## Check a balance
 
 ```bash
-curl https://proxy.example.com/v1/credits \
-  -H "Authorization: Bearer $LLM_PROXY_API_KEY"
+curl https://gateway.example.com/v1/credits \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY"
 ```
 
 ```json
@@ -38,8 +38,8 @@ An exhausted balance causes subsequent inference calls to return HTTP `402` with
 Send a stable `X-Request-ID` when an application may retry a completed request:
 
 ```bash
-curl https://proxy.example.com/v1/chat/completions \
-  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+curl https://gateway.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: job-842-attempt-1" \
   -d '{"model":"your-model-id","messages":[{"role":"user","content":"Hello"}]}'

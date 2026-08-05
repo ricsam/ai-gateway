@@ -35,7 +35,7 @@ function assertOrigin(request: Request): void {
 
 export async function requireManagementPrincipal(request: Request, scope: ManagementScope): Promise<ManagementPrincipal> {
   const token = extractBearerToken(request);
-  if (token?.startsWith("llma_")) {
+  if (token?.startsWith("aigm_")) {
     const keyHash = await hashApiKey(token);
     const now = new Date();
     const [key] = await db.select().from(managementApiKeysTable).where(and(

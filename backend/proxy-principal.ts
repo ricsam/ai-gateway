@@ -1,4 +1,4 @@
-export const PROXY_SCOPES = ["llm.invoke", "models.read", "credits.read"] as const;
+export const PROXY_SCOPES = ["ai.invoke", "models.read", "credits.read"] as const;
 export type ProxyScope = (typeof PROXY_SCOPES)[number];
 
 export interface ProxyPrincipal {
