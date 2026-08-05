@@ -1,0 +1,323 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LLM Proxy Inference API",
+    "version": "1.0.0",
+    "description": "OpenAI-compatible and native AWS Bedrock inference endpoints with scoped API keys and credit settlement."
+  },
+  "servers": [
+    {
+      "url": "https://proxy.example.com",
+      "description": "Replace with your deployment base URL"
+    }
+  ],
+  "tags": [
+    { "name": "OpenAI compatibility", "description": "OpenAI-compatible discovery and inference" },
+    { "name": "Credits", "description": "User credit information" },
+    { "name": "Bedrock compatibility", "description": "Native Bedrock-shaped requests and responses" }
+  ],
+  "security": [{ "inferenceKey": [] }],
+  "paths": {
+    "/v1/chat/completions": {
+      "post": {
+        "tags": ["OpenAI compatibility"],
+        "summary": "Create a chat completion",
+        "description": "Translates an OpenAI Chat Completions request to AWS Bedrock Converse. Requires `llm.invoke`.",
+        "operationId": "createChatCompletion",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatCompletionRequest" },
+              "example": {
+                "model": "your-model-id",
+                "messages": [{ "role": "user", "content": "Hello" }]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A completion or server-sent event stream",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ChatCompletionResponse" } },
+              "text/event-stream": { "schema": { "type": "string" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": ["OpenAI compatibility"],
+        "summary": "List enabled models",
+        "description": "Lists enabled Bedrock models. Requires `models.read`.",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "Enabled model list",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModelList" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/v1/credits": {
+      "get": {
+        "tags": ["Credits"],
+        "summary": "Get credit balance",
+        "description": "Returns the key owner's current balance and monthly allocation. Requires `credits.read`.",
+        "operationId": "getCredits",
+        "responses": {
+          "200": {
+            "description": "Current user credits",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreditBalance" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/proxy/bedrock/converse": {
+      "post": {
+        "tags": ["Bedrock compatibility"],
+        "summary": "Call Bedrock Converse",
+        "description": "Passes a Bedrock Converse-shaped request through the configured catalog and settlement boundary. Requires `llm.invoke`.",
+        "operationId": "bedrockConverse",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
+        "responses": {
+          "200": { "description": "AWS Bedrock Converse response", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" }
+        }
+      }
+    },
+    "/api/proxy/bedrock/converse-stream": {
+      "post": {
+        "tags": ["Bedrock compatibility"],
+        "summary": "Stream Bedrock Converse",
+        "description": "Returns Bedrock Converse stream events as newline-delimited JSON. Requires `llm.invoke`.",
+        "operationId": "bedrockConverseStream",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
+        "responses": {
+          "200": { "description": "Newline-delimited Bedrock events", "content": { "application/x-ndjson": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" }
+        }
+      }
+    },
+    "/api/proxy/bedrock/invoke": {
+      "post": {
+        "tags": ["Bedrock compatibility"],
+        "summary": "Call Bedrock InvokeModel",
+        "description": "Passes a native model body to Bedrock InvokeModel. Requires `llm.invoke`.",
+        "operationId": "bedrockInvoke",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
+        "responses": {
+          "200": { "description": "Provider response body", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" }
+        }
+      }
+    },
+    "/api/proxy/bedrock/invoke-stream": {
+      "post": {
+        "tags": ["Bedrock compatibility"],
+        "summary": "Stream Bedrock InvokeModel",
+        "description": "Passes native provider event bytes through as an octet stream. Requires `llm.invoke`.",
+        "operationId": "bedrockInvokeStream",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
+        "responses": {
+          "200": { "description": "Provider binary event stream", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "inferenceKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "llmp_",
+        "description": "An inference API key created in Profile, API & usage."
+      }
+    },
+    "parameters": {
+      "RequestId": {
+        "name": "X-Request-ID",
+        "in": "header",
+        "required": false,
+        "description": "Stable ID for exactly-once credit settlement across retries.",
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" }
+      }
+    },
+    "requestBodies": {
+      "BedrockRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": ["modelId", "messages"],
+              "properties": {
+                "modelId": { "type": "string" },
+                "messages": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "BedrockInvokeRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": ["modelId", "body"],
+              "properties": {
+                "modelId": { "type": "string" },
+                "body": { "description": "Native request body for the selected model" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": { "description": "Invalid request or unavailable model", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unauthorized": { "description": "Missing or invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "InsufficientCredits": { "description": "The user has no available credits", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Forbidden": { "description": "Disabled access or insufficient scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unavailable": { "description": "Bedrock is not configured or unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    },
+    "schemas": {
+      "Message": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["role", "content"],
+            "properties": { "role": { "type": "string", "enum": ["system", "developer"] }, "content": { "type": "string" } }
+          },
+          {
+            "type": "object",
+            "required": ["role", "content"],
+            "properties": { "role": { "const": "user" }, "content": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "object", "additionalProperties": true } }] } }
+          },
+          {
+            "type": "object",
+            "required": ["role"],
+            "properties": { "role": { "const": "assistant" }, "content": { "type": ["string", "null"] }, "tool_calls": { "type": "array", "items": { "type": "object", "additionalProperties": true } } }
+          },
+          {
+            "type": "object",
+            "required": ["role", "content", "tool_call_id"],
+            "properties": { "role": { "const": "tool" }, "content": { "type": "string" }, "tool_call_id": { "type": "string" } }
+          }
+        ]
+      },
+      "ChatCompletionRequest": {
+        "type": "object",
+        "required": ["model", "messages"],
+        "properties": {
+          "model": { "type": "string" },
+          "messages": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/Message" } },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+          "top_p": { "type": "number", "minimum": 0, "maximum": 1 },
+          "max_tokens": { "type": "integer", "minimum": 1 },
+          "stop": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+          "stream": { "type": "boolean", "default": false },
+          "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high"] },
+          "tools": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "tool_choice": { "description": "auto, required, none, or a named function", "oneOf": [{ "type": "string", "enum": ["auto", "required", "none"] }, { "type": "object", "additionalProperties": true }] },
+          "n": { "const": 1 }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+        "properties": {
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" }
+        }
+      },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "required": ["id", "object", "created", "model", "choices", "usage"],
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "const": "chat.completion" },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "usage": { "$ref": "#/components/schemas/Usage" }
+        }
+      },
+      "ModelList": {
+        "type": "object",
+        "required": ["object", "data"],
+        "properties": {
+          "object": { "const": "list" },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "object", "created", "owned_by"],
+              "properties": {
+                "id": { "type": "string" },
+                "object": { "const": "model" },
+                "created": { "type": "integer" },
+                "owned_by": { "const": "llm-proxy" }
+              }
+            }
+          }
+        }
+      },
+      "CreditBalance": {
+        "type": "object",
+        "required": ["object", "currency", "balance", "monthly_allocation"],
+        "properties": {
+          "object": { "const": "credit_balance" },
+          "currency": { "const": "USD" },
+          "balance": { "type": "number" },
+          "monthly_allocation": { "type": "number" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["message", "code"],
+            "properties": {
+              "message": { "type": "string" },
+              "type": { "type": "string" },
+              "code": { "type": ["string", "null"] },
+              "param": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -18,3 +18,6 @@ Thumbs.db
 .vscode/
 *.log
 tsconfig.tsbuildinfo
+.mint/
+.cr-index/
+.cr-release-packages/

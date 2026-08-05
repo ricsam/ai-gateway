@@ -1,0 +1,43 @@
+---
+title: "LLM Proxy"
+description: "A self-hosted, OpenAI-compatible gateway to AWS Bedrock with credits, analytics, and runtime administration."
+---
+
+LLM Proxy gives teams a controlled path to AWS Bedrock. Applications use a familiar OpenAI-compatible API while operators manage model access, pricing, users, groups, credentials, branding, and audit history from one deployment.
+
+<Card title="Send your first request" icon="rocket" href="/docs/quickstart" cta="Open the quickstart" arrow="true">
+  Create an inference key, discover an enabled model, and call Chat Completions.
+</Card>
+
+<Columns cols={2}>
+  <Card title="OpenAI-compatible" icon="message-square">
+    Use `/v1/chat/completions` with streaming, tools, image data URIs, and reasoning controls.
+  </Card>
+  <Card title="Metered access" icon="coins">
+    Apply per-user balances and monthly allocations with model-specific token and cache pricing.
+  </Card>
+  <Card title="Runtime control plane" icon="sliders-horizontal">
+    Change users, groups, models, AWS credentials, auth providers, and branding without rebuilding.
+  </Card>
+  <Card title="Self-hosted" icon="server">
+    Run with Docker Compose or deploy to Kubernetes with the included Helm chart.
+  </Card>
+</Columns>
+
+## Choose your path
+
+<Columns cols={3}>
+  <Card title="Application developer" icon="code-2" href="/docs/api-keys">
+    Create a scoped key and integrate the inference API.
+  </Card>
+  <Card title="Administrator" icon="shield-check" href="/docs/administration/first-boot">
+    Complete first boot and configure access to Bedrock.
+  </Card>
+  <Card title="Platform operator" icon="cloud" href="/docs/deployment/helm">
+    Deploy, secure, monitor, back up, and recover the service.
+  </Card>
+</Columns>
+
+<Note>
+  This documentation uses `https://proxy.example.com` as a placeholder. Replace it with your deployment's public base URL.
+</Note>

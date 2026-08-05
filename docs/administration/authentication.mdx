@@ -1,0 +1,51 @@
+---
+title: "Authentication providers"
+description: "Configure local recovery access, OpenID Connect, and trusted-header authentication."
+---
+
+Local username/password authentication always remains available as the administrator recovery path. Public registration closes after first boot.
+
+## OpenID Connect
+
+Open **Admin → Authentication**, add an OpenID Connect provider, and configure:
+
+- A stable provider key and display label.
+- Issuer URL or explicit discovery URL.
+- Client ID and client secret.
+- Scopes, normally `openid profile email`.
+- Subject, email, name, and username claims.
+- PKCE and automatic user provisioning.
+
+New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in.
+
+External identities are anchored by provider and immutable subject. The proxy does not implicitly link accounts by email.
+
+## Trusted headers
+
+Trusted-header mode is intended only for a verified reverse proxy or identity-aware access gateway. It requires all of the following:
+
+1. The immediate TCP peer is inside a configured source CIDR.
+2. The proxy strips every client-supplied identity header.
+3. The proxy injects the configured subject, email, name, and username headers.
+4. Every request includes the configured shared-secret header.
+
+<Warning>
+  Forwarded client-IP headers are never trusted as the source address. Configure CIDRs for the proxy that directly connects to LLM Proxy, not for end users.
+</Warning>
+
+Example edge behavior:
+
+```text
+strip:  x-auth-subject, x-auth-email, x-auth-name, x-auth-username
+set:    x-auth-subject=<immutable identity ID>
+set:    x-auth-email=<verified email>
+set:    x-auth-name=<display name>
+set:    x-auth-username=<stable username>
+set:    x-llm-proxy-proxy-secret=<shared secret>
+```
+
+Create the provider disabled, test it from the expected proxy path, then enable it. Rotate the shared secret at both ends in a coordinated change.
+
+## Automatic provisioning
+
+When enabled, the first valid external sign-in creates a user. Administrators still control system role, account state, API access, credits, quotas, and manual groups. Disabling automatic provisioning allows only previously linked external identities to sign in.

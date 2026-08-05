@@ -1,0 +1,12 @@
+backend/**
+frontend/**
+shared/**
+scripts/**
+generated/**
+patches/**
+drizzle/**
+spec/**
+deploy/**
+charts/**
+.github/**
+README.md

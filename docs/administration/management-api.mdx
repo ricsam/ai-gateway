@@ -1,0 +1,80 @@
+---
+title: "Management API"
+description: "Automate administrative work with scoped management keys."
+---
+
+The stable management base is `/management/v1`. It covers users, groups, login providers, branding, AWS configuration, models, usage, analytics, management keys, and audit history.
+
+## Create a management key
+
+An enabled administrator creates keys in **Admin → Security**. Select only the scopes the automation needs, add an expiry when possible, and copy the one-time `llma_` value.
+
+```bash
+curl https://proxy.example.com/management/v1/users \
+  -H "Authorization: Bearer $LLM_PROXY_MANAGEMENT_KEY"
+```
+
+<Warning>
+  Management keys are administrative credentials. They cannot invoke `/v1`, but a write-scoped key can change users, providers, model access, or secrets. Keep it in a secret manager and prefer short expirations.
+</Warning>
+
+## Scope families
+
+| Resource | Read scope | Write scope |
+| --- | --- | --- |
+| Users | `users.read` | `users.write` |
+| Groups | `groups.read` | `groups.write` |
+| Authentication | `auth.read` | `auth.write` |
+| Branding | `branding.read` | `branding.write` |
+| AWS | `aws.read` | `aws.write` |
+| Models | `models.read` | `models.write` |
+| Settings | `settings.read` | `settings.write` |
+| Management keys | `management-keys.read` | `management-keys.write` |
+
+Usage and audit access use `usage.read` and `audit.read`.
+
+## Pagination and errors
+
+Collection endpoints generally accept `limit` and `offset`. Limits are clamped to 1–100. Management errors have a stable envelope:
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "A description of the failure",
+    "requestId": "b475..."
+  }
+}
+```
+
+Responses include `X-Request-ID`. Supply your own request ID when correlating an automation run with audit events.
+
+## Revision-safe configuration
+
+Mutable configuration resources expose a `revision`. Send the current revision with an update so stale clients cannot silently overwrite newer settings.
+
+Secret writes are explicit:
+
+```json
+{ "operation": "preserve" }
+```
+
+```json
+{ "operation": "replace", "value": "new-secret" }
+```
+
+```json
+{ "operation": "clear" }
+```
+
+Plaintext secrets are never returned.
+
+## Runtime OpenAPI document
+
+Every deployment serves its management specification at:
+
+```text
+https://proxy.example.com/management/v1/openapi.json
+```
+
+The runtime document is the source of truth for the management routes in your installed version.

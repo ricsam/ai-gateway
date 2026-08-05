@@ -1,0 +1,113 @@
+---
+title: "Tool calling"
+description: "Define functions, execute tool calls, and return results through Chat Completions."
+---
+
+LLM Proxy translates OpenAI function tools to the Bedrock Converse tool format.
+
+## Define tools
+
+```json
+{
+  "model": "your-model-id",
+  "messages": [
+    {"role": "user", "content": "What is the weather in Stockholm?"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string"}
+          },
+          "required": ["city"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}
+```
+
+`tool_choice` supports:
+
+- `auto` or omitted: the model decides whether to call a tool.
+- `required`: the model must call a tool.
+- `none`: tools are not sent to Bedrock.
+- `{"type":"function","function":{"name":"get_weather"}}`: require one named function.
+
+## Handle a tool call
+
+A model tool request appears on the assistant message:
+
+```json
+{
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [
+    {
+      "id": "tooluse_123",
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Stockholm\"}"
+      }
+    }
+  ]
+}
+```
+
+Execute the function in your application, then send the assistant message and a matching tool message in the next request:
+
+```json
+{
+  "model": "your-model-id",
+  "messages": [
+    {"role": "user", "content": "What is the weather in Stockholm?"},
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "tooluse_123",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"city\":\"Stockholm\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "tooluse_123",
+      "content": "{\"temperature_c\":6,\"condition\":\"cloudy\"}"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}},
+          "required": ["city"]
+        }
+      }
+    }
+  ]
+}
+```
+
+<Tip>
+  Preserve the tool call ID exactly. Bedrock uses it to connect a `toolResult` to the original `toolUse`.
+</Tip>
+
+## Streaming tools
+
+Streaming chunks build each call incrementally in `choices[0].delta.tool_calls`. Concatenate `function.arguments` fragments for each tool-call index before parsing the final JSON. A completed tool request uses `finish_reason: "tool_calls"`.

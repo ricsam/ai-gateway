@@ -1,0 +1,87 @@
+---
+title: "Chat Completions"
+description: "Use messages, streaming, vision inputs, reasoning controls, and request IDs."
+---
+
+Send OpenAI-compatible requests to `POST /v1/chat/completions`. The key requires `llm.invoke`.
+
+## Messages
+
+Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`. System and developer messages become Bedrock system blocks. Consecutive user or assistant messages are consolidated because Bedrock Converse expects alternating roles.
+
+```bash
+curl https://proxy.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "your-model-id",
+    "messages": [
+      {"role": "system", "content": "Be concise."},
+      {"role": "user", "content": "Explain token caching."}
+    ],
+    "temperature": 0.2,
+    "max_tokens": 400
+  }'
+```
+
+Supported generation controls include `max_tokens`, `temperature`, `top_p`, and `stop`. Only `n: 1` is supported. The requested output limit cannot exceed the model's administrator-configured maximum.
+
+## Streaming
+
+Set `stream` to `true` to receive server-sent events:
+
+```bash
+curl -N https://proxy.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "your-model-id",
+    "stream": true,
+    "messages": [{"role": "user", "content": "Write a short haiku."}]
+  }'
+```
+
+Each `data:` event contains a `chat.completion.chunk`. The stream ends with:
+
+```text
+ data: [DONE]
+```
+
+The final JSON chunk includes usage when Bedrock reports it. The server sends heartbeat comments during quiet periods to keep intermediaries from closing a valid stream.
+
+## Reasoning
+
+For a model configured with thinking support, set `reasoning_effort` to `low`, `medium`, or `high`. The proxy maps these to token budgets of 1,024, 4,096, and 10,000. Streaming reasoning text appears in the non-standard `choices[0].delta.reasoning_content` field.
+
+```json
+{
+  "model": "your-thinking-model-id",
+  "reasoning_effort": "medium",
+  "messages": [{"role": "user", "content": "Solve the problem step by step."}]
+}
+```
+
+The configured model output limit must be larger than the selected reasoning budget.
+
+## Image input
+
+User messages can include OpenAI content parts. Images must use a base64 data URI in PNG, JPEG, GIF, or WebP format:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "What is shown here?"},
+    {
+      "type": "image_url",
+      "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}
+    }
+  ]
+}
+```
+
+External image URLs are not fetched. They are passed to the model only as a text placeholder, so encode the image data in the request.
+
+## Safe retries
+
+Supply a stable `X-Request-ID` for a logical request that may be retried after an uncertain client outcome. A settlement receipt makes charging exactly-once for that ID. See [Credits and usage](/docs/credits#exactly-once-request-ids).

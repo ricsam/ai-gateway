@@ -4,3 +4,11 @@ description: Runtime-brandable OpenAI-compatible AWS Bedrock proxy
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+home: https://github.com/ricsam/ai-gateway
+sources:
+  - https://github.com/ricsam/ai-gateway
+maintainers:
+  - name: ricsam
+    url: https://github.com/ricsam
+annotations:
+  artifacthub.io/license: MIT

@@ -1,0 +1,55 @@
+---
+title: "API keys"
+description: "Create, scope, store, and revoke inference credentials."
+---
+
+Inference keys authenticate application requests. They begin with `llmp_`, are displayed once, and are stored only as SHA-256 digests.
+
+## Create a key
+
+<Steps>
+  <Step title="Sign in">
+    Open your deployment and sign in with an enabled user account.
+  </Step>
+  <Step title="Open Profile, API & usage">
+    Go to **Profile** and find the **API keys** card.
+  </Step>
+  <Step title="Create and copy">
+    Give the key a recognizable name, create it, and copy the complete value immediately. The dashboard cannot display it again.
+  </Step>
+</Steps>
+
+Store the key in your secret manager and expose it to the application as an environment variable:
+
+```dotenv
+OPENAI_BASE_URL=https://proxy.example.com/v1
+OPENAI_API_KEY=llmp_...
+```
+
+<Warning>
+  Never commit an inference key, put it in browser-delivered code, or include it in logs. Revoke any key that may have been exposed.
+</Warning>
+
+## Scopes
+
+| Scope | Allows |
+| --- | --- |
+| `llm.invoke` | Chat Completions and native Bedrock compatibility calls |
+| `models.read` | `GET /v1/models` |
+| `credits.read` | `GET /v1/credits` |
+
+Keys created by the current dashboard receive all three scopes. API clients that create credentials through the authenticated application RPC may request a subset.
+
+## Authentication header
+
+Send the key as an HTTP bearer token:
+
+```http
+Authorization: Bearer llmp_...
+```
+
+A missing, invalid, expired, or revoked key returns `401`. A valid key returns `403` when the owning account is disabled, API access is disabled, or the key lacks the endpoint's scope.
+
+## Revoke a key
+
+In **Profile → API keys**, select the revoke action next to the key. Revocation takes effect on the next request. Disabling a user or disabling that user's API access also blocks all of their keys.

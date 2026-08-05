@@ -1,0 +1,46 @@
+---
+title: "Users, groups, and quotas"
+description: "Manage local accounts, membership, API access, credits, and monthly allocations."
+---
+
+Users own sessions, inference keys, credit balances, monthly allocations, and usage history. Groups organize membership, bulk operations, and reporting; credits remain user-owned.
+
+## Local users
+
+Administrators can create users with a username, email, role, initial password, starting balance, monthly allocation, and group membership. New users can be required to change their password on first login.
+
+Account controls have distinct effects:
+
+| Control | Effect |
+| --- | --- |
+| Enabled | Allows the user to sign in and retain active access |
+| API enabled | Allows the user's `llmp_` keys to authenticate |
+| Role | Grants user or administrator dashboard permissions |
+| Credit balance | Amount currently available for inference |
+| Monthly credits | Balance assigned on the first day of each UTC month |
+
+Disabling an account invalidates its access. The control plane prevents deleting, disabling, or demoting the final enabled administrator.
+
+## Groups
+
+Create groups under **Admin → Groups**, then add manual members with `owner`, `admin`, or `member` membership roles. These membership roles describe the group relationship; they do not grant system-administrator access.
+
+External identity provisioning can also create memberships. The UI distinguishes membership sources so externally managed entries are not treated as manual assignments.
+
+## Bulk user controls
+
+Select one or more groups and apply a change to the union of their members:
+
+- Set a monthly allocation.
+- Enable or disable API access.
+- Enable or disable accounts.
+
+A user in multiple selected groups is updated once.
+
+## Analytics attribution
+
+Current group analytics use current membership. A user in multiple groups contributes to each applicable group summary. Moving a user changes how historical usage appears in group-level views, while the underlying user-owned ledger remains unchanged.
+
+## Monthly reset
+
+The scheduler checks every minute and runs once on the first day of each UTC month. A PostgreSQL advisory lock and audit event make the reset safe when more than one application replica is running. Users with a monthly allocation of zero are skipped.

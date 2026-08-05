@@ -1,0 +1,51 @@
+---
+title: "How it works"
+description: "Understand the inference path, control plane, credentials, and credit ledger."
+---
+
+LLM Proxy separates inference credentials from administrative credentials and keeps operational configuration in TimescaleDB.
+
+## Request path
+
+<Steps>
+  <Step title="Authenticate">
+    The proxy hashes the bearer token and loads its owner, expiry, enabled state, and scopes. Inference keys begin with `llmp_`.
+  </Step>
+  <Step title="Authorize and select a model">
+    The endpoint checks its required scope and resolves the requested ID against the enabled Bedrock model catalog.
+  </Step>
+  <Step title="Check credits">
+    The user must have a positive balance before an inference request is sent upstream.
+  </Step>
+  <Step title="Call Bedrock">
+    The proxy loads encrypted static AWS credentials, chooses the model's region override or the default region, and translates the request when necessary.
+  </Step>
+  <Step title="Settle usage">
+    Input, output, cache-read, and cache-write usage is priced from the model configuration and recorded in the append-only credit ledger.
+  </Step>
+</Steps>
+
+## Credential boundaries
+
+| Credential | Prefix | Purpose | Where it works |
+| --- | --- | --- | --- |
+| Inference key | `llmp_` | Model calls, model discovery, and balance lookup | `/v1` and native Bedrock compatibility endpoints |
+| Management key | `llma_` | Administrative automation | `/management/v1` |
+| Browser session | Cookie | Dashboard and built-in playground | Browser-facing application routes |
+
+Management keys cannot invoke models. Inference keys cannot call the management API.
+
+## Source of truth
+
+The database stores application configuration, encrypted provider secrets, users, groups, API-key hashes, model pricing, credit events, audit events, and analytics aggregates. Only four values are deployment-owned:
+
+- `BASE_URL`
+- `DATABASE_URL`
+- `BETTER_AUTH_SECRET`
+- `SETTINGS_ENCRYPTION_KEY`
+
+AWS and identity-provider secrets are encrypted with `SETTINGS_ENCRYPTION_KEY`. Back up that key together with the database.
+
+## Health behavior
+
+`GET /healthz` reports process health. `GET /readyz` verifies database connectivity. Both can succeed before AWS is configured; inference then returns `provider_not_configured` until an administrator saves valid Bedrock credentials.

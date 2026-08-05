@@ -1,0 +1,58 @@
+---
+title: "Credits and usage"
+description: "Understand balances, model pricing, monthly allocations, and request settlement."
+---
+
+Credits are denominated in USD and owned by users. Every model has separate prices per million input and output tokens, with optional prices for cache reads and 5-minute or 1-hour cache writes.
+
+## Check a balance
+
+```bash
+curl https://proxy.example.com/v1/credits \
+  -H "Authorization: Bearer $LLM_PROXY_API_KEY"
+```
+
+```json
+{
+  "object": "credit_balance",
+  "currency": "USD",
+  "balance": 18.42,
+  "monthly_allocation": 25
+}
+```
+
+The key requires `credits.read`.
+
+## Request admission and settlement
+
+- A user needs a positive balance when inference begins.
+- Actual provider usage is priced after the response.
+- The ledger records input, output, cache-read, cache-write, total cost, source, model, and request ID.
+- A response can cost more than the balance that was available when it began. Settlement records a partial charge rather than making the ledger negative.
+- A zero-priced model produces no debit.
+
+An exhausted balance causes subsequent inference calls to return HTTP `402` with code `insufficient_credits`.
+
+## Exactly-once request IDs
+
+Send a stable `X-Request-ID` when an application may retry a completed request:
+
+```bash
+curl https://proxy.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: job-842-attempt-1" \
+  -d '{"model":"your-model-id","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Request IDs may contain letters, numbers, `.`, `_`, `:`, and `-`, up to 128 characters. Settlement receipts prevent the same valid request ID from being charged twice.
+
+<Warning>
+  A repeated request ID protects credit settlement; it does not turn inference into a response cache. Avoid concurrently sending different logical requests with the same ID.
+</Warning>
+
+## Monthly allocations
+
+Administrators can set `defaultMonthlyCredits` per user or apply the value to the union of selected groups. On the first day of each UTC month, the built-in scheduler resets users with a nonzero allocation to that amount. An administrator can also trigger a reset manually.
+
+Users can review balance history, consumption, model mix, token details, and ledger events in **Profile, API & usage**.

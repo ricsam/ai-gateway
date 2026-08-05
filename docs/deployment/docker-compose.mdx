@@ -1,0 +1,65 @@
+---
+title: "Docker Compose"
+description: "Run TimescaleDB, migrations, and LLM Proxy for local development or a single-host installation."
+---
+
+The Compose stack includes the pinned TimescaleDB/PostgreSQL 17 image, a one-shot migration container, and the application.
+
+## Start the stack
+
+<Steps>
+  <Step title="Create deployment values">
+    ```bash
+    cp .env.example .env
+    ```
+
+    Replace both placeholder secrets. `SETTINGS_ENCRYPTION_KEY` must decode to exactly 32 bytes.
+  </Step>
+  <Step title="Build and start">
+    ```bash
+    docker compose up --build -d
+    ```
+  </Step>
+  <Step title="Inspect startup">
+    ```bash
+    docker compose ps
+    docker compose logs migrate
+    docker compose logs app
+    ```
+  </Step>
+  <Step title="Complete setup">
+    Visit `http://localhost:3000/setup` and create the initial administrator.
+  </Step>
+</Steps>
+
+## Ports
+
+The application listens on host port `3000` by default. Override it with `APP_PORT`.
+
+PostgreSQL is exposed on host port `5432` by default for development tools. Set `POSTGRES_PORT` when that port is occupied. Application traffic always uses the internal `postgres:5432` address.
+
+## Persistence
+
+The `postgres_data` Docker volume contains the database. Removing the stack with `docker compose down` preserves it; `docker compose down -v` permanently deletes it.
+
+<Warning>
+  Back up `postgres_data` and `SETTINGS_ENCRYPTION_KEY` together. A database backup without the encryption key cannot recover encrypted provider credentials.
+</Warning>
+
+## Common commands
+
+```bash
+# Follow application logs
+docker compose logs -f app
+
+# Rebuild and reconcile the stack
+docker compose up --build -d
+
+# Stop without deleting data
+docker compose down
+
+# Verify the rendered Compose configuration
+docker compose config
+```
+
+For public production traffic, terminate TLS at a trusted reverse proxy, set `BASE_URL` to the exact external HTTPS origin, and restrict direct database access.

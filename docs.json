@@ -1,0 +1,187 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "LLM Proxy",
+  "description": "Deploy, operate, and integrate with the self-hosted AWS Bedrock proxy.",
+  "colors": {
+    "primary": "#2563EB",
+    "light": "#60A5FA",
+    "dark": "#1D4ED8"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "/"
+  },
+  "favicon": "/favicon.svg",
+  "icons": {
+    "library": "lucide"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "background": {
+    "decoration": "gradient"
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs",
+    "codeblocks": "system"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "index",
+              "docs/quickstart",
+              "docs/concepts"
+            ]
+          },
+          {
+            "group": "Use the API",
+            "pages": [
+              "docs/api-keys",
+              "docs/chat-completions",
+              "docs/tool-calling",
+              "docs/credits"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "docs/administration/first-boot",
+              "docs/administration/models-and-aws",
+              "docs/administration/users-and-groups",
+              "docs/administration/authentication",
+              "docs/administration/management-api"
+            ]
+          },
+          {
+            "group": "Deploy and operate",
+            "pages": [
+              "docs/deployment/docker-compose",
+              "docs/deployment/helm",
+              "docs/operations/production"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "icon": "square-terminal",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview"
+            ]
+          },
+          {
+            "group": "Inference API",
+            "openapi": {
+              "source": "api/openapi.json",
+              "directory": "api-reference"
+            }
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/ricsam/ai-gateway",
+          "icon": "github"
+        }
+      ]
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "type": "github",
+        "href": "https://github.com/ricsam/ai-gateway"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Quickstart",
+      "href": "/docs/quickstart"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/ricsam/ai-gateway"
+    },
+    "links": [
+      {
+        "header": "Product",
+        "items": [
+          {
+            "label": "Quickstart",
+            "href": "/docs/quickstart"
+          },
+          {
+            "label": "API reference",
+            "href": "/api-reference/overview"
+          }
+        ]
+      },
+      {
+        "header": "Operate",
+        "items": [
+          {
+            "label": "Helm deployment",
+            "href": "/docs/deployment/helm"
+          },
+          {
+            "label": "Production guide",
+            "href": "/docs/operations/production"
+          }
+        ]
+      }
+    ]
+  },
+  "api": {
+    "playground": {
+      "display": "interactive",
+      "proxy": true
+    },
+    "examples": {
+      "languages": [
+        "curl",
+        "python",
+        "javascript"
+      ],
+      "defaults": "required",
+      "prefill": true
+    },
+    "url": "full"
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "download-spec",
+      "chatgpt",
+      "claude"
+    ]
+  },
+  "search": {
+    "prompt": "Search LLM Proxy docs"
+  },
+  "metadata": {
+    "timestamp": true
+  },
+  "errors": {
+    "404": {
+      "redirect": false,
+      "title": "Page not found",
+      "description": "The page may have moved. Return to the [documentation home](/)."
+    }
+  }
+}

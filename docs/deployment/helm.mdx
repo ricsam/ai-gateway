@@ -1,0 +1,104 @@
+---
+title: "Helm"
+description: "Install LLM Proxy from the GitHub Pages chart repository or a local checkout."
+---
+
+The project publishes `llm-proxy` as a conventional HTTPS Helm repository on GitHub Pages.
+
+## Install from the chart repository
+
+<Steps>
+  <Step title="Add the repository">
+    ```bash
+    helm repo add ai-gateway https://ricsam.github.io/ai-gateway
+    helm repo update
+    ```
+  </Step>
+  <Step title="Create a namespace and deployment secrets">
+    ```bash
+    kubectl create namespace llm-proxy
+
+    kubectl -n llm-proxy create secret generic llm-proxy-secrets \
+      --from-literal=DATABASE_URL='postgres://...' \
+      --from-literal=BETTER_AUTH_SECRET="$(openssl rand -base64 48)" \
+      --from-literal=SETTINGS_ENCRYPTION_KEY="v1:$(openssl rand -base64 32)"
+    ```
+  </Step>
+  <Step title="Install the chart">
+    ```bash
+    helm upgrade --install proxy ai-gateway/llm-proxy \
+      --namespace llm-proxy \
+      --set image.repository=ghcr.io/your-org/llm-proxy \
+      --set image.tag=0.1.0 \
+      --set config.baseUrl=https://proxy.example.com \
+      --set secrets.existingSecret=llm-proxy-secrets \
+      --set ingress.enabled=true \
+      --set ingress.className=traefik \
+      --set ingress.host=proxy.example.com
+    ```
+  </Step>
+  <Step title="Verify the rollout">
+    ```bash
+    kubectl -n llm-proxy rollout status deployment/proxy-llm-proxy
+    kubectl -n llm-proxy get pods,service,ingress
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Keep public Ingress disabled until you can complete `/setup` through a protected tunnel. The first successful setup request creates the initial administrator.
+</Warning>
+
+## Use the bundled TimescaleDB
+
+For a small installation, the chart can deploy its pinned TimescaleDB/PostgreSQL 17 image:
+
+```bash
+helm upgrade --install proxy ai-gateway/llm-proxy \
+  --namespace llm-proxy --create-namespace \
+  --set image.repository=ghcr.io/your-org/llm-proxy \
+  --set image.tag=0.1.0 \
+  --set config.baseUrl=https://proxy.example.com \
+  --set postgresql.enabled=true \
+  --set postgresql.password="$(openssl rand -base64 36)" \
+  --set postgresql.persistence.storageClass=rook-ceph-block \
+  --set postgresql.persistence.size=10Gi \
+  --set secrets.values.authSecret="$(openssl rand -base64 48)" \
+  --set secrets.values.settingsEncryptionKey="v1:$(openssl rand -base64 32)"
+```
+
+The bundled database uses a `ReadWriteOnce` PVC. Set `postgresql.persistence.storageClass` explicitly for your cluster. Use external TimescaleDB when you need database high availability or managed backups.
+
+## Required existing-secret keys
+
+When `secrets.existingSecret` is set, the Secret must contain:
+
+| Key | Value |
+| --- | --- |
+| `DATABASE_URL` | TimescaleDB connection URL |
+| `BETTER_AUTH_SECRET` | Long random session/authentication secret |
+| `SETTINGS_ENCRYPTION_KEY` | `v1:` followed by base64 for exactly 32 random bytes |
+
+You can rename the key mappings with `secrets.keys.*`.
+
+## Install from a checkout
+
+```bash
+helm upgrade --install proxy ./charts/llm-proxy \
+  --namespace llm-proxy --create-namespace \
+  --values my-values.yaml
+```
+
+## Chart publication
+
+The `Release Helm chart` GitHub Actions workflow publishes every new chart version to the `gh-pages` branch and updates `index.yaml`. It also creates a GitHub release for the chart package.
+
+After the initial workflow run, configure **Settings → Pages → Build and deployment → Deploy from a branch**, select `gh-pages` and `/(root)`. Bump `version` in `charts/llm-proxy/Chart.yaml` for every chart release; publishing is skipped when that version already exists.
+
+The repository URL is:
+
+```text
+https://ricsam.github.io/ai-gateway
+```
+
+The index is available at `https://ricsam.github.io/ai-gateway/index.yaml` after Pages is enabled.

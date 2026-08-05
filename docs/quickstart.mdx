@@ -1,0 +1,116 @@
+---
+title: "Quickstart"
+description: "Create an inference key and send your first OpenAI-compatible request."
+---
+
+This guide assumes an administrator has completed setup, configured AWS Bedrock, and enabled at least one model.
+
+<Steps>
+  <Step title="Create an inference key">
+    Sign in to the proxy, open **Profile, API & usage**, enter a key name, and select **Create**. Copy the `llmp_` value immediately; it is shown only once.
+  </Step>
+  <Step title="Configure your shell">
+    Replace the example URL with your deployment's public URL.
+
+    ```bash
+    export LLM_PROXY_BASE_URL="https://proxy.example.com/v1"
+    export LLM_PROXY_API_KEY="llmp_..."
+    ```
+  </Step>
+  <Step title="Discover an enabled model">
+    ```bash
+    curl "$LLM_PROXY_BASE_URL/models" \
+      -H "Authorization: Bearer $LLM_PROXY_API_KEY"
+    ```
+
+    Copy an `id` from the response. The key needs the `models.read` scope.
+  </Step>
+  <Step title="Create a chat completion">
+    ```bash
+    curl "$LLM_PROXY_BASE_URL/chat/completions" \
+      -H "Authorization: Bearer $LLM_PROXY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "your-model-id",
+        "messages": [
+          {"role": "user", "content": "Reply with a one-sentence welcome."}
+        ]
+      }'
+    ```
+  </Step>
+</Steps>
+
+A successful response uses the OpenAI Chat Completions shape:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "created": 1741000000,
+  "model": "your-model-id",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "Welcome to LLM Proxy."},
+      "finish_reason": "stop",
+      "logprobs": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 18,
+    "completion_tokens": 7,
+    "total_tokens": 25
+  }
+}
+```
+
+## Use an OpenAI client
+
+<CodeGroup>
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://proxy.example.com/v1",
+    api_key="llmp_...",
+)
+
+completion = client.chat.completions.create(
+    model="your-model-id",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(completion.choices[0].message.content)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://proxy.example.com/v1",
+  apiKey: "llmp_...",
+});
+
+const completion = await client.chat.completions.create({
+  model: "your-model-id",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(completion.choices[0].message.content);
+```
+
+</CodeGroup>
+
+<Tip>
+  Keep model IDs configurable. Administrators control the enabled catalog and may add, disable, or replace models without changing the proxy URL.
+</Tip>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Stream responses" icon="radio" href="/docs/chat-completions#streaming">
+    Process tokens as server-sent events.
+  </Card>
+  <Card title="Call tools" icon="wrench" href="/docs/tool-calling">
+    Send function schemas and return tool results.
+  </Card>
+</Columns>

@@ -1,0 +1,6 @@
+<svg width="190" height="36" viewBox="0 0 190 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="36" height="36" rx="10" fill="#2563EB"/>
+  <path d="M10 12.5L18 8L26 12.5V23.5L18 28L10 23.5V12.5Z" stroke="white" stroke-width="2.2" stroke-linejoin="round"/>
+  <path d="M14 15L18 12.75L22 15V20.5L18 22.75L14 20.5V15Z" fill="white"/>
+  <text x="48" y="23.5" fill="#111827" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="650">LLM Proxy</text>
+</svg>

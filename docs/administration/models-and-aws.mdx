@@ -1,0 +1,63 @@
+---
+title: "Models and AWS"
+description: "Configure encrypted Bedrock credentials, model IDs, regions, limits, pricing, and caching."
+---
+
+The enabled model catalog is shared by the public API and the built-in playground. All inference is routed to AWS Bedrock.
+
+## Configure Bedrock credentials
+
+Open **Admin → Branding & AWS** and provide:
+
+- A default AWS region, such as `us-east-1`.
+- A static access key ID.
+- A secret access key.
+- An optional session token for temporary credentials.
+
+Secret fields are encrypted before storage and never returned as plaintext. Save the configuration, select a configured model, and run the connection test.
+
+<Note>
+  The current runtime requires database-configured static credentials. ServiceAccount annotations in the Helm chart are generic infrastructure and do not enable workload-identity authentication.
+</Note>
+
+## Add a model
+
+Open **Admin → Models** and configure:
+
+| Field | Purpose |
+| --- | --- |
+| Bedrock model ID | Exact model, inference profile, or provisioned-throughput identifier sent to AWS |
+| Display name | Human-readable dashboard label |
+| Input/output price | USD per million tokens used for credit settlement |
+| Cache prices | Optional read, 5-minute write, and 1-hour write prices per million tokens |
+| Context window | Informational input capacity shown to users |
+| Max output tokens | Hard upper bound enforced by the proxy |
+| Region override | Uses a region different from the AWS default |
+| Thinking | Allows `reasoning_effort` requests |
+| Managed cache | Inserts supported cache points into Converse and Anthropic Invoke requests |
+| Enabled | Makes the model available to API users |
+
+Use **Test model before saving** to verify that the identifier, region, credentials, and Bedrock access are correct.
+
+## Region selection
+
+A model's region override wins over the default region. The runtime caches Bedrock clients by configuration revision and region. Saving AWS settings invalidates the client cache so new requests use the current credentials.
+
+## Credential rotation
+
+<Steps>
+  <Step title="Create replacement credentials in AWS">
+    Grant only the Bedrock permissions and model access the proxy needs.
+  </Step>
+  <Step title="Save the replacements">
+    Enter the new access key ID, secret access key, and optional session token in the dashboard.
+  </Step>
+  <Step title="Test an enabled model">
+    Confirm a real Converse request succeeds in every region in use.
+  </Step>
+  <Step title="Revoke the old key">
+    Remove the former credentials in AWS only after the test succeeds.
+  </Step>
+</Steps>
+
+Clearing credentials keeps the service healthy but causes inference to return `provider_not_configured` until credentials are restored.

@@ -1,0 +1,64 @@
+---
+title: "Production operations"
+description: "Health checks, backups, restore verification, security, and credential recovery."
+---
+
+## Health endpoints
+
+| Endpoint | Check | Expected response |
+| --- | --- | --- |
+| `/healthz` | Process is serving HTTP | `{"status":"ok"}` |
+| `/readyz` | Database accepts a query | `{"status":"ready"}` |
+
+Readiness does not require AWS. Use the AWS connection test and a low-cost model request to verify the provider path.
+
+## Backups
+
+Back up TimescaleDB and `SETTINGS_ENCRYPTION_KEY` as one recovery unit. Retain `BETTER_AUTH_SECRET` if restored browser sessions should remain valid.
+
+Use either:
+
+- Timescale-aware `pg_dump` and `pg_restore` with the same compatible extension installed at the destination.
+- A storage or managed-database snapshot that includes extension catalogs.
+
+Test restore procedures regularly.
+
+## Restore verification
+
+<Steps>
+  <Step title="Prepare an empty compatible database">
+    Install the TimescaleDB extension before restoring.
+  </Step>
+  <Step title="Restore data and secrets">
+    Restore the database and deploy the matching encryption key.
+  </Step>
+  <Step title="Run current migrations">
+    Apply schema changes from the application version you are deploying.
+  </Step>
+  <Step title="Verify Timescale objects">
+    Check `timescaledb_information.hypertables`, all three credit-event continuous aggregates, aggregate refresh jobs, and the compression policy.
+  </Step>
+  <Step title="Test the application">
+    Verify readiness, administrator login, model discovery, a low-cost completion, credit settlement, and analytics.
+  </Step>
+</Steps>
+
+## Release discipline
+
+Use immutable image tags in production and run migrations before the application rollout. Do not deploy `latest` when rollback and auditability matter.
+
+## Security checklist
+
+- Terminate public traffic with HTTPS and set `BASE_URL` to that exact origin.
+- Keep TimescaleDB private.
+- Use long random deployment secrets and a secret manager.
+- Restrict AWS credentials to required Bedrock actions and resources.
+- Give automation management keys the smallest scope and an expiry.
+- Keep at least two enabled administrators.
+- Do not expose `/setup` before an operator can complete it.
+- Treat trusted-header mode as privileged network integration.
+- Review audit events and usage anomalies.
+
+## Recovery
+
+Use `bun run admin:recover` with database access to restore a local administrator. If `SETTINGS_ENCRYPTION_KEY` is lost, encrypted AWS and login-provider settings cannot be decrypted; restore the key from backup or clear and reconfigure those settings through a controlled database recovery.

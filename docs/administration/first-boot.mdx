@@ -1,0 +1,67 @@
+---
+title: "First boot"
+description: "Prepare deployment secrets and safely create the initial administrator."
+---
+
+An unconfigured installation exposes a one-time setup transaction at `/setup`. The first successful submission creates the initial local administrator, disables public registration, and permanently closes setup.
+
+<Warning>
+  Do not expose an unconfigured installation to the public internet. Complete setup through a protected tunnel or port-forward before enabling public Ingress.
+</Warning>
+
+## Required deployment values
+
+```dotenv
+BASE_URL=https://proxy.example.com
+DATABASE_URL=postgres://llm_proxy:strong-password@timescaledb:5432/llm_proxy
+BETTER_AUTH_SECRET=<strong-random-secret>
+SETTINGS_ENCRYPTION_KEY=v1:<base64-of-exactly-32-random-bytes>
+```
+
+Generate values without writing them to shell history:
+
+```bash
+openssl rand -base64 48
+openssl rand -base64 32
+```
+
+Prefix the second value with `v1:` for `SETTINGS_ENCRYPTION_KEY`.
+
+## Safe rollout
+
+<Steps>
+  <Step title="Start TimescaleDB">
+    Use the PostgreSQL 17-compatible TimescaleDB image pinned by the project, or an external compatible service. Plain PostgreSQL is not supported.
+  </Step>
+  <Step title="Run migrations">
+    The migration creates and verifies the TimescaleDB extension, tables, hypertables, continuous aggregates, jobs, and policies.
+  </Step>
+  <Step title="Start the private application service">
+    Keep public Ingress disabled. Verify `/healthz` and `/readyz` through the private network.
+  </Step>
+  <Step title="Open a protected tunnel">
+    For Kubernetes, port-forward the Service and visit the local URL. For Compose, bind only to a trusted interface until setup is complete.
+  </Step>
+  <Step title="Create the first administrator">
+    Visit `/setup`, choose a username and strong password, and submit once.
+  </Step>
+  <Step title="Enable public access">
+    Configure TLS at your ingress or edge, publish the application, then configure AWS and at least one model.
+  </Step>
+</Steps>
+
+## Secret durability
+
+`SETTINGS_ENCRYPTION_KEY` protects OIDC client secrets, trusted-header shared secrets, and AWS secret material. Back it up with TimescaleDB. Losing either side makes encrypted settings unrecoverable.
+
+Do not rotate the encryption key by replacing the environment value. A safe rotation must decrypt and re-encrypt every envelope during a maintenance operation.
+
+## Offline administrator recovery
+
+If an administrator is locked out but database access remains available:
+
+```bash
+DATABASE_URL=postgres://... bun run admin:recover -- username 'new-strong-password'
+```
+
+This enables and promotes the user, replaces or creates the local credential, revokes sessions, and requires another password change at login. It does not reopen first-boot setup.

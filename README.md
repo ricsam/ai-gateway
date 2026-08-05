@@ -66,8 +66,12 @@ Compose runs the pinned `timescale/timescaledb:2.19.3-pg17` distribution, a one-
 
 ### Helm
 
+The chart is published to GitHub Pages:
+
 ```sh
-helm upgrade --install proxy charts/llm-proxy \
+helm repo add ai-gateway https://ricsam.github.io/ai-gateway
+helm repo update
+helm upgrade --install proxy ai-gateway/llm-proxy \
   --namespace llm-proxy --create-namespace \
   --set image.repository=ghcr.io/your-org/llm-proxy \
   --set image.tag=0.1.0 \
@@ -77,7 +81,7 @@ helm upgrade --install proxy charts/llm-proxy \
   --set ingress.host=proxy.example.com
 ```
 
-The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support.
+The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support. See the [Helm deployment guide](docs/deployment/helm.mdx) for repository publication and complete installation options.
 
 ### Backups and recovery
 
@@ -108,4 +112,4 @@ helm lint charts/llm-proxy
 helm template proxy charts/llm-proxy --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
 ```
 
-This is an intentionally breaking pre-release baseline. The database migration also upgrades the short-lived plain-PostgreSQL control-plane baseline in place: foreign keys incompatible with append-only history are removed, existing ledger rows are migrated into the hypertable, and request settlement moves to a Timescale-compatible receipt table. Back up before upgrading. The product intentionally excludes Anocca integration, RAG/documents/embeddings, and persistent full-chat features; groups replace historical cores throughout the retained analytics and control plane. Current group analytics use current-membership attribution, so a user in multiple groups contributes to every applicable group summary.
+This is a greenfield pre-release baseline. The product intentionally excludes RAG/documents/embeddings and persistent full-chat features. Current group analytics use current-membership attribution, so a user in multiple groups contributes to every applicable group summary.

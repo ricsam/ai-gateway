@@ -1,0 +1,63 @@
+---
+title: "API reference overview"
+description: "Base URLs, authentication, formats, idempotent settlement, and error conventions."
+---
+
+The public API supports OpenAI-compatible Chat Completions, model discovery, credit lookup, and lower-level Bedrock request shapes.
+
+## Base URL
+
+Configure OpenAI-compatible clients with:
+
+```text
+https://proxy.example.com/v1
+```
+
+The native compatibility endpoints are rooted at:
+
+```text
+https://proxy.example.com/api/proxy/bedrock
+```
+
+Replace the example host with the `BASE_URL` of your deployment.
+
+## Authentication
+
+All API endpoints use an `llmp_` bearer key:
+
+```http
+Authorization: Bearer llmp_...
+```
+
+Each endpoint also enforces a key scope. See [API keys](/docs/api-keys) for the scope matrix.
+
+## Request IDs
+
+Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logical request to make credit settlement exactly-once. Responses from native compatibility endpoints return the effective request ID in the same header.
+
+## Formats
+
+- Non-streaming Chat Completions return OpenAI-compatible JSON.
+- Streaming Chat Completions return server-sent events and terminate with `data: [DONE]`.
+- Native `converse-stream` returns newline-delimited JSON.
+- Native `invoke-stream` passes provider binary event bytes through as `application/octet-stream`.
+
+## Errors
+
+OpenAI-compatible endpoints return an `error` object with `message`, `type`, and `code`. Native endpoints return an `error` object with `message` and `code`.
+
+Common status codes include:
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid request or unavailable model |
+| `401` | Missing or invalid key |
+| `402` | Insufficient credits |
+| `403` | Disabled account/API access or missing scope |
+| `408` | Upstream model timeout |
+| `429` | Bedrock throttling |
+| `503` | Bedrock is not configured or temporarily unavailable |
+
+<Card title="OpenAPI specification" icon="download" href="/api/openapi.json">
+  Download the OpenAPI 3.1 document used to generate this reference.
+</Card>
