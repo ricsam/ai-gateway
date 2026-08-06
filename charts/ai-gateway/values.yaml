@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ghcr.io/example/ai-gateway
+  repository: ghcr.io/ricsam/ai-gateway
   tag: latest
   pullPolicy: IfNotPresent
 imagePullSecrets: []

@@ -15,10 +15,12 @@ The Compose stack includes the pinned TimescaleDB/PostgreSQL 17 image, a one-sho
 
     Replace both placeholder secrets. `SETTINGS_ENCRYPTION_KEY` must decode to exactly 32 bytes.
   </Step>
-  <Step title="Build and start">
+  <Step title="Start with the pre-built image">
     ```bash
-    docker compose up --build -d
+    APP_IMAGE=ghcr.io/ricsam/ai-gateway:latest docker compose up --no-build -d
     ```
+
+    Pin `APP_IMAGE` to a `sha-<full-commit-sha>` tag for a reproducible deployment. Omit `APP_IMAGE` and use `docker compose up --build -d` when you want to build the current checkout instead.
   </Step>
   <Step title="Inspect startup">
     ```bash
@@ -52,7 +54,11 @@ The `postgres_data` Docker volume contains the database. Removing the stack with
 # Follow application logs
 docker compose logs -f app
 
-# Rebuild and reconcile the stack
+# Pull and reconcile the pre-built application image
+APP_IMAGE=ghcr.io/ricsam/ai-gateway:latest docker compose pull app migrate
+APP_IMAGE=ghcr.io/ricsam/ai-gateway:latest docker compose up --no-build -d
+
+# Or rebuild the current checkout locally
 docker compose up --build -d
 
 # Stop without deleting data

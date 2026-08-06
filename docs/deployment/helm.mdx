@@ -5,6 +5,8 @@ description: "Install AI Gateway from the hosted chart repository or a local che
 
 The project publishes `ai-gateway` as a conventional HTTPS Helm repository on GitHub Pages at `https://ricsam.github.io/ai-gateway`. GitHub Actions packages each chart release, updates the `gh-pages` branch, and deploys that branch with GitHub Pages.
 
+The chart uses the public, pre-built multi-platform image `ghcr.io/ricsam/ai-gateway:latest` by default. The image supports Linux AMD64 and ARM64.
+
 ## Install from the chart repository
 
 <Steps>
@@ -28,8 +30,6 @@ The project publishes `ai-gateway` as a conventional HTTPS Helm repository on Gi
     ```bash
     helm upgrade --install ai-gateway ai-gateway/ai-gateway \
       --namespace ai-gateway \
-      --set image.repository=ghcr.io/your-org/ai-gateway \
-      --set image.tag=0.1.0 \
       --set config.baseUrl=https://gateway.example.com \
       --set secrets.existingSecret=ai-gateway-secrets \
       --set ingress.enabled=true \
@@ -45,6 +45,17 @@ The project publishes `ai-gateway` as a conventional HTTPS Helm repository on Gi
   </Step>
 </Steps>
 
+For reproducible production deployments, override the moving `latest` default with an immutable image tag:
+
+```bash
+helm upgrade --install ai-gateway ai-gateway/ai-gateway \
+  --namespace ai-gateway \
+  --set image.tag=sha-<full-commit-sha> \
+  --reuse-values
+```
+
+Main-branch builds publish `latest` and `sha-<full-commit-sha>`. Git tags pushed directly to GitHub also publish a matching image tag.
+
 <Warning>
   Keep public Ingress disabled until you can complete `/setup` through a protected tunnel. The first successful setup request creates the initial administrator.
 </Warning>
@@ -56,8 +67,6 @@ For a small installation, the chart can deploy its pinned TimescaleDB/PostgreSQL
 ```bash
 helm upgrade --install ai-gateway ai-gateway/ai-gateway \
   --namespace ai-gateway --create-namespace \
-  --set image.repository=ghcr.io/your-org/ai-gateway \
-  --set image.tag=0.1.0 \
   --set config.baseUrl=https://gateway.example.com \
   --set postgresql.enabled=true \
   --set postgresql.password="$(openssl rand -base64 36)" \
@@ -89,9 +98,11 @@ helm upgrade --install ai-gateway ./charts/ai-gateway \
   --values my-values.yaml
 ```
 
-## Chart publication
+## Image and chart publication
 
-The `Release Helm chart` GitHub Actions workflow lints and packages every new chart version, creates a GitHub release, updates the `gh-pages` branch's `index.yaml`, and deploys the branch through GitHub Pages.
+The `Publish container image` GitHub Actions workflow builds the Dockerfile for Linux AMD64 and ARM64. Pull requests build without publishing; pushes to `main` publish `latest` and `sha-<full-commit-sha>` to `ghcr.io/ricsam/ai-gateway`, while Git tags also publish a matching tag. Published images include provenance and an SBOM.
+
+The `Release Helm chart` workflow lints and packages every new chart version, creates a GitHub release, updates the `gh-pages` branch's `index.yaml`, and deploys the branch through GitHub Pages.
 
 Bump `version` in `charts/ai-gateway/Chart.yaml` whenever the chart changes, then push to `main`. Chart versions are immutable; the release step skips a version that already exists.
 

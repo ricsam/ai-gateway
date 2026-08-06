@@ -66,22 +66,20 @@ Compose runs the pinned `timescale/timescaledb:2.19.3-pg17` distribution, a one-
 
 ### Helm
 
-The chart is published as a public HTTPS Helm repository:
+The chart is published as a public HTTPS Helm repository and uses the public `ghcr.io/ricsam/ai-gateway:latest` multi-platform image by default:
 
 ```sh
 helm repo add ai-gateway https://ricsam.github.io/ai-gateway
 helm repo update
 helm upgrade --install ai-gateway ai-gateway/ai-gateway \
   --namespace ai-gateway --create-namespace \
-  --set image.repository=ghcr.io/your-org/ai-gateway \
-  --set image.tag=0.1.0 \
   --set config.baseUrl=https://gateway.example.com \
   --set secrets.existingSecret=ai-gateway-secrets \
   --set ingress.enabled=true \
   --set ingress.host=gateway.example.com
 ```
 
-The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support. See the [Helm deployment guide](docs/deployment/helm.mdx) for repository publication and complete installation options.
+For reproducible production deployments, set `image.tag=sha-<full-commit-sha>` rather than following `latest`. The existing secret contains `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `SETTINGS_ENCRYPTION_KEY`. The bundled database uses the pinned TimescaleDB/PostgreSQL 17 image and defaults to `ReadWriteOnce` with `rook-ceph-block`; use external TimescaleDB for HA. Plain PostgreSQL is not supported: the migration intentionally fails if the `timescaledb` extension cannot be created. External operators should provision a TimescaleDB release compatible with PostgreSQL 17 and permit the migration role to create the extension. ServiceAccount annotations remain generic infrastructure and do not imply workload-identity support. See the [Helm deployment guide](docs/deployment/helm.mdx) for repository publication and complete installation options.
 
 ### Backups and recovery
 

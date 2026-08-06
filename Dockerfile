@@ -7,6 +7,10 @@ COPY . .
 RUN bun run routes:generate && bun run typecheck
 
 FROM oven/bun:1.3.14-alpine AS runtime
+LABEL org.opencontainers.image.title="AI Gateway" \
+      org.opencontainers.image.description="OpenAI-compatible AI gateway for AWS Bedrock" \
+      org.opencontainers.image.source="https://github.com/ricsam/ai-gateway" \
+      org.opencontainers.image.documentation="https://ricsam.github.io/ai-gateway"
 WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
