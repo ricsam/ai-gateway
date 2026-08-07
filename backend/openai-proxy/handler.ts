@@ -24,7 +24,7 @@ import { transformResponse } from "./transform/response";
 import { addConverseCachePoints } from "./transform/cache-converse";
 import { extractConverseCacheUsage, extractStreamingCacheUsage, emptyCacheUsage } from "./transform/cache-usage";
 import type { CacheUsage } from "./transform/cache-usage";
-import type { OpenAIChatCompletionChunk, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError, OpenAIErrorType } from "./transform/types";
+import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError, OpenAIErrorType } from "./transform/types";
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./transform/utils";
 import { getBedrockClient } from "../bedrock";
 import { isControllerClosedError } from "../stream-utils";
@@ -245,6 +245,20 @@ export async function handleOpenAIProxy(
   }
 }
 
+function playgroundCreditUsage(settlement: {
+  actualCost: number;
+  creditsCharged: number;
+  balanceAfter: number;
+  partiallyCharged: boolean;
+}): OpenAICreditUsage {
+  return {
+    actual_cost: settlement.actualCost,
+    credits_charged: settlement.creditsCharged,
+    balance_after: settlement.balanceAfter,
+    partially_charged: settlement.partiallyCharged,
+  };
+}
+
 function validateChatCompletionRequest(body: OpenAIChatCompletionRequest): OpenAIChatCompletionRequest {
   if (body.n !== undefined && body.n !== 1) throw new Error("Only n=1 is supported");
   if (body.temperature !== undefined && (!Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) {
@@ -320,11 +334,11 @@ async function handleNonStreamingRequest(
     cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
   });
 
-  const settlement = costBreakdown.total > 0
+  const settlement = costBreakdown.total > 0 || principal.credentialType === "session"
     ? await deductCredits({
         userId,
         amount: costBreakdown.total,
-        type: "api",
+        type: principal.credentialType === "session" ? "chat" : "api",
         description: `Chat completion using ${model.modelId}`,
         requestId,
         apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
@@ -350,6 +364,9 @@ async function handleNonStreamingRequest(
 
   // Transform response to OpenAI format
   const openaiResponse = transformResponse(response, requestedModel, requestId);
+  if (principal.credentialType === "session" && settlement) {
+    openaiResponse.credit_usage = playgroundCreditUsage(settlement);
+  }
   return Response.json(openaiResponse);
 }
 
@@ -730,10 +747,6 @@ async function handleStreamingRequest(
           if (inputTokens === 0 && outputTokens === 0) {
             console.warn("[OpenAI Proxy] Stream completed with no usage metadata");
           }
-          // End of stream for successful completions only
-          if (!isStreamCanceled()) {
-            safeEnqueue(encoder.encode("data: [DONE]\n\n"));
-          }
         } else if (streamCanceled) {
           logCancellationOnce(hasUsageMetadata ? "billed using metadata" : "no usage metadata, not billed");
         }
@@ -754,11 +767,11 @@ async function handleStreamingRequest(
               cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
             });
 
-            const settlement = costBreakdown.total > 0
+            const settlement = costBreakdown.total > 0 || principal.credentialType === "session"
               ? await deductCredits({
                   userId,
                   amount: costBreakdown.total,
-                  type: "api",
+                  type: principal.credentialType === "session" ? "chat" : "api",
                   description: `Streaming chat completion using ${model.modelId}`,
                   requestId,
                   apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
@@ -777,6 +790,17 @@ async function handleStreamingRequest(
                 })
               : null;
 
+            if (principal.credentialType === "session" && settlement && !isStreamCanceled()) {
+              sendChunk({
+                id,
+                object: "chat.completion.chunk",
+                created,
+                model: requestedModel,
+                choices: [],
+                credit_usage: playgroundCreditUsage(settlement),
+              });
+            }
+
             // Log completion/cost for billed streams
             console.log(
               `[OpenAI Proxy] Complete: model=${model.modelId} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
@@ -786,10 +810,20 @@ async function handleStreamingRequest(
               "[OpenAI Proxy] Stream billing error:",
               billingError instanceof Error ? { name: billingError.name, message: billingError.message } : billingError
             );
+            if (principal.credentialType === "session" && !isStreamCanceled()) {
+              sawUnexpectedError = true;
+              safeError(new Error("The response completed, but playground credits could not be settled"));
+            }
           }
         }
 
         if (!sawUnexpectedError) {
+          // Playground billing settles before DONE so the UI receives the final,
+          // authoritative charge and balance. API streams keep the historical
+          // behavior of completing even if asynchronous ledger settlement fails.
+          if (streamCompleted && !isStreamCanceled()) {
+            safeEnqueue(encoder.encode("data: [DONE]\n\n"));
+          }
           safeClose();
         }
       }

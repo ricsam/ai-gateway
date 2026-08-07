@@ -143,6 +143,14 @@ export interface OpenAIUsage {
   total_tokens: number;
 }
 
+/** Authoritative credit settlement metadata returned to the built-in playground. */
+export interface OpenAICreditUsage {
+  actual_cost: number;
+  credits_charged: number;
+  balance_after: number;
+  partially_charged: boolean;
+}
+
 export interface OpenAIResponseMessage {
   role: "assistant";
   content: string | null;
@@ -163,6 +171,8 @@ export interface OpenAIChatCompletionResponse {
   model: string;
   choices: OpenAIChoice[];
   usage: OpenAIUsage;
+  /** Non-standard compatibility extension returned only for session-authenticated playground requests. */
+  credit_usage?: OpenAICreditUsage;
   system_fingerprint?: string;
 }
 
@@ -192,6 +202,8 @@ export interface OpenAIChatCompletionChunk {
   model: string;
   choices: OpenAIChunkChoice[];
   usage?: OpenAIUsage;
+  /** Non-standard compatibility extension returned only for session-authenticated playground requests. */
+  credit_usage?: OpenAICreditUsage;
   system_fingerprint?: string;
 }
 

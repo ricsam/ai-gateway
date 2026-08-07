@@ -34,7 +34,7 @@ function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>
       username({ minUsernameLength: 3, maxUsernameLength: 40, usernameValidator: (value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value), usernameNormalization: (value) => value.trim().toLowerCase() }),
       ...(providers.length ? [genericOAuth({ config: providers.map((provider) => ({
         providerId: provider.providerKey, discoveryUrl: provider.discoveryUrl, issuer: provider.issuer,
-        requireIssuerValidation: provider.strictIssuerValidation, clientId: provider.clientId,
+        requireIssuerValidation: provider.requireAuthorizationResponseIssuer, clientId: provider.clientId,
         clientSecret: provider.clientSecret, scopes: provider.scopes, pkce: provider.pkce,
         disableImplicitSignUp: true, disableSignUp: !provider.autoProvision, overrideUserInfo: false,
         mapProfileToUser: (profile: Record<string, unknown>) => {

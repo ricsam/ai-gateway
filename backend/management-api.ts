@@ -6,6 +6,7 @@ import { getBedrockClient, invalidateBedrockClients, ProviderNotConfiguredError 
 import { invalidateAuthProviderRuntime } from "./auth-provider-runtime";
 import { validateBrandingImage } from "./branding-assets";
 import { ManagementAuthError, MANAGEMENT_SCOPES, requireManagementPrincipal, type ManagementPrincipal, type ManagementScope } from "./management-auth";
+import { fetchOidcDiscoveryMetadata, oidcDiscoveryUrl, requiresAuthorizationResponseIssuer } from "./oidc-metadata";
 import {
   applicationSettingsTable, auditEventsTable, authProvidersTable, awsConfigurationTable, brandingAssetsTable,
   creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, modelsTable, userTable,
@@ -337,6 +338,7 @@ export async function handleManagementApi(request: Request): Promise<Response> {
       if ((data.enabled ?? current.enabled) && !secretEnvelope) return failure(requestId, 400, "validation_error", "Configure the provider secret before enabling it");
       if (data.enabled === true && !current.enabled && !current.lastTestSucceeded) return failure(requestId, 400, "validation_error", "Test the provider successfully before enabling it");
       if (data.enabled === true && !current.enabled && data.config !== undefined && JSON.stringify(data.config) !== JSON.stringify(current.config)) return failure(requestId, 400, "validation_error", "Save and retest configuration changes before enabling the provider");
+      if (data.enabled === true && !current.enabled && current.type === "oidc" && typeof (current.config as Record<string, unknown>).authorizationResponseIssuerParameterSupported !== "boolean") return failure(requestId, 400, "validation_error", "Retest OIDC discovery before enabling the provider");
       if (data.enabled === true && !current.enabled && data.secret?.operation !== "preserve" && data.secret !== undefined) return failure(requestId, 400, "validation_error", "Save and retest secret changes before enabling the provider");
       if (current.type === "trusted_header" && (!Array.isArray((data.config ?? current.config)?.sourceCidrs) || !(data.config ?? current.config).sourceCidrs.length)) return failure(requestId, 400, "validation_error", "Trusted-header providers require at least one allowed proxy peer CIDR");
       const configurationChanged = data.config !== undefined && JSON.stringify(data.config) !== JSON.stringify(current.config);
@@ -353,23 +355,34 @@ export async function handleManagementApi(request: Request): Promise<Response> {
     }
     if ((match = path.match(/^\/auth\/providers\/([^/]+)\/test$/)) && request.method === "POST") {
       const principal = await requireManagementPrincipal(request, "auth.write"); const id = decodeURIComponent(match[1]!); const [provider] = await db.select().from(authProvidersTable).where(eq(authProvidersTable.id, id)).limit(1); if (!provider) return failure(requestId, 404, "not_found", "Provider not found");
-      let success = false; let message = "Configuration is incomplete";
+      let success = false; let message = "Configuration is incomplete"; let discoveredConfig: Record<string, unknown> | undefined;
       if (provider.type === "oidc") {
         const config = provider.config as any;
-        const discoveryUrl = config.discoveryUrl || (config.issuer ? `${String(config.issuer).replace(/\/$/, "")}/.well-known/openid-configuration` : "");
-        if (!provider.secretEnvelope || !config.clientId || !config.issuer || !discoveryUrl) message = "Issuer, client ID, client secret, and discovery URL are required";
+        const issuer = typeof config.issuer === "string" ? config.issuer.trim() : "";
+        const discoveryUrl = oidcDiscoveryUrl(issuer, typeof config.discoveryUrl === "string" ? config.discoveryUrl : undefined);
+        if (!provider.secretEnvelope || !config.clientId || !issuer || !discoveryUrl) message = "Issuer, client ID, and client secret are required";
         else try {
-          const discovery = await fetch(discoveryUrl, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5000) });
-          const metadata = discovery.ok ? await discovery.json() as Record<string, unknown> : null;
-          success = Boolean(metadata && metadata.issuer === config.issuer && typeof metadata.authorization_endpoint === "string" && typeof metadata.token_endpoint === "string" && typeof metadata.jwks_uri === "string");
-          message = success ? "OIDC discovery and issuer validation succeeded" : discovery.ok ? "OIDC metadata is incomplete or its issuer does not match" : `OIDC discovery returned ${discovery.status}`;
+          const discovery = await fetchOidcDiscoveryMetadata(discoveryUrl, issuer);
+          success = Boolean(discovery.metadata);
+          if (success) {
+            const authorizationResponseIssuerParameterSupported = requiresAuthorizationResponseIssuer(discovery.metadata!);
+            discoveredConfig = { ...config, authorizationResponseIssuerParameterSupported };
+            message = `OIDC discovery and issuer validation succeeded; authorization-response issuer parameter ${authorizationResponseIssuerParameterSupported ? "is required" : "is not advertised"}`;
+          } else message = discovery.response.ok ? "OIDC metadata is incomplete or its issuer does not match" : `OIDC discovery returned ${discovery.response.status}`;
         } catch { message = "OIDC discovery request failed"; }
       } else {
         const config = provider.config as any;
         success = Boolean(provider.secretEnvelope && config.subjectHeader && config.emailHeader && Array.isArray(config.sourceCidrs) && config.sourceCidrs.length);
         message = success ? "Trusted-header configuration is complete" : message;
       }
-      await db.update(authProvidersTable).set({ lastTestedAt: new Date(), lastTestSucceeded: success, lastTestMessage: message }).where(eq(authProvidersTable.id, id)); await audit(principal, requestId, `auth.provider.test.${success ? "succeeded" : "failed"}`, "auth_provider", id); return response(requestId, { success, message }, success ? 200 : 400);
+      const configChanged = discoveredConfig !== undefined && JSON.stringify(discoveredConfig) !== JSON.stringify(provider.config);
+      await db.update(authProvidersTable).set({
+        ...(discoveredConfig ? { config: discoveredConfig } : {}),
+        ...(configChanged ? { revision: provider.revision + 1 } : {}),
+        lastTestedAt: new Date(), lastTestSucceeded: success, lastTestMessage: message, updatedAt: new Date(),
+      }).where(eq(authProvidersTable.id, id));
+      if (configChanged) invalidateAuthProviderRuntime();
+      await audit(principal, requestId, `auth.provider.test.${success ? "succeeded" : "failed"}`, "auth_provider", id); return response(requestId, { success, message }, success ? 200 : 400);
     }
 
     if (path === "/management-keys" && request.method === "GET") {

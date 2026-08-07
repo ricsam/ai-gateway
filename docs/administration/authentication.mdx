@@ -10,13 +10,15 @@ Local username/password authentication always remains available as the administr
 Open **Admin → Authentication**, add an OpenID Connect provider, and configure:
 
 - A stable provider key and display label.
-- Issuer URL or explicit discovery URL.
+- Issuer URL and, only when it is non-standard, an explicit discovery URL. The default is `<issuer>/.well-known/openid-configuration`.
 - Client ID and client secret.
 - Scopes, normally `openid profile email`.
 - Subject, email, name, and username claims.
 - PKCE and automatic user provisioning.
 
-New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in.
+New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in. The discovery document's issuer must exactly match the configured issuer.
+
+AI Gateway applies the authorization-response `iss` check from RFC 9207 when the provider advertises `authorization_response_iss_parameter_supported: true`. Providers that do not advertise that optional response parameter remain compatible; the configured issuer must still exactly match discovery, and the authorization code is redeemed only at the discovered token endpoint. This behavior is capability-driven and does not require provider-specific adapters.
 
 External identities are anchored by provider and immutable subject. The proxy does not implicitly link accounts by email.
 
