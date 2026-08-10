@@ -20,7 +20,9 @@ New providers are created disabled. Save the provider, test discovery and config
 
 AI Gateway applies the authorization-response `iss` check from RFC 9207 when the provider advertises `authorization_response_iss_parameter_supported: true`. Providers that do not advertise that optional response parameter remain compatible; the configured issuer must still exactly match discovery, and the authorization code is redeemed only at the discovered token endpoint. This behavior is capability-driven and does not require provider-specific adapters.
 
-External identities are anchored by provider and immutable subject. The proxy does not implicitly link accounts by email.
+External identities are anchored by provider and immutable subject. By default, the proxy does not implicitly link accounts by email.
+
+For a controlled identity migration, **Link existing users by email** allows the sole enabled OIDC provider to attach an existing account on first sign-in when the normalized emails match exactly. Enable this only for a provider tenant that controls and verifies those addresses. The first successful match stores the immutable provider subject, and later sign-ins use that subject instead of email. The option fails closed when more than one OIDC provider is enabled.
 
 ## Trusted headers
 

@@ -28,13 +28,13 @@ type Provider = {
 };
 type Form = {
   type: ProviderType; providerKey: string; label: string; enabled: boolean; secret: string;
-  issuer: string; discoveryUrl: string; clientId: string; scopes: string; pkce: boolean; autoProvision: boolean;
+  issuer: string; discoveryUrl: string; clientId: string; scopes: string; pkce: boolean; autoProvision: boolean; linkExistingUsersByEmail: boolean;
   subjectClaim: string; emailClaim: string; nameClaim: string; usernameClaim: string;
   subjectHeader: string; emailHeader: string; nameHeader: string; usernameHeader: string; secretHeader: string; sourceCidrs: string;
 };
 const blank: Form = {
   type: "oidc", providerKey: "", label: "", enabled: false, secret: "", issuer: "", discoveryUrl: "", clientId: "",
-  scopes: "openid profile email", pkce: true, autoProvision: true,
+  scopes: "openid profile email", pkce: true, autoProvision: true, linkExistingUsersByEmail: false,
   subjectClaim: "sub", emailClaim: "email", nameClaim: "name", usernameClaim: "preferred_username",
   subjectHeader: "x-auth-subject", emailHeader: "x-auth-email", nameHeader: "x-auth-name", usernameHeader: "x-auth-username",
   secretHeader: "x-ai-gateway-proxy-secret", sourceCidrs: "",
@@ -68,7 +68,7 @@ function Authentication() {
       enabled: provider.enabled,
       issuer: stringValue("issuer"), discoveryUrl: stringValue("discoveryUrl"), clientId: stringValue("clientId"),
       scopes: Array.isArray(config.scopes) ? config.scopes.join(" ") : blank.scopes,
-      pkce: config.pkce !== false, autoProvision: config.autoProvision !== false,
+      pkce: config.pkce !== false, autoProvision: config.autoProvision !== false, linkExistingUsersByEmail: config.linkExistingUsersByEmail === true,
       subjectClaim: stringValue("subjectClaim", blank.subjectClaim), emailClaim: stringValue("emailClaim", blank.emailClaim), nameClaim: stringValue("nameClaim", blank.nameClaim), usernameClaim: stringValue("usernameClaim", blank.usernameClaim),
       subjectHeader: stringValue("subjectHeader", blank.subjectHeader), emailHeader: stringValue("emailHeader", blank.emailHeader), nameHeader: stringValue("nameHeader", blank.nameHeader), usernameHeader: stringValue("usernameHeader", blank.usernameHeader), secretHeader: stringValue("secretHeader", blank.secretHeader),
       sourceCidrs: Array.isArray(config.sourceCidrs) ? config.sourceCidrs.join("\n") : "",
@@ -80,7 +80,8 @@ function Authentication() {
     discoveryUrl: form.discoveryUrl.trim() || undefined,
     clientId: form.clientId.trim(),
     scopes: form.scopes.split(/[\s,]+/).filter(Boolean), pkce: form.pkce,
-    autoProvision: form.autoProvision, subjectClaim: form.subjectClaim.trim(), emailClaim: form.emailClaim.trim(), nameClaim: form.nameClaim.trim(), usernameClaim: form.usernameClaim.trim(),
+    autoProvision: form.autoProvision, linkExistingUsersByEmail: form.linkExistingUsersByEmail,
+    subjectClaim: form.subjectClaim.trim(), emailClaim: form.emailClaim.trim(), nameClaim: form.nameClaim.trim(), usernameClaim: form.usernameClaim.trim(),
   } : {
     subjectHeader: form.subjectHeader.trim().toLowerCase(), emailHeader: form.emailHeader.trim().toLowerCase(), nameHeader: form.nameHeader.trim().toLowerCase(), usernameHeader: form.usernameHeader.trim().toLowerCase(),
     secretHeader: form.secretHeader.trim().toLowerCase(), sourceCidrs: form.sourceCidrs.split(/[\s,]+/).filter(Boolean), autoProvision: form.autoProvision,
@@ -144,6 +145,7 @@ function Authentication() {
               <Field label="Name claim"><Input value={form.nameClaim} onChange={(event) => setForm({ ...form, nameClaim: event.target.value })} /></Field>
               <Field label="Username claim"><Input value={form.usernameClaim} onChange={(event) => setForm({ ...form, usernameClaim: event.target.value })} /></Field>
               <Toggle label="Use PKCE" checked={form.pkce} onChange={(pkce) => setForm({ ...form, pkce })} />
+              <Toggle label="Link existing users by email" checked={form.linkExistingUsersByEmail} onChange={(linkExistingUsersByEmail) => setForm({ ...form, linkExistingUsersByEmail })} />
             </> : <>
               <Field label="Subject header"><Input value={form.subjectHeader} onChange={(event) => setForm({ ...form, subjectHeader: event.target.value })} /></Field>
               <Field label="Email header"><Input value={form.emailHeader} onChange={(event) => setForm({ ...form, emailHeader: event.target.value })} /></Field>
@@ -157,6 +159,7 @@ function Authentication() {
           </div>
           {editing === "new" && form.enabled && <p className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">New providers are created disabled. Test the saved configuration, then edit it again to enable sign-in.</p>}
           {editing && editing !== "new" && form.enabled && !editing.enabled && <p className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">When enabling, only the enabled state is saved. Save and test any configuration or secret changes first.</p>}
+          {form.type === "oidc" && form.linkExistingUsersByEmail && <p className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">The sole enabled OIDC provider may attach an existing account by exact email on first sign-in. Use only for a tenant that controls those addresses; the immutable provider subject is stored after linking.</p>}
           {form.type === "trusted_header" && <p className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">Only enable this when a trusted proxy strips all client identity headers, sets the configured values, and supplies the shared secret.</p>}
           <DialogFooter><Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={() => void save()} disabled={saving || !form.providerKey.trim() || !form.label.trim() || (editing === "new" && !form.secret) || (form.type === "trusted_header" && !form.sourceCidrs.trim())}>Save provider</Button></DialogFooter>
         </DialogContent>

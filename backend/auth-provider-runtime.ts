@@ -7,7 +7,8 @@ import { oidcDiscoveryUrl } from "./oidc-metadata";
 export interface OidcRuntimeProvider {
   id: string; providerKey: string; label: string; revision: number; issuer: string; discoveryUrl: string;
   clientId: string; clientSecret?: string; scopes: string[]; pkce: boolean; requireAuthorizationResponseIssuer: boolean;
-  autoProvision: boolean; claims: { subject: string; email: string; name: string; username: string };
+  autoProvision: boolean; linkExistingUsersByEmail: boolean;
+  claims: { subject: string; email: string; name: string; username: string };
 }
 
 let cache: { fingerprint: string; providers: OidcRuntimeProvider[] } | null = null;
@@ -32,6 +33,7 @@ export async function getOidcRuntimeProviders(): Promise<OidcRuntimeProvider[]> 
       scopes: Array.isArray(config.scopes) ? config.scopes.filter((value): value is string => typeof value === "string") : ["openid", "profile", "email"],
       pkce: config.pkce !== false, requireAuthorizationResponseIssuer,
       autoProvision: config.autoProvision !== false,
+      linkExistingUsersByEmail: config.linkExistingUsersByEmail === true,
       claims: {
         subject: typeof config.subjectClaim === "string" ? config.subjectClaim : "sub",
         email: typeof config.emailClaim === "string" ? config.emailClaim : "email",
