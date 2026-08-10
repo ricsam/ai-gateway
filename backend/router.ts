@@ -8,7 +8,7 @@ import { authenticateRequest } from "./auth";
 import { updateUser } from "./user-service";
 import type { ManagementPrincipal } from "./management-auth";
 import { addCredits, calculateCost } from "./credit-service";
-import { hashApiKey } from "./api-key-utils";
+import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
 import {
@@ -160,7 +160,7 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     const scopes = body.scopes ?? ["ai.invoke", "models.read", "credits.read"];
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
     if (expiresAt && expiresAt <= new Date()) return { status: Status.BadRequest, body: { error: "Expiry must be in the future" } };
-    const rawKey = `aig_${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    const rawKey = generateUserApiKey();
     const keyHash = await hashApiKey(rawKey);
     const [key] = await db.insert(apiKeysTable).values({
       userId: context.getUserId(), name: body.name, keyHash, keyPrefix: rawKey.slice(0, 13), scopes, expiresAt,

@@ -9,6 +9,7 @@ export const MANAGEMENT_SCOPES = [
   "users.read", "users.write", "groups.read", "groups.write", "auth.read", "auth.write",
   "branding.read", "branding.write", "aws.read", "aws.write", "models.read", "models.write",
   "settings.read", "settings.write", "usage.read", "management-keys.read", "management-keys.write", "audit.read",
+  "api-keys.read", "api-keys.write",
 ] as const;
 export type ManagementScope = typeof MANAGEMENT_SCOPES[number];
 

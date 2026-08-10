@@ -12,6 +12,7 @@ type Key = { id: string; name: string; keyPrefix: string; scopes: string[]; revo
 type Event = { id: string; action: string; actorType: string; actorId: string | null; targetType: string; targetId: string | null; requestId: string; metadata: Record<string, unknown>; createdAt: string };
 const scopeGroups = [
   ["Users", ["users.read", "users.write"]], ["Groups", ["groups.read", "groups.write"]], ["Authentication", ["auth.read", "auth.write"]],
+  ["User API keys", ["api-keys.read", "api-keys.write"]],
   ["Branding", ["branding.read", "branding.write"]], ["AWS", ["aws.read", "aws.write"]], ["Models", ["models.read", "models.write"]],
   ["Settings & usage", ["settings.read", "settings.write", "usage.read"]], ["Management keys", ["management-keys.read", "management-keys.write"]], ["Audit", ["audit.read"]],
 ] as const;

@@ -1,0 +1,14 @@
+import { describe, expect, test } from "bun:test";
+import { generateUserApiKey, userApiKeyScopes } from "./api-key-utils";
+
+describe("user API key provisioning helpers", () => {
+  test("generates an inference key with the public prefix", () => {
+    expect(generateUserApiKey()).toMatch(/^aig_[0-9a-f]{64}$/);
+  });
+
+  test("deduplicates and validates scopes", () => {
+    expect(userApiKeyScopes(["ai.invoke", "models.read", "ai.invoke"])).toEqual(["ai.invoke", "models.read"]);
+    expect(() => userApiKeyScopes([])).toThrow("Select at least one");
+    expect(() => userApiKeyScopes(["users.write"])).toThrow("valid API key scopes");
+  });
+});

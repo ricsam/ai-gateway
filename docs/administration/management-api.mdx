@@ -3,7 +3,7 @@ title: "Management API"
 description: "Automate administrative work with scoped management keys."
 ---
 
-The stable management base is `/management/v1`. It covers users, groups, login providers, branding, AWS configuration, models, usage, analytics, management keys, and audit history.
+The stable management base is `/management/v1`. It covers users, groups, user inference keys, login providers, branding, AWS configuration, models, usage, analytics, management keys, and audit history.
 
 ## Create a management key
 
@@ -23,6 +23,7 @@ curl https://gateway.example.com/management/v1/users \
 | Resource | Read scope | Write scope |
 | --- | --- | --- |
 | Users | `users.read` | `users.write` |
+| User inference keys | `api-keys.read` | `api-keys.write` |
 | Groups | `groups.read` | `groups.write` |
 | Authentication | `auth.read` | `auth.write` |
 | Branding | `branding.read` | `branding.write` |
@@ -32,6 +33,23 @@ curl https://gateway.example.com/management/v1/users \
 | Management keys | `management-keys.read` | `management-keys.write` |
 
 Usage and audit access use `usage.read` and `audit.read`.
+
+## Provision a key for a user
+
+An automation with `api-keys.write` can create an inference key for a specific user without impersonating that user. The plaintext `aig_` value is returned once; the database stores only its SHA-256 digest.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"opencode-workspaces","scopes":["ai.invoke","models.read","credits.read"],"replaceExisting":true}' \
+  "https://gateway.example.com/management/v1/users/$USER_ID/api-keys"
+```
+
+`replaceExisting` revokes all same-named keys for that user before creating the replacement. This is intended for repeatable downstream credential provisioning: a rerun rotates the credential instead of leaving multiple active copies. List redacted key metadata with `GET /users/{id}/api-keys` and revoke a key with `DELETE /users/{id}/api-keys/{keyId}`.
+
+The operation is audited as `api_key.provisioned`. Disabled users and users with API access disabled can receive a key, but authentication with that key remains blocked until both controls are enabled.
 
 ## Pagination and errors
 

@@ -1,14 +1,14 @@
 import { ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import { and, asc, count, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import db from "./db";
-import { hashApiKey } from "./api-key-utils";
+import { generateUserApiKey, hashApiKey, userApiKeyScopes } from "./api-key-utils";
 import { getBedrockClient, invalidateBedrockClients, ProviderNotConfiguredError } from "./bedrock";
 import { invalidateAuthProviderRuntime } from "./auth-provider-runtime";
 import { validateBrandingImage } from "./branding-assets";
 import { ManagementAuthError, MANAGEMENT_SCOPES, requireManagementPrincipal, type ManagementPrincipal, type ManagementScope } from "./management-auth";
 import { fetchOidcDiscoveryMetadata, oidcDiscoveryUrl, requiresAuthorizationResponseIssuer } from "./oidc-metadata";
 import {
-  applicationSettingsTable, auditEventsTable, authProvidersTable, awsConfigurationTable, brandingAssetsTable,
+  apiKeysTable, applicationSettingsTable, auditEventsTable, authProvidersTable, awsConfigurationTable, brandingAssetsTable,
   creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, modelsTable, userTable,
 } from "./schema";
 import { applySecretWrite, maskAccessKey, secretStatus, type SecretWrite } from "./settings-crypto";
@@ -83,6 +83,8 @@ const OPENAPI = {
     "/users/{id}": { get: { summary: "Get user" }, patch: { summary: "Update user" }, delete: { summary: "Delete user" } },
     "/users/{id}/password": { post: { summary: "Set a local password and revoke sessions" } },
     "/users/{id}/groups": { put: { summary: "Replace a user's manual group memberships" } },
+    "/users/{id}/api-keys": { get: { summary: "List a user's inference keys" }, post: { summary: "Create a one-time inference key for a user" } },
+    "/users/{id}/api-keys/{keyId}": { delete: { summary: "Revoke a user's inference key" } },
     "/users/monthly-reset": { post: { summary: "Run the monthly credit reset now" } },
     "/groups": { get: { summary: "List groups" }, post: { summary: "Create group" } },
     "/groups/{id}": { get: { summary: "Get a group and its members" }, patch: { summary: "Update a group" }, delete: { summary: "Delete a group" } },
@@ -151,6 +153,39 @@ export async function handleManagementApi(request: Request): Promise<Response> {
     if ((match = path.match(/^\/users\/([^/]+)$/)) && request.method === "DELETE") {
       const principal = await requireManagementPrincipal(request, "users.write");
       return await deleteUser(decodeURIComponent(match[1]!), principal, requestId) ? response(requestId, { success: true }) : failure(requestId, 404, "not_found", "User not found");
+    }
+    if ((match = path.match(/^\/users\/([^/]+)\/api-keys$/)) && request.method === "GET") {
+      await requireManagementPrincipal(request, "api-keys.read"); const userId = decodeURIComponent(match[1]!);
+      const [user] = await db.select({ id: userTable.id }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+      if (!user) return failure(requestId, 404, "not_found", "User not found");
+      const keys = await db.select().from(apiKeysTable).where(eq(apiKeysTable.userId, userId)).orderBy(desc(apiKeysTable.createdAt));
+      return response(requestId, { data: keys.map(({ keyHash: _, ...key }) => key) });
+    }
+    if ((match = path.match(/^\/users\/([^/]+)\/api-keys$/)) && request.method === "POST") {
+      const principal = await requireManagementPrincipal(request, "api-keys.write"); const userId = decodeURIComponent(match[1]!);
+      const data = await body<{ name: string; scopes?: string[]; expiresAt?: string; replaceExisting?: boolean }>(request);
+      const [user] = await db.select({ id: userTable.id }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+      if (!user) return failure(requestId, 404, "not_found", "User not found");
+      const name = data.name?.trim();
+      if (!name || name.length > 100) return failure(requestId, 400, "validation_error", "API key name must contain 1 to 100 characters");
+      const scopes = userApiKeyScopes(data.scopes ?? ["ai.invoke", "models.read", "credits.read"]);
+      const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
+      if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date())) return failure(requestId, 400, "validation_error", "Expiry must be a future date");
+      if (data.replaceExisting) {
+        await db.update(apiKeysTable).set({ enabled: false, revokedAt: new Date() }).where(and(eq(apiKeysTable.userId, userId), eq(apiKeysTable.name, name)));
+      }
+      const rawKey = generateUserApiKey();
+      const [key] = await db.insert(apiKeysTable).values({ userId, name, keyHash: await hashApiKey(rawKey), keyPrefix: rawKey.slice(0, 13), scopes, expiresAt }).returning();
+      await audit(principal, requestId, "api_key.provisioned", "api_key", key!.id, { userId, name, scopes, replacedExisting: data.replaceExisting === true });
+      const { keyHash: _, ...publicKey } = key!;
+      return response(requestId, { data: { ...publicKey, key: rawKey } }, 201);
+    }
+    if ((match = path.match(/^\/users\/([^/]+)\/api-keys\/([^/]+)$/)) && request.method === "DELETE") {
+      const principal = await requireManagementPrincipal(request, "api-keys.write"); const userId = decodeURIComponent(match[1]!); const keyId = decodeURIComponent(match[2]!);
+      const [key] = await db.update(apiKeysTable).set({ enabled: false, revokedAt: new Date() }).where(and(eq(apiKeysTable.id, keyId), eq(apiKeysTable.userId, userId))).returning();
+      if (!key) return failure(requestId, 404, "not_found", "API key not found");
+      await audit(principal, requestId, "api_key.revoked", "api_key", keyId, { userId });
+      return response(requestId, { success: true });
     }
     if ((match = path.match(/^\/users\/([^/]+)\/(enable|disable)$/)) && request.method === "POST") {
       const principal = await requireManagementPrincipal(request, "users.write");
@@ -312,7 +347,7 @@ export async function handleManagementApi(request: Request): Promise<Response> {
 
     if (path === "/models" && request.method === "GET") {
       await requireManagementPrincipal(request, "models.read");
-      const models = await db.select({ id: modelsTable.id, modelId: modelsTable.modelId, name: modelsTable.name, region: modelsTable.region, enabled: modelsTable.enabled }).from(modelsTable).orderBy(asc(modelsTable.name));
+      const models = await db.select().from(modelsTable).orderBy(asc(modelsTable.name));
       return response(requestId, { data: models });
     }
 
