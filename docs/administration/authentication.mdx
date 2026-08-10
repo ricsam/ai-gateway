@@ -16,13 +16,75 @@ Open **Admin → Authentication**, add an OpenID Connect provider, and configure
 - Subject, email, name, and username claims.
 - PKCE and automatic user provisioning.
 
+### Redirect URI
+
+Register the following exact callback as a server-side **Web** redirect or reply URI at the identity provider:
+
+```text
+<BASE_URL>/api/auth/oauth2/callback/<provider-key>
+```
+
+For example, a provider key of `company-oidc` at `https://gateway.example.com` uses:
+
+```text
+https://gateway.example.com/api/auth/oauth2/callback/company-oidc
+```
+
+The provider key becomes part of the callback and cannot be edited after creation. Avoid wildcard, localhost, SPA, and trailing-slash callback variants in a production registration.
+
+### Test and enable
+
 New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in. The discovery document's issuer must exactly match the configured issuer.
 
 AI Gateway applies the authorization-response `iss` check from RFC 9207 when the provider advertises `authorization_response_iss_parameter_supported: true`. Providers that do not advertise that optional response parameter remain compatible; the configured issuer must still exactly match discovery, and the authorization code is redeemed only at the discovered token endpoint. This behavior is capability-driven and does not require provider-specific adapters.
 
-External identities are anchored by provider and immutable subject. By default, the proxy does not implicitly link accounts by email.
+<Note>
+  A successful test may report that the authorization-response issuer parameter "is not advertised." This is informational, not an error. It means the provider did not advertise the optional RFC 9207 response parameter, so AI Gateway does not require that parameter in the authorization response.
+</Note>
+
+### Microsoft Entra ID example
+
+For a single-tenant Microsoft Entra ID application, replace `<tenant-id>` with the Directory (tenant) ID:
+
+| Setting | Value |
+| --- | --- |
+| Issuer URL | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| Discovery URL | `https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration` |
+| Scopes | `openid profile email` |
+| Subject claim | `sub` |
+| Email claim | `email` |
+| Name claim | `name` |
+| Username claim | `preferred_username` |
+| PKCE | Enabled |
+
+Create the Entra registration as a confidential **Web** application using the authorization-code flow and a client secret. Keep implicit grants and public-client flows disabled. Ensure the intended users receive an `email` claim; AI Gateway requires an email to create or reconcile a user.
+
+## Account creation and identity linking
+
+External identities are anchored by provider and immutable subject. By default, AI Gateway does not implicitly link accounts by email.
+
+**Auto-provision users** and **Link existing users by email** control first-login behavior:
+
+| Auto-provision users | Link existing users by email | First-login behavior |
+| --- | --- | --- |
+| Off | Off | Only identities already linked by provider and subject can sign in. |
+| Off | On | An exact existing email match is linked; users without a match are rejected. |
+| On | Off | A new email creates a user; an existing but unlinked email remains unlinked. |
+| On | On | An exact existing email match is linked; otherwise a new user is created. |
+
+When automatic provisioning creates a user, administrators still control system role, account state, API access, credits, quotas, and manual groups.
 
 For a controlled identity migration, **Link existing users by email** allows the sole enabled OIDC provider to attach an existing account on first sign-in when the normalized emails match exactly. Enable this only for a provider tenant that controls and verifies those addresses. The first successful match stores the immutable provider subject, and later sign-ins use that subject instead of email. The option fails closed when more than one OIDC provider is enabled.
+
+### Existing-user migration
+
+1. Back up the database and its matching `SETTINGS_ENCRYPTION_KEY`.
+2. Create the OIDC provider disabled, turn on **Link existing users by email**, and leave automatic provisioning off.
+3. Save and successfully test the provider before enabling it.
+4. Pilot sign-in with an existing administrator and non-administrator. Confirm that account links are created without increasing the user count and that roles, balances, memberships, and history remain unchanged.
+5. Expand identity-provider assignment only after the pilot succeeds.
+6. After all pre-existing users have linked, turn off **Link existing users by email**. Stored subject links continue to work.
+7. Enable automatic provisioning separately if users without existing AI Gateway accounts should be created on first sign-in.
 
 ## Trusted headers
 
@@ -49,7 +111,3 @@ set:    x-ai-gateway-proxy-secret=<shared secret>
 ```
 
 Create the provider disabled, test it from the expected proxy path, then enable it. Rotate the shared secret at both ends in a coordinated change.
-
-## Automatic provisioning
-
-When enabled, the first valid external sign-in creates a user. Administrators still control system role, account state, API access, credits, quotas, and manual groups. Disabling automatic provisioning allows only previously linked external identities to sign in.

@@ -21,11 +21,13 @@ Account controls have distinct effects:
 
 Disabling an account invalidates its access. The control plane prevents deleting, disabling, or demoting the final enabled administrator.
 
+OIDC-linked users use the same **Enabled**, **API enabled**, role, credit, and quota controls as local users. Disabling a user in AI Gateway blocks access even when the identity provider successfully authenticates them.
+
 ## Groups
 
 Create groups under **Admin → Groups**, then add manual members with `owner`, `admin`, or `member` membership roles. These membership roles describe the group relationship; they do not grant system-administrator access.
 
-External identity provisioning can also create memberships. The UI distinguishes membership sources so externally managed entries are not treated as manual assignments.
+OIDC authentication does not import identity-provider groups or create group memberships. Manage memberships in AI Gateway manually or through the management API.
 
 ## Bulk user controls
 

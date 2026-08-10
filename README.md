@@ -48,7 +48,7 @@ Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 dige
 
 Local username/password login is always the recovery path. Public registration is disabled after the atomic first-boot transaction. Administrators create local users, choose initial passwords, and may force password change on first login. Disabling a user invalidates sessions. Final enabled-administrator safeguards cover demotion, disablement, and deletion.
 
-Groups organize membership and reporting; credits remain user-owned. The Groups screen can select multiple groups and apply monthly quota, API-access, or account-enablement changes to the union of their members. External identities are anchored by provider and immutable subject. Implicit email-based account linking is disabled.
+Groups organize membership and reporting; credits remain user-owned. The Groups screen can select multiple groups and apply monthly quota, API-access, or account-enablement changes to the union of their members. External identities are anchored by provider and immutable subject. Implicit email-based account linking is disabled by default; a controlled migration option can reconcile exact existing email matches when the provider is the sole enabled OIDC integration.
 
 The Authentication screen and management API configure generic OIDC and trusted-header providers, encrypted secrets, discovery tests, claim/header mapping, provisioning policy, and no-restart revisions. Trusted-header authentication is an explicit advanced mode: the immediate TCP peer must match a configured CIDR, the proxy must strip client-supplied identity headers, and every request must carry the configured shared secret. Forwarded client-IP headers are never used as the trusted source address.
 
