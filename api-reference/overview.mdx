@@ -3,7 +3,7 @@ title: "API reference overview"
 description: "Base URLs, authentication, formats, idempotent settlement, and error conventions."
 ---
 
-The public API supports OpenAI-compatible Chat Completions, model discovery, credit lookup, and lower-level Bedrock request shapes.
+The public API supports OpenAI-compatible Chat Completions, model discovery, self-scoped credit and usage lookup, a LiteLLM-compatible daily activity report, and lower-level Bedrock request shapes.
 
 ## Base URL
 
@@ -13,7 +13,9 @@ Configure OpenAI-compatible clients with:
 https://gateway.example.com/v1
 ```
 
-The native compatibility endpoints are rooted at:
+Usage integrations can call `GET /v1/usage` for a compact current-UTC-month summary or `GET /user/daily/activity` for LiteLLM-compatible daily reporting.
+
+The native Bedrock compatibility endpoints are rooted at:
 
 ```text
 https://gateway.example.com/api/gateway/bedrock
@@ -41,6 +43,7 @@ Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logi
 - Streaming Chat Completions return server-sent events and terminate with `data: [DONE]`.
 - Native `converse-stream` returns newline-delimited JSON.
 - Native `invoke-stream` passes provider binary event bytes through as `application/octet-stream`.
+- `/v1/usage` and `/user/daily/activity` return `Cache-Control: no-store` and are always scoped to the owner of the presented inference key.
 
 ## Errors
 

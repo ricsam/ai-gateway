@@ -14,10 +14,12 @@ import {
   handleCredits,
   handleHealth,
   handleListModels,
+  handleLiteLLMDailyActivity,
   handlePlaygroundChatCompletions,
   handlePublicChatCompletions,
   handlePublicConfig,
   handleReady,
+  handleUsage,
 } from "./public-api";
 
 const baseUrl = new URL(env.BASE_URL);
@@ -45,7 +47,7 @@ serve({
     const setup = await getSetupStatus();
     const allowedBeforeSetup = url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/head-api") || url.pathname === "/setup";
     if (setup.required && !allowedBeforeSetup) {
-      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/")) {
+      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/") || url.pathname === "/user/daily/activity") {
         return Response.json({ error: { code: "setup_required", message: "Installation setup is required" } }, { status: 503 });
       }
       return Response.redirect(new URL("/setup", env.BASE_URL), 302);
@@ -59,6 +61,12 @@ serve({
     }
     if (url.pathname === "/v1/credits" && request.method === "GET") {
       return handleCredits(request);
+    }
+    if (url.pathname === "/v1/usage" && request.method === "GET") {
+      return handleUsage(request);
+    }
+    if (url.pathname === "/user/daily/activity" && request.method === "GET") {
+      return handleLiteLLMDailyActivity(request);
     }
     if (url.pathname === "/api/playground/chat/completions" && request.method === "POST") {
       return handlePlaygroundChatCompletions(request);

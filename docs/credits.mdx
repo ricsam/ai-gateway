@@ -23,6 +23,60 @@ curl https://gateway.example.com/v1/credits \
 
 The key requires `credits.read`.
 
+## Current-month usage summary
+
+Use the native summary when a downstream application needs one request to render USD used, remaining credits, allocation percentage, request count, and token usage:
+
+```bash
+curl https://gateway.example.com/v1/usage \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY"
+```
+
+```json
+{
+  "object": "usage_summary",
+  "currency": "USD",
+  "period": {
+    "start": "2025-03-01T00:00:00.000Z",
+    "end": "2025-04-01T00:00:00.000Z",
+    "timezone": "UTC"
+  },
+  "credits": {
+    "used": 6.58,
+    "balance": 18.42,
+    "monthly_allocation": 25,
+    "percent_used": 26.32
+  },
+  "requests": 42,
+  "tokens": {
+    "input": 12000,
+    "output": 3400,
+    "cache_read": 2100,
+    "cache_write_5m": 500,
+    "cache_write_1h": 200,
+    "cache_write": 700,
+    "total": 18200
+  }
+}
+```
+
+The period is the current UTC calendar month. `period.end` is exclusive. `credits.used` is the metered USD value charged during that period, while `credits.balance` is the current balance. `percent_used` is `used / monthly_allocation × 100`, is not capped at 100, and is `null` when the monthly allocation is zero. The token `total` includes input, output, cache-read, and cache-write tokens.
+
+## LiteLLM-compatible daily activity
+
+For integrations that already understand LiteLLM spend reporting, the gateway implements the core self-service daily activity contract:
+
+```bash
+curl "https://gateway.example.com/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27" \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY"
+```
+
+Both dates are required `YYYY-MM-DD` UTC dates, are inclusive, and may span at most 366 days. The response contains descending `results` with LiteLLM-style `metrics`, breakdowns by model, the `bedrock` provider, and opaque API-key ID, plus aggregate `metadata` totals. Playground activity uses the synthetic key label `playground`.
+
+This is a deliberately focused compatibility subset: LiteLLM-specific teams, model groups, endpoints, compression savings, success/failure counts, filters, and pagination are not exposed. The endpoint never accepts a target user ID and always reports only the owner of the presented inference key.
+
+Both usage endpoints require `credits.read`, return `Cache-Control: no-store`, and count only inference ledger events. Monthly resets and administrator adjustments are excluded. Zero-priced model calls are still recorded with their request and token counts even though spend is zero.
+
 ## Request admission and settlement
 
 - A user needs a positive balance when inference begins.

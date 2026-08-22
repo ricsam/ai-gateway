@@ -8,8 +8,12 @@ import {
   type ProxyAuthResult,
 } from "./proxy-auth";
 import { modelsTable, userTable } from "./schema";
+import { UsageValidationError } from "./usage-contract";
+import { getLiteLLMDailyActivity, getNativeMonthlyUsage } from "./usage-service";
 
 function openAIError(result: Extract<ProxyAuthResult, { ok: false }>): Response {
+  const headers = new Headers({ "cache-control": "no-store" });
+  if (result.status === 401) headers.set("WWW-Authenticate", "Bearer");
   return Response.json({
     error: {
       message: result.message,
@@ -17,10 +21,7 @@ function openAIError(result: Extract<ProxyAuthResult, { ok: false }>): Response 
       code: result.code,
       param: null,
     },
-  }, {
-    status: result.status,
-    headers: result.status === 401 ? { "WWW-Authenticate": "Bearer" } : undefined,
-  });
+  }, { status: result.status, headers });
 }
 
 export async function handlePublicChatCompletions(request: Request): Promise<Response> {
@@ -51,9 +52,9 @@ export async function handleListModels(request: Request): Promise<Response> {
   });
 }
 
-export async function handleCredits(request: Request): Promise<Response> {
+async function authenticatedCreditUser(request: Request) {
   const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "credits.read");
-  if (!auth.ok) return openAIError(auth);
+  if (!auth.ok) return { ok: false, response: openAIError(auth) } as const;
   const [user] = await db
     .select({
       balance: userTable.creditBalance,
@@ -63,14 +64,57 @@ export async function handleCredits(request: Request): Promise<Response> {
     .where(eq(userTable.id, auth.principal.userId))
     .limit(1);
   if (!user) {
-    return openAIError({ ok: false, status: 401, message: "User not found", code: "invalid_api_key" });
+    return { ok: false, response: openAIError({ ok: false, status: 401, message: "User not found", code: "invalid_api_key" }) } as const;
   }
+  return { ok: true, principal: auth.principal, user } as const;
+}
+
+function usageError(error: UsageValidationError): Response {
+  return Response.json({
+    error: {
+      message: error.message,
+      type: "invalid_request_error",
+      code: "invalid_usage_range",
+      param: error.param,
+    },
+  }, { status: 400, headers: { "cache-control": "no-store" } });
+}
+
+export async function handleCredits(request: Request): Promise<Response> {
+  const result = await authenticatedCreditUser(request);
+  if (!result.ok) return result.response;
   return Response.json({
     object: "credit_balance",
     currency: "USD",
-    balance: user.balance,
-    monthly_allocation: user.monthlyAllocation,
+    balance: result.user.balance,
+    monthly_allocation: result.user.monthlyAllocation,
   });
+}
+
+export async function handleUsage(request: Request): Promise<Response> {
+  const result = await authenticatedCreditUser(request);
+  if (!result.ok) return result.response;
+  return Response.json(await getNativeMonthlyUsage({
+    userId: result.principal.userId,
+    balance: result.user.balance,
+    monthlyAllocation: result.user.monthlyAllocation,
+  }), { headers: { "cache-control": "no-store" } });
+}
+
+export async function handleLiteLLMDailyActivity(request: Request): Promise<Response> {
+  const result = await authenticatedCreditUser(request);
+  if (!result.ok) return result.response;
+  const url = new URL(request.url);
+  try {
+    return Response.json(await getLiteLLMDailyActivity({
+      userId: result.principal.userId,
+      startDate: url.searchParams.get("start_date"),
+      endDate: url.searchParams.get("end_date"),
+    }), { headers: { "cache-control": "no-store" } });
+  } catch (error) {
+    if (error instanceof UsageValidationError) return usageError(error);
+    throw error;
+  }
 }
 
 export async function handlePublicConfig(): Promise<Response> {

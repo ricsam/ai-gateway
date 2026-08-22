@@ -35,6 +35,8 @@ Core resources include users and passwords, groups/memberships and bulk user con
 | `POST` | `/v1/chat/completions` | `ai.invoke` |
 | `GET` | `/v1/models` | `models.read` |
 | `GET` | `/v1/credits` | `credits.read` |
+| `GET` | `/v1/usage` | `credits.read` |
+| `GET` | `/user/daily/activity` | `credits.read` |
 | `POST` | `/api/gateway/bedrock/invoke` | `ai.invoke` |
 | `POST` | `/api/gateway/bedrock/invoke-stream` | `ai.invoke` |
 | `POST` | `/api/gateway/bedrock/converse` | `ai.invoke` |

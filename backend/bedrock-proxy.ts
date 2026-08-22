@@ -94,7 +94,6 @@ async function settle(params: {
   cache: CacheUsage;
 }) {
   const breakdown = cost(params.model, params.inputTokens, params.outputTokens, params.cache);
-  if (breakdown.total === 0) return null;
   return deductCredits({
     userId: params.principal.userId,
     amount: breakdown.total,

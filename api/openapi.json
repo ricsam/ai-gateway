@@ -13,7 +13,7 @@
   ],
   "tags": [
     { "name": "OpenAI compatibility", "description": "OpenAI-compatible discovery and inference" },
-    { "name": "Credits", "description": "User credit information" },
+    { "name": "Credits", "description": "Self-scoped user credit and usage information" },
     { "name": "Bedrock compatibility", "description": "Native Bedrock-shaped requests and responses" }
   ],
   "security": [{ "inferenceKey": [] }],
@@ -80,6 +80,45 @@
             "description": "Current user credits",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreditBalance" } } }
           },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": ["Credits"],
+        "summary": "Get current-month usage",
+        "description": "Returns the authenticated key owner's metered USD spend, current credits, allocation percentage, request count, and detailed token totals for the current UTC calendar month. The period end is exclusive, percentage is not capped, and it is null for a zero allocation. Requires `credits.read`.",
+        "operationId": "getUsage",
+        "responses": {
+          "200": {
+            "description": "Current UTC calendar-month usage",
+            "headers": { "Cache-Control": { "schema": { "type": "string", "const": "no-store" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UsageSummary" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/user/daily/activity": {
+      "get": {
+        "tags": ["Credits"],
+        "summary": "Get LiteLLM-compatible daily activity",
+        "description": "Returns the authenticated key owner's daily spend, token, request, model, Bedrock provider, and opaque API-key breakdowns using the core LiteLLM `/user/daily/activity` response shape. This focused compatibility subset is non-paginated and accepts no target user. Dates are inclusive UTC dates and the maximum range is 366 days. Requires `credits.read`.",
+        "operationId": "getUserDailyActivity",
+        "parameters": [
+          { "name": "start_date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } },
+          { "name": "end_date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily usage activity in descending date order",
+            "headers": { "Cache-Control": { "schema": { "type": "string", "const": "no-store" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LiteLLMDailyActivity" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
@@ -300,6 +339,110 @@
           "currency": { "const": "USD" },
           "balance": { "type": "number" },
           "monthly_allocation": { "type": "number" }
+        }
+      },
+      "UsageSummary": {
+        "type": "object",
+        "required": ["object", "currency", "period", "credits", "requests", "tokens"],
+        "properties": {
+          "object": { "const": "usage_summary" },
+          "currency": { "const": "USD" },
+          "period": {
+            "type": "object",
+            "required": ["start", "end", "timezone"],
+            "properties": {
+              "start": { "type": "string", "format": "date-time" },
+              "end": { "type": "string", "format": "date-time", "description": "Exclusive period end" },
+              "timezone": { "const": "UTC" }
+            }
+          },
+          "credits": {
+            "type": "object",
+            "required": ["used", "balance", "monthly_allocation", "percent_used"],
+            "properties": {
+              "used": { "type": "number", "description": "Metered USD charged in this period" },
+              "balance": { "type": "number", "description": "Current balance, not a historical period-end balance" },
+              "monthly_allocation": { "type": "number" },
+              "percent_used": { "type": ["number", "null"], "description": "Used divided by allocation times 100; null when allocation is zero" }
+            }
+          },
+          "requests": { "type": "integer" },
+          "tokens": {
+            "type": "object",
+            "required": ["input", "output", "cache_read", "cache_write_5m", "cache_write_1h", "cache_write", "total"],
+            "properties": {
+              "input": { "type": "integer" },
+              "output": { "type": "integer" },
+              "cache_read": { "type": "integer" },
+              "cache_write_5m": { "type": "integer" },
+              "cache_write_1h": { "type": "integer" },
+              "cache_write": { "type": "integer" },
+              "total": { "type": "integer", "description": "Input, output, cache-read, and cache-write tokens" }
+            }
+          }
+        }
+      },
+      "LiteLLMMetrics": {
+        "type": "object",
+        "required": ["spend", "prompt_tokens", "completion_tokens", "total_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "api_requests"],
+        "properties": {
+          "spend": { "type": "number" },
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer", "description": "Prompt plus completion tokens, matching LiteLLM semantics" },
+          "cache_read_input_tokens": { "type": "integer" },
+          "cache_creation_input_tokens": { "type": "integer" },
+          "api_requests": { "type": "integer" }
+        }
+      },
+      "LiteLLMBreakdownEntry": {
+        "type": "object",
+        "required": ["metrics", "metadata"],
+        "properties": {
+          "metrics": { "$ref": "#/components/schemas/LiteLLMMetrics" },
+          "metadata": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "LiteLLMDailyActivity": {
+        "type": "object",
+        "required": ["results", "metadata"],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["date", "metrics", "breakdown"],
+              "properties": {
+                "date": { "type": "string", "format": "date" },
+                "metrics": { "$ref": "#/components/schemas/LiteLLMMetrics" },
+                "breakdown": {
+                  "type": "object",
+                  "required": ["models", "providers", "api_keys"],
+                  "properties": {
+                    "models": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/LiteLLMBreakdownEntry" } },
+                    "providers": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/LiteLLMBreakdownEntry" } },
+                    "api_keys": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/LiteLLMBreakdownEntry" } }
+                  }
+                }
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "required": ["total_spend", "total_prompt_tokens", "total_completion_tokens", "total_tokens", "total_api_requests", "total_cache_read_input_tokens", "total_cache_creation_input_tokens", "page", "total_pages", "has_more"],
+            "properties": {
+              "total_spend": { "type": "number" },
+              "total_prompt_tokens": { "type": "integer" },
+              "total_completion_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" },
+              "total_api_requests": { "type": "integer" },
+              "total_cache_read_input_tokens": { "type": "integer" },
+              "total_cache_creation_input_tokens": { "type": "integer" },
+              "page": { "const": 1 },
+              "total_pages": { "const": 1 },
+              "has_more": { "const": false }
+            }
+          }
         }
       },
       "Error": {

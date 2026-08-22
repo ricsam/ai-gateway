@@ -334,28 +334,26 @@ async function handleNonStreamingRequest(
     cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
   });
 
-  const settlement = costBreakdown.total > 0 || principal.credentialType === "session"
-    ? await deductCredits({
-        userId,
-        amount: costBreakdown.total,
-        type: principal.credentialType === "session" ? "chat" : "api",
-        description: `Chat completion using ${model.modelId}`,
-        requestId,
-        apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
-        source: principal.credentialType === "session" ? "playground" : "api",
-        modelId: model.modelId,
-        inputTokens,
-        outputTokens,
-        cacheReadTokens: cacheUsage.cacheReadTokens,
-        cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
-        cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
-        inputCost: costBreakdown.inputCost,
-        outputCost: costBreakdown.outputCost,
-        cacheReadCost: costBreakdown.cacheReadCost,
-        cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
-        cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
-      })
-    : null;
+  const settlement = await deductCredits({
+    userId,
+    amount: costBreakdown.total,
+    type: principal.credentialType === "session" ? "chat" : "api",
+    description: `Chat completion using ${model.modelId}`,
+    requestId,
+    apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
+    source: principal.credentialType === "session" ? "playground" : "api",
+    modelId: model.modelId,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: cacheUsage.cacheReadTokens,
+    cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
+    cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
+    inputCost: costBreakdown.inputCost,
+    outputCost: costBreakdown.outputCost,
+    cacheReadCost: costBreakdown.cacheReadCost,
+    cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
+    cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
+  });
 
   // Log completion
   console.log(
@@ -767,28 +765,26 @@ async function handleStreamingRequest(
               cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
             });
 
-            const settlement = costBreakdown.total > 0 || principal.credentialType === "session"
-              ? await deductCredits({
-                  userId,
-                  amount: costBreakdown.total,
-                  type: principal.credentialType === "session" ? "chat" : "api",
-                  description: `Streaming chat completion using ${model.modelId}`,
-                  requestId,
-                  apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
-                  source: principal.credentialType === "session" ? "playground" : "api",
-                  modelId: model.modelId,
-                  inputTokens,
-                  outputTokens,
-                  cacheReadTokens: cacheUsage.cacheReadTokens,
-                  cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
-                  cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
-                  inputCost: costBreakdown.inputCost,
-                  outputCost: costBreakdown.outputCost,
-                  cacheReadCost: costBreakdown.cacheReadCost,
-                  cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
-                  cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
-                })
-              : null;
+            const settlement = await deductCredits({
+              userId,
+              amount: costBreakdown.total,
+              type: principal.credentialType === "session" ? "chat" : "api",
+              description: `Streaming chat completion using ${model.modelId}`,
+              requestId,
+              apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
+              source: principal.credentialType === "session" ? "playground" : "api",
+              modelId: model.modelId,
+              inputTokens,
+              outputTokens,
+              cacheReadTokens: cacheUsage.cacheReadTokens,
+              cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
+              cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
+              inputCost: costBreakdown.inputCost,
+              outputCost: costBreakdown.outputCost,
+              cacheReadCost: costBreakdown.cacheReadCost,
+              cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
+              cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
+            });
 
             if (principal.credentialType === "session" && settlement && !isStreamCanceled()) {
               sendChunk({
