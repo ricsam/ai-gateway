@@ -19,8 +19,14 @@ import {
 } from "../proxy-auth";
 import { deductCredits, calculateCostBreakdown, checkBalance } from "../credit-service";
 import { hasAvailableCredits } from "../credit-settlement";
+import { getRemoteImageUrlsEnabled } from "../config-service";
+import { isReasoningEffort, resolveReasoningProfile } from "@/shared/reasoning";
 import { transformRequest } from "./transform/request";
 import { transformResponse } from "./transform/response";
+import { applyReasoning, ReasoningConfigError } from "./transform/reasoning";
+import { collectRemoteImageUrls, RequestValidationError, validateChatCompletionRequest } from "./transform/validate";
+import { ImageInputError, type ResolvedImage } from "./images";
+import { fetchRemoteImages } from "./remote-image";
 import { addConverseCachePoints } from "./transform/cache-converse";
 import { extractConverseCacheUsage, extractStreamingCacheUsage, emptyCacheUsage } from "./transform/cache-usage";
 import type { CacheUsage } from "./transform/cache-usage";
@@ -47,13 +53,15 @@ function errorResponse(
   message: string,
   type: OpenAIErrorType,
   status: number,
-  code?: string
+  code?: string,
+  param?: string | null,
 ): Response {
   const error: OpenAIError = {
     error: {
       message,
       type,
       code: code ?? null,
+      ...(param !== undefined && { param }),
     },
   };
   return Response.json(error, { status });
@@ -115,30 +123,21 @@ export async function handleOpenAIProxy(
   const { userId } = principal;
 
   // 2. Credential and user state are enforced by the principal authenticator.
-  // Parse and validate the OpenAI request body.
-  let body: OpenAIChatCompletionRequest;
+  // Parse, validate, and normalize the OpenAI request body.
+  let rawBody: unknown;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return errorResponse("Invalid JSON body", "invalid_request_error", 400, "invalid_json");
   }
-
-  // Validate required fields
-  if (!body.model || typeof body.model !== "string") {
-    return errorResponse("model is required", "invalid_request_error", 400, "missing_model");
-  }
-  if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
-    return errorResponse("messages is required and must be a non-empty array", "invalid_request_error", 400, "missing_messages");
-  }
+  let body: OpenAIChatCompletionRequest;
   try {
-    body = validateChatCompletionRequest(body);
+    body = validateChatCompletionRequest(rawBody);
   } catch (error) {
-    return errorResponse(
-      error instanceof Error ? error.message : "Invalid chat completion request",
-      "invalid_request_error",
-      400,
-      "invalid_request",
-    );
+    if (error instanceof RequestValidationError) {
+      return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
+    }
+    throw error;
   }
 
   // 3. Validate model exists in the single enabled Bedrock catalog.
@@ -182,43 +181,78 @@ export async function handleOpenAIProxy(
   const requestId = suppliedRequestId && /^[A-Za-z0-9._:-]{1,128}$/.test(suppliedRequestId)
     ? suppliedRequestId
     : generateChatCompletionId();
-  console.log(`[OpenAI Proxy] request=${requestId} user=${userId.slice(0, 8)} model=${body.model} stream=${body.stream === true} messages=${body.messages.length} tools=${body.tools?.length ?? 0}`);
+  const imageCount = body.messages.reduce((total, message) => total + (
+    (message.role === "user" || message.role === "tool") && Array.isArray(message.content)
+      ? message.content.filter((part) => part.type === "image_url").length
+      : 0
+  ), 0);
+  console.log(`[OpenAI Proxy] request=${requestId} user=${userId.slice(0, 8)} model=${body.model} stream=${body.stream === true} messages=${body.messages.length} tools=${body.tools?.length ?? 0} images=${imageCount} reasoning_effort=${body.reasoning_effort ?? "default"}`);
 
-  // 5. Transform request to Bedrock format and enforce the configured output limit.
-  if (body.max_tokens !== undefined && (!Number.isInteger(body.max_tokens) || body.max_tokens <= 0 || body.max_tokens > model.maxOutputTokens)) {
+  // 5. Enforce the configured output limit, resolve images, and transform to Bedrock format.
+  if (body.max_tokens !== undefined && body.max_tokens > model.maxOutputTokens) {
     return errorResponse(
       `max_tokens must be a positive integer no greater than ${model.maxOutputTokens}`,
       "invalid_request_error",
       400,
       "invalid_max_tokens",
+      "max_tokens",
     );
   }
-  let bedrockRequest = transformRequest({
-    ...body,
-    max_tokens: body.max_tokens ?? model.maxOutputTokens,
-  });
-  if (body.reasoning_effort && model.thinking) {
-    const budgetByEffort = { low: 1024, medium: 4096, high: 10000 } as const;
-    const budgetTokens = budgetByEffort[body.reasoning_effort];
-    if (budgetTokens >= model.maxOutputTokens) {
+
+  let remoteImages: Map<string, ResolvedImage> | undefined;
+  const remoteImageUrls = collectRemoteImageUrls(body.messages);
+  if (remoteImageUrls.size > 0) {
+    if (!(await getRemoteImageUrlsEnabled())) {
       return errorResponse(
-        `The configured output limit is too small for ${body.reasoning_effort} reasoning effort`,
+        "Image URLs are disabled on this gateway; send images as base64 data URLs",
         "invalid_request_error",
         400,
-        "reasoning_budget_exceeds_model_limit",
+        "remote_image_urls_disabled",
+        remoteImageUrls.values().next().value ?? null,
       );
     }
-    const maxTokens = Math.min(
-      model.maxOutputTokens,
-      Math.max(bedrockRequest.inferenceConfig?.maxTokens ?? model.maxOutputTokens, budgetTokens + 1),
-    );
-    bedrockRequest = {
-      ...bedrockRequest,
-      inferenceConfig: { ...bedrockRequest.inferenceConfig, maxTokens },
-      additionalModelRequestFields: {
-        thinking: { type: "enabled", budget_tokens: budgetTokens },
-      },
-    };
+    try {
+      remoteImages = await fetchRemoteImages(remoteImageUrls, { signal: request.signal });
+    } catch (error) {
+      if (error instanceof ImageInputError) {
+        return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param ?? null);
+      }
+      if (request.signal.aborted) {
+        return errorResponse("Client request aborted", "invalid_request_error", 400, "request_aborted");
+      }
+      throw error;
+    }
+  }
+
+  let bedrockRequest: ReturnType<typeof transformRequest>;
+  try {
+    bedrockRequest = transformRequest({
+      ...body,
+      max_tokens: body.max_tokens ?? model.maxOutputTokens,
+    }, { remoteImages });
+  } catch (error) {
+    if (error instanceof ImageInputError) {
+      return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param ?? null);
+    }
+    throw error;
+  }
+
+  // Reasoning: an explicit request value wins over the model's configured default.
+  const reasoningEffort = body.reasoning_effort
+    ?? (isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : undefined);
+  if (model.thinking && reasoningEffort) {
+    try {
+      bedrockRequest = applyReasoning(bedrockRequest, {
+        profile: resolveReasoningProfile(model.modelId, model.reasoningMode),
+        effort: reasoningEffort,
+        maxOutputTokens: model.maxOutputTokens,
+      }).request;
+    } catch (error) {
+      if (error instanceof ReasoningConfigError) {
+        return errorResponse(error.message, "invalid_request_error", 400, error.code, "reasoning_effort");
+      }
+      throw error;
+    }
   }
 
   // 6. Apply managed cache points if enabled
@@ -257,40 +291,6 @@ function playgroundCreditUsage(settlement: {
     balance_after: settlement.balanceAfter,
     partially_charged: settlement.partiallyCharged,
   };
-}
-
-function validateChatCompletionRequest(body: OpenAIChatCompletionRequest): OpenAIChatCompletionRequest {
-  if (body.n !== undefined && body.n !== 1) throw new Error("Only n=1 is supported");
-  if (body.temperature !== undefined && (!Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) {
-    throw new Error("temperature must be between 0 and 2");
-  }
-  if (body.top_p !== undefined && (!Number.isFinite(body.top_p) || body.top_p < 0 || body.top_p > 1)) {
-    throw new Error("top_p must be between 0 and 1");
-  }
-  if (body.tools !== undefined && !Array.isArray(body.tools)) throw new Error("tools must be an array");
-
-  for (const [index, message] of body.messages.entries()) {
-    if (!message || typeof message !== "object" || typeof message.role !== "string") {
-      throw new Error(`messages[${index}] is invalid`);
-    }
-    if (message.role === "user") {
-      if (typeof message.content !== "string" && !Array.isArray(message.content)) {
-        throw new Error(`messages[${index}].content is invalid`);
-      }
-    } else if (message.role === "assistant") {
-      if (message.content !== null && typeof message.content !== "string") {
-        throw new Error(`messages[${index}].content is invalid`);
-      }
-      if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
-        throw new Error(`messages[${index}].tool_calls must be an array`);
-      }
-    } else if (message.role === "system" || message.role === "developer" || message.role === "tool") {
-      if (typeof message.content !== "string") throw new Error(`messages[${index}].content must be a string`);
-    } else {
-      throw new Error(`messages[${index}].role is not supported`);
-    }
-  }
-  return body;
 }
 
 /**

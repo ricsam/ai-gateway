@@ -26,9 +26,18 @@ export function transformResponse(
   
   // Collect text content and tool calls
   let textContent = "";
+  let reasoningContent = "";
   const toolCalls: OpenAIToolCall[] = [];
   
   for (const block of contentBlocks) {
+    // Reasoning blocks carry summarized thinking text (empty when the model
+    // omits it) or redacted content; only readable text is surfaced.
+    if ("reasoningContent" in block && block.reasoningContent !== undefined) {
+      const reasoningText = block.reasoningContent.reasoningText?.text;
+      if (reasoningText) reasoningContent += reasoningText;
+      continue;
+    }
+
     // Check for text block
     if ("text" in block && block.text !== undefined) {
       // Concatenate text blocks with newlines if there are multiple
@@ -58,6 +67,7 @@ export function transformResponse(
   const message: OpenAIResponseMessage = {
     role: "assistant",
     content: textContent.length > 0 ? textContent : null,
+    ...(reasoningContent.length > 0 && { reasoning_content: reasoningContent }),
   };
   
   // Add tool_calls if present

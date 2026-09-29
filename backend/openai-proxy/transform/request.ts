@@ -7,28 +7,35 @@ import type {
   Message,
   SystemContentBlock,
   ToolConfiguration,
-  ImageFormat,
   Tool,
   ToolInputSchema,
   ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
+import { decodeImageDataUrl, ImageInputError, imageUrlKind, type ResolvedImage } from "../images";
 import type {
+  OpenAIAssistantMessage,
   OpenAIChatCompletionRequest,
   OpenAIMessage,
   OpenAIContentPart,
   OpenAITool,
   OpenAIToolChoice,
+  OpenAIToolMessage,
 } from "./types";
+
+export interface TransformRequestOptions {
+  /** Downloaded images for http(s) `image_url` URLs, keyed by URL. */
+  remoteImages?: ReadonlyMap<string, ResolvedImage>;
+}
 
 /**
  * Transform an OpenAI Chat Completion request to Bedrock Converse format
  */
-export function transformRequest(body: OpenAIChatCompletionRequest): ConverseCommandInput {
+export function transformRequest(body: OpenAIChatCompletionRequest, options: TransformRequestOptions = {}): ConverseCommandInput {
   // Extract system messages
   const systemBlocks = extractSystemMessages(body.messages);
   
   // Transform conversation messages
-  const messages = transformMessages(body.messages);
+  const messages = transformMessages(body.messages, options);
   
   // Build inference config
   const inferenceConfig = buildInferenceConfig(body);
@@ -53,13 +60,16 @@ function extractSystemMessages(messages: OpenAIMessage[]): SystemContentBlock[] 
   
   for (const msg of messages) {
     if (msg.role === "system" || msg.role === "developer") {
-      // Skip system/developer messages with empty or blank content.
-      // Bedrock rejects blank text fields in content blocks.
-      if (!msg.content || msg.content.trim().length === 0) {
-        console.warn("[OpenAI Transform] Skipping empty system/developer message");
-        continue;
+      const texts = typeof msg.content === "string" ? [msg.content] : msg.content.map((part) => part.text);
+      for (const text of texts) {
+        // Skip system/developer messages with empty or blank content.
+        // Bedrock rejects blank text fields in content blocks.
+        if (!text || text.trim().length === 0) {
+          console.warn("[OpenAI Transform] Skipping empty system/developer message");
+          continue;
+        }
+        systemBlocks.push({ text });
       }
-      systemBlocks.push({ text: msg.content });
     }
   }
   
@@ -71,17 +81,17 @@ function extractSystemMessages(messages: OpenAIMessage[]): SystemContentBlock[] 
  * Filters out system/developer messages (handled separately)
  * Consolidates consecutive same-role messages
  */
-function transformMessages(messages: OpenAIMessage[]): Message[] {
+function transformMessages(messages: OpenAIMessage[], options: TransformRequestOptions): Message[] {
   const bedrockMessages: Message[] = [];
   
-  for (const msg of messages) {
+  for (const [index, msg] of messages.entries()) {
     // Skip system and developer messages (handled in extractSystemMessages)
     if (msg.role === "system" || msg.role === "developer") {
       continue;
     }
     
     if (msg.role === "user") {
-      const contentBlocks = transformUserContent(msg.content);
+      const contentBlocks = transformUserContent(msg.content, `messages[${index}].content`, options);
       bedrockMessages.push({
         role: "user",
         content: contentBlocks,
@@ -106,7 +116,7 @@ function transformMessages(messages: OpenAIMessage[]): Message[] {
       // Tool messages are wrapped in a user role with toolResult
       bedrockMessages.push({
         role: "user",
-        content: [transformToolResult(msg)],
+        content: [transformToolResult(msg, `messages[${index}].content`, options)],
       });
     }
   }
@@ -122,83 +132,60 @@ function transformMessages(messages: OpenAIMessage[]): Message[] {
 /**
  * Transform user message content to Bedrock content blocks
  */
-function transformUserContent(content: string | OpenAIContentPart[]): ContentBlock[] {
+function transformUserContent(content: string | OpenAIContentPart[], param: string, options: TransformRequestOptions): ContentBlock[] {
   if (typeof content === "string") {
     return [{ text: content }];
   }
   
   // Handle content parts array
-  return content.map(transformContentPart);
+  return content.map((part, index) => transformContentPart(part, `${param}[${index}]`, options));
 }
 
 /**
  * Transform a single content part to a Bedrock content block
  */
-function transformContentPart(part: OpenAIContentPart): ContentBlock {
+function transformContentPart(part: OpenAIContentPart, param: string, options: TransformRequestOptions): ContentBlock {
   if (part.type === "text") {
     return { text: part.text };
   }
-  
-  if (part.type === "image_url") {
-    const { url } = part.image_url;
-    
-    // Handle data URIs
-    if (url.startsWith("data:")) {
-      const parsed = parseDataUri(url);
-      if (parsed) {
-        return {
-          image: {
-            format: parsed.format,
-            source: {
-              bytes: parsed.bytes,
-            },
-          },
-        };
-      }
-    }
-    
-    // For regular URLs, we can't fetch them - use a placeholder
-    // Bedrock doesn't support URL images, only base64
-    console.warn("[OpenAI Transform] Non-data-URI image URL dropped, using text placeholder");
-    return { text: `[Image: ${url}]` };
-  }
-  
-  // Unknown content type - return as text placeholder
-  console.warn("[OpenAI Transform] Unknown content part type:", (part as { type: string }).type);
-  return { text: `[Unknown content type: ${(part as { type: string }).type}]` };
+  const image = resolveImage(part.image_url.url, `${param}.image_url.url`, options);
+  return { image: { format: image.format, source: { bytes: image.bytes } } };
 }
 
 /**
- * Parse a data URI into format and bytes
+ * Resolve an `image_url` to Bedrock image bytes. Data URLs are decoded inline;
+ * http(s) URLs must already have been downloaded by the caller.
  */
-function parseDataUri(uri: string): { format: ImageFormat; bytes: Uint8Array } | null {
-  const match = uri.match(/^data:image\/(png|jpeg|gif|webp);base64,(.+)$/);
-  if (!match || !match[1] || !match[2]) {
-    return null;
+function resolveImage(url: string, param: string, options: TransformRequestOptions): ResolvedImage {
+  try {
+    const kind = imageUrlKind(url);
+    if (kind === "data") return decodeImageDataUrl(url);
+    if (kind === "remote") {
+      const image = options.remoteImages?.get(url);
+      if (image) return image;
+      throw new ImageInputError("Image URL was not downloaded; send the image as a base64 data URL", "invalid_image_url");
+    }
+    throw new ImageInputError("Image URL must be a base64 data URL or an http(s) URL", "invalid_image_url");
+  } catch (error) {
+    if (error instanceof ImageInputError) error.param ??= param;
+    throw error;
   }
-  
-  const format = match[1] as ImageFormat;
-  const base64 = match[2];
-  
-  // Decode base64 to Uint8Array
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  
-  return { format, bytes };
 }
 
 /**
  * Transform assistant message to Bedrock content blocks
  */
-function transformAssistantContent(msg: { content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] }): ContentBlock[] {
+function transformAssistantContent(msg: Pick<OpenAIAssistantMessage, "content" | "tool_calls">): ContentBlock[] {
   const blocks: ContentBlock[] = [];
   
   // Add text content if present
-  if (msg.content) {
-    blocks.push({ text: msg.content });
+  if (typeof msg.content === "string") {
+    if (msg.content) blocks.push({ text: msg.content });
+  } else if (Array.isArray(msg.content)) {
+    for (const part of msg.content) {
+      const text = part.type === "text" ? part.text : part.refusal;
+      if (text) blocks.push({ text });
+    }
   }
   
   // Add tool use blocks if present
@@ -242,10 +229,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * Transform a tool message to a Bedrock toolResult block
  */
-function transformToolResult(msg: { content: string; tool_call_id: string }): ContentBlock {
+function transformToolResult(msg: OpenAIToolMessage, param: string, options: TransformRequestOptions): ContentBlock {
+  let resultBlocks: ToolResultContentBlock[];
+  if (Array.isArray(msg.content)) {
+    // Content parts may include images (a gateway extension, e.g. screenshots
+    // returned by a tool), which Bedrock accepts inside tool results.
+    resultBlocks = msg.content.map((part, index): ToolResultContentBlock => {
+      if (part.type === "text") return { text: part.text };
+      const image = resolveImage(part.image_url.url, `${param}[${index}].image_url.url`, options);
+      return { image: { format: image.format, source: { bytes: image.bytes } } };
+    });
+    return { toolResult: { toolUseId: msg.tool_call_id, content: resultBlocks } };
+  }
+
   // Try to parse content as JSON for structured results
   // Bedrock only accepts JSON objects in the json field, not primitives or arrays
-  let resultBlocks: ToolResultContentBlock[];
   try {
     const parsed = JSON.parse(msg.content);
     if (isPlainObject(parsed)) {

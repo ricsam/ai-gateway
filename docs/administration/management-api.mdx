@@ -3,7 +3,7 @@ title: "Management API"
 description: "Automate administrative work with scoped management keys."
 ---
 
-The stable management base is `/management/v1`. It covers users, groups, user inference keys, login providers, branding, AWS configuration, models, usage, analytics, management keys, and audit history.
+The stable management base is `/management/v1`. It covers users, groups, user inference keys, login providers, branding, inference settings, AWS configuration, models, usage, analytics, management keys, and audit history.
 
 ## Create a management key
 
@@ -70,6 +70,18 @@ Responses include `X-Request-ID`. Supply your own request ID when correlating an
 ## Revision-safe configuration
 
 Mutable configuration resources expose a `revision`. Send the current revision with an update so stale clients cannot silently overwrite newer settings.
+
+Branding (`/branding`) and inference settings (`/settings`) are stored together and share one revision, so re-read either document after updating the other. For example, to stop the gateway from downloading `http(s)` image URLs:
+
+```bash
+curl --request PUT \
+  --header "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" \
+  --header 'Content-Type: application/json' \
+  --data '{"revision": 4, "remoteImageUrlsEnabled": false}' \
+  https://gateway.example.com/management/v1/settings
+```
+
+The change is audited as `settings.updated`.
 
 Secret writes are explicit:
 

@@ -249,27 +249,57 @@
       "Unavailable": { "description": "Bedrock is not configured or unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     },
     "schemas": {
+      "TextPart": {
+        "type": "object",
+        "required": ["type", "text"],
+        "properties": { "type": { "const": "text" }, "text": { "type": "string" } }
+      },
+      "ImagePart": {
+        "type": "object",
+        "required": ["type", "image_url"],
+        "properties": {
+          "type": { "const": "image_url" },
+          "image_url": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                  "url": { "type": "string", "description": "A base64 data:image/... URL or a public http(s) URL that the gateway downloads. PNG, JPEG, GIF, or WebP; up to 3.75 MB." },
+                  "detail": { "type": "string", "enum": ["auto", "low", "high"], "description": "Accepted for compatibility and ignored" }
+                }
+              },
+              { "type": "string", "description": "Shorthand for { url }" }
+            ]
+          }
+        }
+      },
+      "RefusalPart": {
+        "type": "object",
+        "required": ["type", "refusal"],
+        "properties": { "type": { "const": "refusal" }, "refusal": { "type": "string" } }
+      },
       "Message": {
         "oneOf": [
           {
             "type": "object",
             "required": ["role", "content"],
-            "properties": { "role": { "type": "string", "enum": ["system", "developer"] }, "content": { "type": "string" } }
+            "properties": { "role": { "type": "string", "enum": ["system", "developer"] }, "content": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "$ref": "#/components/schemas/TextPart" } }] } }
           },
           {
             "type": "object",
             "required": ["role", "content"],
-            "properties": { "role": { "const": "user" }, "content": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "object", "additionalProperties": true } }] } }
+            "properties": { "role": { "const": "user" }, "content": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "oneOf": [{ "$ref": "#/components/schemas/TextPart" }, { "$ref": "#/components/schemas/ImagePart" }] } }] } }
           },
           {
             "type": "object",
             "required": ["role"],
-            "properties": { "role": { "const": "assistant" }, "content": { "type": ["string", "null"] }, "tool_calls": { "type": "array", "items": { "type": "object", "additionalProperties": true } } }
+            "properties": { "role": { "const": "assistant" }, "content": { "oneOf": [{ "type": ["string", "null"] }, { "type": "array", "items": { "oneOf": [{ "$ref": "#/components/schemas/TextPart" }, { "$ref": "#/components/schemas/RefusalPart" }] } }] }, "tool_calls": { "type": "array", "items": { "type": "object", "additionalProperties": true } } }
           },
           {
             "type": "object",
             "required": ["role", "content", "tool_call_id"],
-            "properties": { "role": { "const": "tool" }, "content": { "type": "string" }, "tool_call_id": { "type": "string" } }
+            "properties": { "role": { "const": "tool" }, "content": { "description": "Image parts are a gateway extension forwarded inside the Bedrock tool result", "oneOf": [{ "type": "string" }, { "type": "array", "items": { "oneOf": [{ "$ref": "#/components/schemas/TextPart" }, { "$ref": "#/components/schemas/ImagePart" }] } }] }, "tool_call_id": { "type": "string" } }
           }
         ]
       },
@@ -279,12 +309,17 @@
         "properties": {
           "model": { "type": "string" },
           "messages": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/Message" } },
-          "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
-          "top_p": { "type": "number", "minimum": 0, "maximum": 1 },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "Omitted when the gateway enables Claude reasoning" },
+          "top_p": { "type": "number", "minimum": 0, "maximum": 1, "description": "Omitted when the gateway enables Claude reasoning" },
           "max_tokens": { "type": "integer", "minimum": 1 },
+          "max_completion_tokens": { "type": "integer", "minimum": 1, "description": "Alias for max_tokens; takes precedence when both are sent" },
           "stop": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
           "stream": { "type": "boolean", "default": false },
-          "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high"] },
+          "reasoning_effort": {
+            "type": ["string", "null"],
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", null],
+            "description": "Reasoning effort for models with reasoning enabled. Mapped to Claude adaptive thinking and output_config.effort, Claude thinking budgets, Nova 2 reasoningConfig, or gpt-oss reasoning_effort. Unsupported levels are clamped to the nearest supported level; omitted values use the model's configured default."
+          },
           "tools": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
           "tool_choice": { "description": "auto, required, none, or a named function", "oneOf": [{ "type": "string", "enum": ["auto", "required", "none"] }, { "type": "object", "additionalProperties": true }] },
           "n": { "const": 1 }
@@ -307,7 +342,25 @@
           "object": { "const": "chat.completion" },
           "created": { "type": "integer" },
           "model": { "type": "string" },
-          "choices": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "message": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "role": { "const": "assistant" },
+                    "content": { "type": ["string", "null"] },
+                    "reasoning_content": { "type": "string", "description": "Non-standard: summarized model reasoning when the model returns readable reasoning" },
+                    "tool_calls": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+                  }
+                }
+              }
+            }
+          },
           "usage": { "$ref": "#/components/schemas/Usage" }
         }
       },

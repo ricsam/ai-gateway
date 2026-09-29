@@ -8,8 +8,15 @@ export async function getBranding() {
   const [settings] = await db.select().from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
   return settings ?? {
     id: "main", revision: 1, productName: "AI Gateway", tagline: "Secure, metered access to AI models",
-    logoUrl: null, faviconUrl: null, primaryColor: "#2563eb", primaryForegroundColor: "#ffffff", updatedAt: new Date(0),
+    logoUrl: null, faviconUrl: null, primaryColor: "#2563eb", primaryForegroundColor: "#ffffff", remoteImageUrlsEnabled: true, updatedAt: new Date(0),
   };
+}
+
+/** Whether `/v1/chat/completions` may download http(s) image URLs (defaults to enabled). */
+export async function getRemoteImageUrlsEnabled(): Promise<boolean> {
+  const [settings] = await db.select({ enabled: applicationSettingsTable.remoteImageUrlsEnabled })
+    .from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
+  return settings?.enabled ?? true;
 }
 
 export async function getPublicConfig() {

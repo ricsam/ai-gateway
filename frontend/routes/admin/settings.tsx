@@ -6,10 +6,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { managementFetch } from "../../management-api";
 import { loadPublicConfig, type PublicConfig } from "../../config";
 
 type Branding = { revision: number; productName: string; tagline: string; logoUrl: string | null; faviconUrl: string | null; primaryColor: string; primaryForegroundColor: string };
+type InferenceSettings = { revision: number; remoteImageUrlsEnabled: boolean };
 type Aws = {
   revision: number; defaultRegion: string | null; accessKeyId: string | null; secretAccessKey: { configured: boolean }; sessionToken: { configured: boolean };
   lastTestedAt?: string | null; lastTestSucceeded?: boolean | null; lastTestMessage?: string | null;
@@ -22,6 +24,7 @@ function Settings() {
   const [brand, setBrand] = useState<Branding | null>(null);
   const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null);
   const [aws, setAws] = useState<Aws | null>(null);
+  const [inference, setInference] = useState<InferenceSettings | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [awsForm, setAwsForm] = useState({ defaultRegion: "", accessKeyId: "", secretAccessKey: "", sessionToken: "" });
   const [testModel, setTestModel] = useState("");
@@ -31,11 +34,12 @@ function Settings() {
 
   const load = async () => {
     try {
-      const [branding, awsResult, modelResult, runtime] = await Promise.all([
+      const [branding, awsResult, modelResult, runtime, inferenceResult] = await Promise.all([
         managementFetch<{ data: Branding }>("/branding"), managementFetch<{ data: Aws }>("/aws"),
         managementFetch<{ data: Model[] }>("/models"), loadPublicConfig(true),
+        managementFetch<{ data: InferenceSettings }>("/settings"),
       ]);
-      setBrand(branding.data); setAws(awsResult.data); setModels(modelResult.data); setPublicConfig(runtime);
+      setBrand(branding.data); setAws(awsResult.data); setModels(modelResult.data); setPublicConfig(runtime); setInference(inferenceResult.data);
       setAwsForm((current) => ({ ...current, defaultRegion: awsResult.data.defaultRegion ?? "" }));
       setTestModel((current) => current || modelResult.data.find((model) => model.enabled)?.modelId || "");
       setError(null);
@@ -59,8 +63,13 @@ function Settings() {
   };
 
   if (!brand || !aws) return <p>{error ?? "Loading settings…"}</p>;
+  const saveInference = (remoteImageUrlsEnabled: boolean) => void run(async () => {
+    // Branding and inference settings share one application-settings revision.
+    const result = await managementFetch<{ data: InferenceSettings }>("/settings", { method: "PUT", body: JSON.stringify({ revision: brand.revision, remoteImageUrlsEnabled }) });
+    setInference(result.data); setBrand({ ...brand, revision: result.data.revision });
+  }, remoteImageUrlsEnabled ? "Image URL downloads enabled" : "Image URL downloads disabled");
   return <div className="space-y-5">
-    <div><h1 className="text-2xl font-semibold">Branding & AWS</h1><p className="text-sm text-muted-foreground">Runtime product identity and encrypted Bedrock credentials.</p></div>
+    <div><h1 className="text-2xl font-semibold">Branding & AWS</h1><p className="text-sm text-muted-foreground">Runtime product identity, encrypted Bedrock credentials, and inference settings.</p></div>
     {error && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
     {message && <p className="rounded-md bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">{message}</p>}
     <div className="grid gap-5 xl:grid-cols-2">
@@ -106,6 +115,13 @@ function Settings() {
         <div className="space-y-2 rounded-lg border p-4"><Label>Connection test model</Label><div className="flex gap-2"><Select value={testModel} onValueChange={setTestModel}><SelectTrigger className="flex-1"><SelectValue placeholder="Select configured model" /></SelectTrigger><SelectContent>{models.map((model) => <SelectItem key={model.id} value={model.modelId}>{model.name} ({model.modelId})</SelectItem>)}</SelectContent></Select><Button variant="outline" disabled={!testModel || saving} onClick={() => void run(async () => {
           const result = await managementFetch<{ success: boolean; message: string }>("/aws/test", { method: "POST", body: JSON.stringify({ modelId: testModel }) }); setMessage(result.message); await load();
         }, "Bedrock connection succeeded")}><IconFlask />Test</Button></div>{aws.lastTestedAt && <p className={`text-xs ${aws.lastTestSucceeded ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>{aws.lastTestMessage} · {new Date(aws.lastTestedAt).toLocaleString()}</p>}</div>
+      </CardContent></Card>
+
+      <Card><CardHeader><CardTitle>Inference</CardTitle><CardDescription>Controls for the OpenAI-compatible API and playground.</CardDescription></CardHeader><CardContent>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1"><Label htmlFor="remote-image-urls">Download image URLs</Label><p className="text-sm text-muted-foreground">Fetch http(s) <code>image_url</code> inputs for the model. Only public addresses on default ports are contacted, with size and time limits. When off, clients must send images as base64 data URLs.</p></div>
+          <Switch id="remote-image-urls" checked={inference?.remoteImageUrlsEnabled ?? true} disabled={saving || !inference} onCheckedChange={saveInference} />
+        </div>
       </CardContent></Card>
     </div>
   </div>;

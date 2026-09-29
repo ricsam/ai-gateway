@@ -15,6 +15,13 @@
       "when": 1785913200000,
       "tag": "0001_timescale_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790686836856,
+      "tag": "0002_model_reasoning_and_image_settings",
+      "breakpoints": true
     }
   ]
 }

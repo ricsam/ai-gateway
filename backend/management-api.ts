@@ -96,6 +96,7 @@ const OPENAPI = {
     "/auth/providers/{id}/test": { post: { summary: "Test provider configuration" } },
     "/branding": { get: { summary: "Get branding" }, put: { summary: "Update branding" } },
     "/branding/assets/{kind}": { post: { summary: "Upload a logo or favicon" }, delete: { summary: "Delete an uploaded asset" } },
+    "/settings": { get: { summary: "Get runtime inference settings" }, put: { summary: "Update runtime inference settings (shares the branding revision)" } },
     "/aws": { get: { summary: "Get redacted AWS configuration" }, put: { summary: "Update AWS configuration" } },
     "/aws/test": { post: { summary: "Test configured AWS credentials against a Bedrock model" } },
     "/models": { get: { summary: "List configured models" } },
@@ -296,6 +297,25 @@ export async function handleManagementApi(request: Request): Promise<Response> {
         return changed!;
       });
       return response(requestId, { data: settings });
+    }
+    if (path === "/settings" && request.method === "GET") {
+      await requireManagementPrincipal(request, "settings.read");
+      const [settings] = await db.select({ revision: applicationSettingsTable.revision, remoteImageUrlsEnabled: applicationSettingsTable.remoteImageUrlsEnabled })
+        .from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
+      return response(requestId, { data: settings ?? { revision: 1, remoteImageUrlsEnabled: true } });
+    }
+    if (path === "/settings" && request.method === "PUT") {
+      const principal = await requireManagementPrincipal(request, "settings.write"); const data = await body<{ revision?: number; remoteImageUrlsEnabled?: unknown }>(request);
+      const [current] = await db.select().from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
+      if (!current || data.revision !== current.revision) return failure(requestId, 409, "revision_conflict", "Settings have changed");
+      if (data.remoteImageUrlsEnabled !== undefined && typeof data.remoteImageUrlsEnabled !== "boolean") return failure(requestId, 400, "validation_error", "remoteImageUrlsEnabled must be a boolean");
+      const values = data.remoteImageUrlsEnabled === undefined ? {} : { remoteImageUrlsEnabled: data.remoteImageUrlsEnabled };
+      const settings = await db.transaction(async (tx) => {
+        const [changed] = await tx.update(applicationSettingsTable).set({ ...values, revision: current.revision + 1, updatedAt: new Date() }).where(eq(applicationSettingsTable.id, "main")).returning();
+        await tx.insert(auditEventsTable).values({ actorType: principal.actorType, actorId: principal.actorId, action: "settings.updated", targetType: "application_settings", targetId: "main", requestId, metadata: values });
+        return changed!;
+      });
+      return response(requestId, { data: { revision: settings.revision, remoteImageUrlsEnabled: settings.remoteImageUrlsEnabled } });
     }
     if ((match = path.match(/^\/branding\/assets\/(logo|favicon)$/)) && request.method === "POST") {
       const principal = await requireManagementPrincipal(request, "branding.write"); const bytes = new Uint8Array(await request.arrayBuffer());

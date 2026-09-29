@@ -11,6 +11,7 @@ import { addCredits, calculateCost } from "./credit-service";
 import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
+import { isReasoningEffort, isReasoningMode, supportedReasoningEfforts } from "@/shared/reasoning";
 import {
   getBalanceBurndown,
   getCreditsConsumed,
@@ -89,6 +90,8 @@ function modelResponse(model: typeof modelsTable.$inferSelect) {
     contextWindow: model.contextWindow,
     maxOutputTokens: model.maxOutputTokens,
     thinking: model.thinking,
+    reasoningMode: isReasoningMode(model.reasoningMode) ? model.reasoningMode : "auto" as const,
+    defaultReasoningEffort: isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
     managedCache: model.managedCache,
     region: model.region,
     enabled: model.enabled,
@@ -116,6 +119,8 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
       cacheReadPricePerMTok: model.cacheReadPricePerMTok ?? undefined,
       cacheWrite5mPricePerMTok: model.cacheWrite5mPricePerMTok ?? undefined,
       cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
+      reasoningEfforts: supportedReasoningEfforts(model),
+      defaultReasoningEffort: model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
     })) };
   },
 

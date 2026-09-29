@@ -1,5 +1,9 @@
 import { defineContract, Status } from "@richie-rpc/core";
 import { z } from "zod";
+import { REASONING_EFFORT_VALUES, REASONING_MODES } from "./reasoning";
+
+const reasoningModeSchema = z.enum(REASONING_MODES);
+const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
 
 const modelSchema = z.object({
   id: z.string(),
@@ -16,6 +20,8 @@ const modelSchema = z.object({
   contextWindow: z.number().nullable(),
   maxOutputTokens: z.number(),
   thinking: z.boolean(),
+  reasoningMode: reasoningModeSchema,
+  defaultReasoningEffort: reasoningEffortSchema.nullable(),
   managedCache: z.boolean(),
   region: z.string().nullable(),
   enabled: z.boolean(),
@@ -82,6 +88,9 @@ export const contract = defineContract({
       maxTokens: z.number().optional(), maxOutputTokens: z.number(), inputPricePerMTok: z.number(),
       outputPricePerMTok: z.number(), cacheReadPricePerMTok: z.number().optional(),
       cacheWrite5mPricePerMTok: z.number().optional(), cacheWrite1hPricePerMTok: z.number().optional(),
+      /** reasoning_effort values the model accepts; empty when reasoning is disabled. */
+      reasoningEfforts: z.array(reasoningEffortSchema),
+      defaultReasoningEffort: reasoningEffortSchema.nullable(),
     })) },
   },
   getUserUsageLogs: {
@@ -152,6 +161,7 @@ export const contract = defineContract({
       cacheWrite5mPricePerMTok: z.number().nonnegative().optional(), cacheWrite1hPricePerMTok: z.number().nonnegative().optional(),
       cacheReadPricePerMTok: z.number().nonnegative().optional(), contextWindow: z.number().positive().optional(),
       maxOutputTokens: z.number().positive().optional(), thinking: z.boolean().optional(), managedCache: z.boolean().optional(),
+      reasoningMode: reasoningModeSchema.optional(), defaultReasoningEffort: reasoningEffortSchema.nullable().optional(),
       enabled: z.boolean().optional(), region: z.string().optional(),
     }),
     responses: { [Status.Created]: modelSchema },
@@ -164,6 +174,7 @@ export const contract = defineContract({
       cacheWrite5mPricePerMTok: z.number().nonnegative().optional(), cacheWrite1hPricePerMTok: z.number().nonnegative().optional(),
       cacheReadPricePerMTok: z.number().nonnegative().optional(), contextWindow: z.number().positive().optional(),
       maxOutputTokens: z.number().positive().optional(), thinking: z.boolean().optional(), managedCache: z.boolean().optional(),
+      reasoningMode: reasoningModeSchema.optional(), defaultReasoningEffort: reasoningEffortSchema.nullable().optional(),
       region: z.string().optional(), enabled: z.boolean().optional(),
     }),
     responses: { [Status.OK]: modelSchema },

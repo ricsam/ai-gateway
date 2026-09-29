@@ -92,6 +92,18 @@ export async function* transformStream(
       const delta = event.contentBlockDelta.delta;
       const blockIndex = event.contentBlockDelta.contentBlockIndex ?? 0;
       
+      // Handle reasoning delta (non-standard reasoning_content extension)
+      if (delta && "reasoningContent" in delta && delta.reasoningContent && "text" in delta.reasoningContent && delta.reasoningContent.text) {
+        const chunk: OpenAIChatCompletionChunk = {
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model,
+          choices: [{ index: 0, delta: { reasoning_content: delta.reasoningContent.text }, finish_reason: null, logprobs: null }],
+        };
+        yield formatSSE(chunk);
+      }
+
       // Handle text delta
       if (delta && "text" in delta && delta.text !== undefined) {
         const chunk: OpenAIChatCompletionChunk = {

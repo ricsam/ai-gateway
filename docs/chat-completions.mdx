@@ -1,13 +1,13 @@
 ---
 title: "Chat Completions"
-description: "Use messages, streaming, vision inputs, reasoning controls, and request IDs."
+description: "Use messages, streaming, image inputs, reasoning effort, and request IDs."
 ---
 
 Send OpenAI-compatible requests to `POST /v1/chat/completions`. The key requires `ai.invoke`.
 
 ## Messages
 
-Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`. System and developer messages become Bedrock system blocks. Consecutive user or assistant messages are consolidated because Bedrock Converse expects alternating roles.
+Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`. System and developer messages become Bedrock system blocks. Consecutive user or assistant messages are consolidated because Bedrock Converse expects alternating roles. Message content may be a string or an array of OpenAI content parts: text parts for every role, image parts for `user` and `tool` messages, and refusal parts for `assistant` messages.
 
 ```bash
 curl https://gateway.example.com/v1/chat/completions \
@@ -24,7 +24,9 @@ curl https://gateway.example.com/v1/chat/completions \
   }'
 ```
 
-Supported generation controls include `max_tokens`, `temperature`, `top_p`, and `stop`. Only `n: 1` is supported. The requested output limit cannot exceed the model's administrator-configured maximum.
+Supported generation controls include `max_tokens` (or its newer alias `max_completion_tokens`, which wins when both are sent), `temperature`, `top_p`, and `stop`. Only `n: 1` is supported. The requested output limit cannot exceed the model's administrator-configured maximum.
+
+Invalid requests return an OpenAI-style error whose `param` names the offending field, for example `messages[2].content[1].image_url.url`.
 
 ## Streaming
 
@@ -49,38 +51,82 @@ Each `data:` event contains a `chat.completion.chunk`. The stream ends with:
 
 The final JSON chunk includes usage when Bedrock reports it. The server sends heartbeat comments during quiet periods to keep intermediaries from closing a valid stream.
 
-## Reasoning
+## Reasoning effort
 
-For a model configured with thinking support, set `reasoning_effort` to `low`, `medium`, or `high`. The proxy maps these to token budgets of 1,024, 4,096, and 10,000. Streaming reasoning text appears in the non-standard `choices[0].delta.reasoning_content` field.
+For a model with reasoning enabled by an administrator, set `reasoning_effort` to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. When a request omits it, the model's configured default effort (if any) applies; otherwise the model's own default behavior is used. For models without reasoning enabled, `reasoning_effort` is ignored.
 
 ```json
 {
-  "model": "your-thinking-model-id",
-  "reasoning_effort": "medium",
+  "model": "global.anthropic.claude-opus-4-7",
+  "reasoning_effort": "high",
   "messages": [{"role": "user", "content": "Solve the problem step by step."}]
 }
 ```
 
-The configured model output limit must be larger than the selected reasoning budget.
+The gateway translates the value for the model family on Bedrock:
+
+| Model family | Bedrock request |
+| --- | --- |
+| Claude Opus 4.6 and Sonnet 4.6 or newer (including Opus 4.7/4.8 and Claude 5 models) | Adaptive thinking with `output_config.effort`. Effort shapes all output — thinking, text, and tool calls. |
+| Claude Opus 4.5 | An extended-thinking token budget plus `output_config.effort` (the `effort-2025-11-24` beta is added automatically). |
+| Claude Sonnet/Haiku 4.5, Opus 4.1, Claude 4, Claude 3.7 Sonnet | An extended-thinking token budget: 1,024 (`low`), 4,096 (`medium`), or 10,000 (`high`). The configured output limit must be larger than the budget. |
+| Amazon Nova 2 | `reasoningConfig.maxReasoningEffort` (`low`, `medium`, `high`). |
+| OpenAI gpt-oss | `reasoning_effort` (`low`, `medium`, `high`). |
+
+- `minimal` behaves like `low`. A level the model does not support is lowered to the nearest supported level (for example `xhigh` becomes `high` on Claude Sonnet 4.6, which supports `low`, `medium`, `high`, and `max`), or raised when no lower level exists.
+- `none` leaves reasoning off. On models that think by default and allow turning it off (Claude Opus 5 and Sonnet 5 use `thinking.type: "disabled"`, Claude Sonnet 5.5 uses `"between_tools"`), the gateway sends the model's off switch; always-thinking models such as Claude Opus 5.5 keep their default.
+- Claude's thinking modes require default sampling, so the gateway omits `temperature` and `top_p` whenever it turns reasoning on for a Claude model. At `high` effort, Nova 2 also rejects `temperature`, `top_p`, and an output cap, so those are omitted for that request.
+- Changing effort or thinking settings starts a new Anthropic prompt-cache prefix. Keep effort constant within a cached conversation.
+
+Readable reasoning appears in the non-standard `reasoning_content` field: `choices[0].delta.reasoning_content` when streaming and `choices[0].message.reasoning_content` otherwise. The gateway requests summarized thinking on Claude models whose default is to omit thinking text. Adaptive models may skip thinking for simple prompts, in which case no reasoning is returned.
+
+Discover which values a model accepts in the model catalog: the dashboard's model pricing page lists each model's effort levels.
 
 ## Image input
 
-User messages can include OpenAI content parts. Images must use a base64 data URI in PNG, JPEG, GIF, or WebP format:
+User messages can include images as `image_url` content parts. Send either a base64 data URL or a public `http(s)` URL:
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "text", "text": "What is shown here?"},
-    {
-      "type": "image_url",
-      "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}
-    }
+    {"type": "text", "text": "What is shown in these images?"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}},
+    {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}}
   ]
 }
 ```
 
-External image URLs are not fetched. They are passed to the model only as a text placeholder, so encode the image data in the request.
+- Supported formats are PNG, JPEG, GIF, and WebP. The gateway detects the format from the image bytes, so a mislabeled data URL (for example PNG bytes declared as `image/jpeg`) still works. Other formats, such as SVG or HEIC, are rejected with `invalid_image`.
+- Bedrock limits each image to 3.75 MB and 8,000 × 8,000 pixels. Downscale large images before sending them.
+- `detail` is accepted for compatibility and ignored; Bedrock has no equivalent.
+- The model must support image input. Text-only models return a Bedrock validation error.
+
+### Image URLs
+
+The gateway downloads `http(s)` image URLs before calling Bedrock. To protect internal networks, downloads:
+
+- only use the scheme's default port (80 or 443) and reject URLs containing credentials;
+- only connect to public unicast addresses — private, loopback, link-local, carrier-grade NAT, and other special-purpose ranges are refused, including after DNS resolution and on every redirect (up to 3);
+- time out after 10 seconds and stop at 3.75 MB;
+- accept only responses whose bytes are PNG, JPEG, GIF, or WebP, regardless of the declared content type.
+
+A request may reference up to 20 distinct image URLs. Download failures return `400` with code `invalid_image_url` and the offending `param`. Administrators can turn downloads off in **Admin → Brand & AWS → Inference**; requests with image URLs then fail with `remote_image_urls_disabled`, and clients must send data URLs instead.
+
+### Images in tool results
+
+As a gateway extension, a `tool` message may carry an array of text and image parts — for example a screenshot returned by a browser tool. The images are forwarded inside the Bedrock tool result:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_1",
+  "content": [
+    {"type": "text", "text": "Captured the page"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}}
+  ]
+}
+```
 
 ## Safe retries
 

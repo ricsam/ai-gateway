@@ -26,7 +26,7 @@ curl https://gateway.example.com/management/v1/users \
   -H 'Authorization: Bearer aigm_...'
 ```
 
-Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
+Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, inference settings, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
 
 ## Inference API
 
@@ -43,6 +43,8 @@ Core resources include users and passwords, groups/memberships and bulk user con
 | `POST` | `/api/gateway/bedrock/converse-stream` | `ai.invoke` |
 
 The four native compatibility endpoints retain Bedrock request/response shapes, managed prompt caching, raw NDJSON/binary streaming, cancellation, and metered settlement. Send a stable `X-Request-ID` when a client may retry a completed request; settlement receipts make the same request ID exactly-once. The OpenAI endpoint accepts the same header.
+
+The OpenAI endpoint accepts images as base64 data URLs or public `http(s)` URLs (downloaded under an SSRF-restricted policy that administrators can turn off in Admin → Brand & AWS → Inference), including images inside tool results. `reasoning_effort` (`none` through `max`) maps to Claude adaptive thinking with `output_config.effort`, Claude thinking budgets, Nova 2 `reasoningConfig`, or gpt-oss `reasoning_effort` according to each model's reasoning control, and models can define a default effort. See [Chat Completions](docs/chat-completions.mdx).
 
 Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 

@@ -4,6 +4,7 @@
  * These types define the OpenAI-compatible format for the proxy endpoint.
  * The proxy translates between these types and AWS Bedrock Converse API.
  */
+import type { ReasoningEffort } from "@/shared/reasoning";
 
 // ============================================================================
 // Content Parts
@@ -16,10 +17,17 @@ export interface OpenAITextContentPart {
 
 export interface OpenAIImageContentPart {
   type: "image_url";
+  /** Clients occasionally send the URL string directly; validation normalizes it to the object form. */
   image_url: {
+    /** A base64 `data:image/...` URL or a public http(s) URL. */
     url: string;
     detail?: "auto" | "low" | "high";
   };
+}
+
+export interface OpenAIRefusalContentPart {
+  type: "refusal";
+  refusal: string;
 }
 
 export type OpenAIContentPart = OpenAITextContentPart | OpenAIImageContentPart;
@@ -71,13 +79,13 @@ export type OpenAIToolChoice =
 
 export interface OpenAISystemMessage {
   role: "system";
-  content: string;
+  content: string | OpenAITextContentPart[];
   name?: string;
 }
 
 export interface OpenAIDeveloperMessage {
   role: "developer";
-  content: string;
+  content: string | OpenAITextContentPart[];
   name?: string;
 }
 
@@ -89,14 +97,15 @@ export interface OpenAIUserMessage {
 
 export interface OpenAIAssistantMessage {
   role: "assistant";
-  content: string | null;
+  content?: string | null | Array<OpenAITextContentPart | OpenAIRefusalContentPart>;
   name?: string;
   tool_calls?: OpenAIToolCall[];
 }
 
 export interface OpenAIToolMessage {
   role: "tool";
-  content: string;
+  /** Image parts are a gateway extension mapped to Bedrock tool-result image blocks. */
+  content: string | OpenAIContentPart[];
   tool_call_id: string;
 }
 
@@ -116,10 +125,12 @@ export interface OpenAIChatCompletionRequest {
   messages: OpenAIMessage[];
   temperature?: number;
   max_tokens?: number;
+  /** Newer alias for max_tokens; takes precedence when both are sent. */
+  max_completion_tokens?: number;
   top_p?: number;
   stop?: string | string[];
   stream?: boolean;
-  reasoning_effort?: "low" | "medium" | "high";
+  reasoning_effort?: ReasoningEffort | null;
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   // These are accepted but not mapped to Bedrock
@@ -154,6 +165,8 @@ export interface OpenAICreditUsage {
 export interface OpenAIResponseMessage {
   role: "assistant";
   content: string | null;
+  /** Non-standard extension carrying summarized model reasoning when the model returns it. */
+  reasoning_content?: string;
   tool_calls?: OpenAIToolCall[];
 }
 

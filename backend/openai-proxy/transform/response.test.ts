@@ -35,4 +35,28 @@ describe("Bedrock to OpenAI response transformation", () => {
     });
     expect(result.usage).toEqual({ prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 });
   });
+
+  test("surfaces summarized reasoning and ignores empty or redacted reasoning blocks", () => {
+    const result = transformResponse(asBedrockResponse({
+      output: {
+        message: {
+          role: "assistant",
+          content: [
+            { reasoningContent: { reasoningText: { text: "Consider the parity of both numbers.", signature: "sig" } } },
+            { reasoningContent: { reasoningText: { text: "", signature: "omitted" } } },
+            { reasoningContent: { redactedContent: new Uint8Array([1, 2]) } },
+            { text: "The sum is even." },
+          ],
+        },
+      },
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 40, totalTokens: 45 },
+    }), "bedrock-model");
+
+    expect(result.choices[0]?.message).toEqual({
+      role: "assistant",
+      content: "The sum is even.",
+      reasoning_content: "Consider the parity of both numbers.",
+    });
+  });
 });

@@ -31,13 +31,38 @@ Open **Admin → Models** and configure:
 | Input/output price | USD per million tokens used for credit settlement |
 | Cache prices | Optional read, 5-minute write, and 1-hour write prices per million tokens |
 | Context window | Informational input capacity shown to users |
-| Max output tokens | Hard upper bound enforced by the proxy |
+| Max output tokens | Hard upper bound enforced by the proxy (except Amazon Nova 2 at `high` reasoning effort, which rejects an output cap) |
 | Region override | Uses a region different from the AWS default |
-| Thinking | Allows `reasoning_effort` requests |
+| Reasoning / effort | Honors `reasoning_effort` requests and enables the two settings below |
+| Reasoning control | How effort is sent to Bedrock; **Automatic** detects it from the model ID |
+| Default effort | Effort applied when a request omits `reasoning_effort`; **Model default** leaves it to the request |
 | Managed cache | Inserts supported cache points into Converse and Anthropic Invoke requests |
 | Enabled | Makes the model available to API users |
 
 Use **Test model before saving** to verify that the identifier, region, credentials, and Bedrock access are correct.
+
+## Reasoning effort
+
+With **Reasoning / effort** enabled, API clients and the playground can send `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The **Reasoning control** decides the Bedrock request shape:
+
+| Control | Bedrock request | Use for |
+| --- | --- | --- |
+| Claude adaptive thinking + effort | `thinking: {type: "adaptive"}` and `output_config.effort` | Claude Opus 4.6, Sonnet 4.6, and newer |
+| Claude extended thinking budget | `thinking: {type: "enabled", budget_tokens}` | Claude 4.5 and earlier, Claude 3.7 Sonnet |
+| Amazon Nova reasoning effort | `reasoningConfig.maxReasoningEffort` | Amazon Nova 2 |
+| OpenAI reasoning effort | `reasoning_effort` | OpenAI gpt-oss |
+
+**Automatic** recognizes Bedrock model IDs, cross-Region inference profile IDs (`us.`, `eu.`, `global.`, and similar prefixes), and ARNs that contain the model name. The dialog shows what was detected and which effort levels the model accepts. Unsupported levels in requests are lowered to the nearest supported level. Identifiers that do not reveal the model — for example application inference profile or provisioned-throughput ARNs — keep the historical Claude thinking-budget behavior, so choose the matching control explicitly for them.
+
+<Warning>
+  Newer Claude models (Opus 4.7 and later, and Claude 5 models) reject thinking budgets. Leave the control on **Automatic** or select **Claude adaptive thinking + effort** for them.
+</Warning>
+
+A **Default effort** makes reasoning apply even to clients that never send `reasoning_effort`, which raises output-token usage. **None** as a default turns thinking off on models that think by default and allow disabling it. Effort changes start a new prompt-cache prefix, so prefer a stable default. Reasoning tokens are billed as output tokens.
+
+## Image URL downloads
+
+The OpenAI-compatible API accepts images as base64 data URLs or `http(s)` URLs. **Admin → Brand & AWS → Inference → Download image URLs** controls whether the gateway downloads image URLs (enabled by default). Downloads only reach public addresses on default ports, follow at most three re-validated redirects, and are limited to 10 seconds and 3.75 MB per image. Turn downloads off if the deployment must not make outbound requests on behalf of API clients; data URLs keep working. The same setting is available through the management API at `/management/v1/settings`.
 
 ## Region selection
 

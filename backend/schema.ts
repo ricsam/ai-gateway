@@ -137,6 +137,8 @@ export const applicationSettingsTable = pgTable("application_settings", {
   faviconUrl: text("favicon_url"),
   primaryColor: text("primary_color").notNull().default("#2563eb"),
   primaryForegroundColor: text("primary_foreground_color").notNull().default("#ffffff"),
+  /** Whether the OpenAI-compatible API downloads http(s) image_url inputs. */
+  remoteImageUrlsEnabled: boolean("remote_image_urls_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
 }, (table) => [check("application_settings_singleton_check", sql`${table.id} = 'main'`)]);
 
@@ -181,6 +183,10 @@ export const modelsTable = pgTable("models", {
   contextWindow: integer("context_window"),
   maxOutputTokens: integer("max_output_tokens").notNull().default(32000),
   thinking: boolean("thinking").notNull().default(false),
+  /** How reasoning_effort maps to Bedrock; see shared/reasoning.ts REASONING_MODES. */
+  reasoningMode: text("reasoning_mode").notNull().default("auto"),
+  /** reasoning_effort applied when a request omits it; null leaves the model default. */
+  defaultReasoningEffort: text("default_reasoning_effort"),
   managedCache: boolean("managed_cache").notNull().default(false),
   region: text("region"),
   enabled: boolean("enabled").notNull().default(true),
