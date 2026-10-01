@@ -3,6 +3,22 @@ entries:
   ai-gateway:
   - apiVersion: v2
     appVersion: latest
+    created: "2026-10-01T15:02:46.709988851Z"
+    description: Runtime-brandable OpenAI-compatible AI gateway for AWS Bedrock
+    digest: 66e28ee0a9a6a89a3f2b5c59e4e7c648e4fc3cf6928a80917cebbfc5d8cf4185
+    home: https://github.com/ricsam/ai-gateway
+    maintainers:
+    - name: ricsam
+      url: https://github.com/ricsam
+    name: ai-gateway
+    sources:
+    - https://github.com/ricsam/ai-gateway
+    type: application
+    urls:
+    - ai-gateway-0.1.3.tgz
+    version: 0.1.3
+  - apiVersion: v2
+    appVersion: latest
     created: "2026-09-23T21:40:29.705831979Z"
     description: Runtime-brandable OpenAI-compatible AI gateway for AWS Bedrock
     digest: 3f6c01ec202c3687916a08dd798f1236df95f68320391196f2f1aa617b8c93d7
@@ -49,4 +65,4 @@ entries:
     urls:
     - https://ricsam.github.io/ai-gateway/ai-gateway-0.1.0.tgz
     version: 0.1.0
-generated: "2026-09-23T21:40:29.705841276Z"
+generated: "2026-10-01T15:02:46.710005121Z"
