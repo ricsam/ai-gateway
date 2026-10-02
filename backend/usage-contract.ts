@@ -177,12 +177,14 @@ export function buildNativeMonthlyUsage(params: {
   balance: number;
   monthlyAllocation: number;
   metrics: UsageMetrics;
+  dashboardUrl?: string;
 }) {
   const metrics = normalizeUsageMetrics(params.metrics);
   const allocation = finite(params.monthlyAllocation);
   const balance = finite(params.balance);
   return {
     object: "usage_summary",
+    ...(params.dashboardUrl ? { dashboard_url: params.dashboardUrl } : {}),
     currency: "USD",
     period: {
       start: params.range.start.toISOString(),

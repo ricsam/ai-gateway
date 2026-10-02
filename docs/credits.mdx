@@ -15,6 +15,7 @@ curl https://gateway.example.com/v1/credits \
 ```json
 {
   "object": "credit_balance",
+  "dashboard_url": "https://gateway.example.com/profile",
   "currency": "USD",
   "balance": 18.42,
   "monthly_allocation": 25
@@ -35,6 +36,7 @@ curl https://gateway.example.com/v1/usage \
 ```json
 {
   "object": "usage_summary",
+  "dashboard_url": "https://gateway.example.com/profile",
   "currency": "USD",
   "period": {
     "start": "2025-03-01T00:00:00.000Z",
@@ -61,6 +63,22 @@ curl https://gateway.example.com/v1/usage \
 ```
 
 The period is the current UTC calendar month. `period.end` is exclusive. `credits.used` is the metered USD value charged during that period, while `credits.balance` is the current balance. `percent_used` is `used / monthly_allocation × 100`, is not capped at 100, and is `null` when the monthly allocation is zero. The token `total` includes input, output, cache-read, and cache-write tokens.
+
+## Full report link
+
+Both native responses include `dashboard_url`, an absolute URL built from the
+configured public `BASE_URL` and `/profile`. Downstream apps can offer a
+**View full usage** link without knowing the gateway's routes. This optional
+metadata is an integration extension, not a standard OpenAI field.
+
+The link opens the regular signed-in **Profile, API & usage** page, where the
+user can review charts, models, and usage history. It contains no API key or
+user identifier and does not sign the user in; the browser session determines
+whose report is displayed. Clients must not forward API credentials to it.
+
+The gateway returns machine-readable accounting values and ISO dates. Clients
+are responsible for readable labels and localized amounts/dates, preserving the
+UTC reporting boundaries and distinguishing current balance from monthly spend.
 
 ## LiteLLM-compatible daily activity
 

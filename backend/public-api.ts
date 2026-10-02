@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import db from "@/db";
+import env from "./env";
 import { getPublicConfig } from "./config-service";
 import { handleOpenAIProxy } from "./openai-proxy/handler";
 import {
@@ -85,6 +86,7 @@ export async function handleCredits(request: Request): Promise<Response> {
   if (!result.ok) return result.response;
   return Response.json({
     object: "credit_balance",
+    dashboard_url: new URL("/profile", env.BASE_URL).href,
     currency: "USD",
     balance: result.user.balance,
     monthly_allocation: result.user.monthlyAllocation,

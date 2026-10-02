@@ -64,6 +64,7 @@ describe("native monthly summary", () => {
   test("reports spend percentage, requests, and detailed cache token totals", () => {
     const summary = buildNativeMonthlyUsage({
       range,
+      dashboardUrl: "https://gateway.example.com/profile",
       balance: 7.5,
       monthlyAllocation: 10,
       metrics: {
@@ -76,6 +77,7 @@ describe("native monthly summary", () => {
         requests: 4,
       },
     });
+    expect(summary.dashboard_url).toBe("https://gateway.example.com/profile");
     expect(summary.credits).toEqual({ used: 2.5, balance: 7.5, monthly_allocation: 10, percent_used: 25 });
     expect(summary.requests).toBe(4);
     expect(summary.tokens).toEqual({

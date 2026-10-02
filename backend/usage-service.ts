@@ -1,5 +1,6 @@
 import { inArray, sql } from "drizzle-orm";
 import db from "./db";
+import env from "./env";
 import { creditEventsTable } from "./schema";
 import {
   METERED_USAGE_EVENT_TYPES,
@@ -97,6 +98,7 @@ export async function getNativeMonthlyUsage(params: {
 }) {
   const range = currentUtcMonthRange(params.now);
   return buildNativeMonthlyUsage({
+    dashboardUrl: new URL("/profile", env.BASE_URL).href,
     range,
     balance: params.balance,
     monthlyAllocation: params.monthlyAllocation,
