@@ -5,7 +5,7 @@ description: "Install AI Gateway from the hosted chart repository or a local che
 
 The project publishes `ai-gateway` as a conventional HTTPS Helm repository on GitHub Pages at `https://ricsam.github.io/ai-gateway`. GitHub Actions packages each chart release, updates the `gh-pages` branch, and deploys that branch with GitHub Pages.
 
-The chart uses the public, pre-built multi-platform image `ghcr.io/ricsam/ai-gateway:latest` by default. The image supports Linux AMD64 and ARM64.
+The chart pins a public, pre-built `ghcr.io/ricsam/ai-gateway:sha-<full-commit-sha>` image by default. The image supports Linux AMD64 and ARM64; chart `appVersion` identifies the pinned application build.
 
 ## Install from the chart repository
 
@@ -45,7 +45,7 @@ The chart uses the public, pre-built multi-platform image `ghcr.io/ricsam/ai-gat
   </Step>
 </Steps>
 
-For reproducible production deployments, override the moving `latest` default with an immutable image tag:
+To override the chart's pinned application build, select another published immutable image tag:
 
 ```bash
 helm upgrade --install ai-gateway ai-gateway/ai-gateway \
@@ -104,7 +104,7 @@ The `Publish container image` GitHub Actions workflow builds the Dockerfile for 
 
 The `Release Helm chart` workflow lints and packages every new chart version, creates a GitHub release, updates the `gh-pages` branch's `index.yaml`, and deploys the branch through GitHub Pages.
 
-Bump `version` in `charts/ai-gateway/Chart.yaml` whenever the chart changes, then push to `main`. Chart versions are immutable; the release step skips a version that already exists.
+Publish and verify the application image first. Bump `version` in `charts/ai-gateway/Chart.yaml`, update `appVersion` and the default `image.tag` to the published `sha-<full-commit-sha>`, then push to `main`. Chart versions are immutable; the release step skips a version that already exists.
 
 ```text
 Repository: https://ricsam.github.io/ai-gateway
