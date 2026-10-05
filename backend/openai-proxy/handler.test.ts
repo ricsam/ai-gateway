@@ -9,6 +9,7 @@ let remoteImagesEnabled = true;
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
+let settlements: Array<Record<string, unknown>> = [];
 
 mock.module("@/db", () => ({
   default: { select: () => ({ from: () => ({ where: () => ({ limit: async () => (modelRow ? [modelRow] : []) }) }) }) },
@@ -24,7 +25,10 @@ mock.module("../proxy-auth", () => {
 mock.module("../credit-service", () => ({
   checkBalance: async () => 100,
   calculateCostBreakdown: () => ({ total: 0.01, inputCost: 0.005, outputCost: 0.005, cacheReadCost: 0, cacheWrite5mCost: 0, cacheWrite1hCost: 0 }),
-  deductCredits: async () => ({ actualCost: 0.01, creditsCharged: 0.01, balanceAfter: 99.99, partiallyCharged: false }),
+  deductCredits: async (input: Record<string, unknown>) => {
+    settlements.push(input);
+    return { actualCost: 0.01, creditsCharged: 0.01, balanceAfter: 99.99, partiallyCharged: false };
+  },
 }));
 mock.module("../config-service", () => ({ getRemoteImageUrlsEnabled: async () => remoteImagesEnabled }));
 mock.module("../bedrock", () => ({
@@ -64,6 +68,7 @@ beforeEach(() => {
   remoteImagesEnabled = true;
   sent = [];
   streamEvents = [];
+  settlements = [];
   converseOutput = {
     output: { message: { role: "assistant", content: [
       { reasoningContent: { reasoningText: { text: "Looking at the image.", signature: "sig" } } },
@@ -75,6 +80,34 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible handler", () => {
+  for (const stream of [false, true]) {
+    test(`reports all context tokens with separate billing categories (stream=${stream})`, async () => {
+      const usage = {
+        inputTokens: 2, outputTokens: 510, totalTokens: 512,
+        cacheReadInputTokens: 7683, cacheWriteInputTokens: 1412,
+        cacheDetails: [{ ttl: "5m", inputTokens: 1000 }, { ttl: "1h", inputTokens: 412 }],
+      };
+      converseOutput = { output: { message: { role: "assistant", content: [{ text: "Done" }] } }, stopReason: "end_turn", usage };
+      streamEvents = [
+        { messageStart: { role: "assistant" } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "Done" } } },
+        { messageStop: { stopReason: "end_turn" } },
+        { metadata: { usage } },
+      ];
+      const response = await call({ model: "global.anthropic.claude-opus-4-7", stream, stream_options: { include_usage: true }, messages: [{ role: "user", content: "Hi" }] });
+      expect(response.status).toBe(200);
+      const body = stream
+        ? (await response.text()).split("\n\n").filter((frame) => frame.startsWith("data: {")).map((frame) => JSON.parse(frame.slice(6))).find((frame) => frame.usage)
+        : await response.json();
+      expect(body.usage).toMatchObject({
+        prompt_tokens: 9097, completion_tokens: 510, total_tokens: 9607,
+        prompt_tokens_details: { cached_tokens: 7683, cache_creation_tokens: 1412 },
+      });
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]).toMatchObject({ inputTokens: 2, outputTokens: 510, cacheReadTokens: 7683, cacheWrite5mTokens: 1000, cacheWrite1hTokens: 412 });
+    });
+  }
+
   test("sends images and adaptive effort to Bedrock and returns reasoning", async () => {
     const response = await call({
       model: "global.anthropic.claude-opus-4-7",

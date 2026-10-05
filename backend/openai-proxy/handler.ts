@@ -23,6 +23,7 @@ import { getRemoteImageUrlsEnabled } from "../config-service";
 import { isReasoningEffort, resolveReasoningProfile } from "@/shared/reasoning";
 import { transformRequest } from "./transform/request";
 import { transformResponse } from "./transform/response";
+import { transformUsage } from "./transform/usage";
 import { applyReasoning, ReasoningConfigError } from "./transform/reasoning";
 import { collectRemoteImageUrls, RequestValidationError, validateChatCompletionRequest } from "./transform/validate";
 import { ImageInputError, type ResolvedImage } from "./images";
@@ -716,11 +717,7 @@ async function handleStreamingRequest(
               created,
               model: requestedModel,
               choices: [],
-              usage: {
-                prompt_tokens: inputTokens,
-                completion_tokens: outputTokens,
-                total_tokens: inputTokens + outputTokens,
-              },
+              usage: transformUsage(event.metadata.usage),
             });
             if (!enqueued) {
               break;

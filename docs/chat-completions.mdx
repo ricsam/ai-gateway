@@ -51,6 +51,19 @@ Each `data:` event contains a `chat.completion.chunk`. The stream ends with:
 
 The final JSON chunk includes usage when Bedrock reports it. The server sends heartbeat comments during quiet periods to keep intermediaries from closing a valid stream.
 
+## Token usage and context
+
+Both streamed and non-streamed responses report per-request OpenAI-compatible `usage`:
+
+- `prompt_tokens` counts all input tokens, including cache reads and cache writes.
+- `completion_tokens` counts generated tokens.
+- `total_tokens` is their sum.
+- When caching is used, `prompt_tokens_details.cached_tokens` identifies cache reads. The LiteLLM-compatible `prompt_tokens_details.cache_creation_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` fields expose the cache breakdown. These counts are already included in `prompt_tokens`; do not add them again.
+
+Bedrock reports uncached input and cached input separately. The gateway combines them for this API while preserving separate billing categories internally.
+
+Clients own conversation history, tool results, and context resets. Use the latest model call's `prompt_tokens` to measure its input context, rather than summing usage across calls. Include the latest output or subsequent tool results in a local estimate when projecting the next request. `/v1/usage` reports account usage over a period; it is not a session context endpoint.
+
 ## Reasoning effort
 
 For a model with reasoning enabled by an administrator, set `reasoning_effort` to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. When a request omits it, the model's configured default effort (if any) applies; otherwise the model's own default behavior is used. For models without reasoning enabled, `reasoning_effort` is ignored.

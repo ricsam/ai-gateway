@@ -149,9 +149,17 @@ export interface OpenAIChatCompletionRequest {
 // ============================================================================
 
 export interface OpenAIUsage {
+  /** Total input, including cache reads and cache writes. */
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_tokens_details?: {
+    cached_tokens: number;
+    /** LiteLLM extension for newly cached input. */
+    cache_creation_tokens: number;
+  };
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 /** Authoritative credit settlement metadata returned to the built-in playground. */

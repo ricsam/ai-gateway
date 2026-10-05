@@ -8,6 +8,7 @@ import type {
   OpenAIResponseMessage,
 } from "./types";
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./utils";
+import { transformUsage } from "./usage";
 
 /**
  * Transform a Bedrock Converse response to OpenAI Chat Completion format
@@ -75,10 +76,6 @@ export function transformResponse(
     message.tool_calls = toolCalls;
   }
   
-  // Extract usage
-  const inputTokens = bedrockResponse.usage?.inputTokens ?? 0;
-  const outputTokens = bedrockResponse.usage?.outputTokens ?? 0;
-  
   // Map stop reason
   const finishReason = mapStopReason(bedrockResponse.stopReason);
   
@@ -95,10 +92,6 @@ export function transformResponse(
         logprobs: null,
       },
     ],
-    usage: {
-      prompt_tokens: inputTokens,
-      completion_tokens: outputTokens,
-      total_tokens: inputTokens + outputTokens,
-    },
+    usage: transformUsage(bedrockResponse.usage),
   };
 }

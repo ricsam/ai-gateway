@@ -2,8 +2,9 @@
  * Transform AWS Bedrock Converse stream to OpenAI Chat Completion SSE format
  */
 import type { ConverseStreamOutput } from "@aws-sdk/client-bedrock-runtime";
-import type { OpenAIChatCompletionChunk, OpenAIUsage } from "./types";
+import type { OpenAIChatCompletionChunk } from "./types";
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./utils";
+import { transformUsage } from "./usage";
 
 /**
  * Transform a Bedrock Converse stream to OpenAI SSE format
@@ -180,22 +181,13 @@ export async function* transformStream(
     
     // Handle metadata event (contains usage info)
     if (event.metadata) {
-      const inputTokens = event.metadata.usage?.inputTokens ?? 0;
-      const outputTokens = event.metadata.usage?.outputTokens ?? 0;
-      
-      const usage: OpenAIUsage = {
-        prompt_tokens: inputTokens,
-        completion_tokens: outputTokens,
-        total_tokens: inputTokens + outputTokens,
-      };
-      
       const chunk: OpenAIChatCompletionChunk = {
         id,
         object: "chat.completion.chunk",
         created,
         model,
         choices: [],
-        usage,
+        usage: transformUsage(event.metadata.usage),
       };
       yield formatSSE(chunk);
     }
