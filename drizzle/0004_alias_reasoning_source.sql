@@ -1,0 +1,2 @@
+ALTER TABLE "model_aliases" ADD COLUMN "reasoning_source" text DEFAULT 'alias' NOT NULL;--> statement-breakpoint
+ALTER TABLE "model_aliases" ADD CONSTRAINT "model_aliases_reasoning_source_check" CHECK ("model_aliases"."reasoning_source" in ('alias', 'client'));

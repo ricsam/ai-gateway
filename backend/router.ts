@@ -6,6 +6,7 @@ import { contract } from "@/shared/contract";
 import { requireAdmin } from "./admin-guard";
 import { aliasResponse, appResponse, assertModelPublicId, assertModelUnreferenced, catalogErrorResponse, deleteCatalogEntry, loadModelCatalog, lockModelCatalog, saveAlias, saveApp, validateModelWrite } from "./model-alias-service";
 import { listAvailableModels } from "./model-catalog";
+import { modelReasoningMetadata } from "./model-routing";
 import { authenticateRequest } from "./auth";
 import { updateUser } from "./user-service";
 import type { ManagementPrincipal } from "./management-auth";
@@ -13,7 +14,7 @@ import { addCredits, calculateCost } from "./credit-service";
 import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
-import { isReasoningEffort, isReasoningMode, supportedReasoningEfforts } from "@/shared/reasoning";
+import { isReasoningEffort, isReasoningMode } from "@/shared/reasoning";
 import {
   getBalanceBurndown,
   getCreditsConsumed,
@@ -114,17 +115,18 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
 
   getModels: async () => {
     const models = await listAvailableModels();
-    return { status: Status.OK, body: models.map(({ upstream: model, alias, modelId, name }) => ({
-      modelId, displayName: name, thinking: alias?.thinking ?? model.thinking, provider: model.provider,
-      ...(alias && { alias: { modelId: alias.modelId, thinking: alias.thinking, effort: alias.effort } }),
-      maxTokens: model.contextWindow ?? undefined, maxOutputTokens: model.maxOutputTokens,
-      inputPricePerMTok: model.inputPricePerMTok, outputPricePerMTok: model.outputPricePerMTok,
-      cacheReadPricePerMTok: model.cacheReadPricePerMTok ?? undefined,
-      cacheWrite5mPricePerMTok: model.cacheWrite5mPricePerMTok ?? undefined,
-      cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
-      reasoningEfforts: alias ? [] : supportedReasoningEfforts(model),
-      defaultReasoningEffort: alias ? alias.effort : model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
-    })) };
+    return { status: Status.OK, body: models.map((entry) => {
+      const { upstream: model, modelId, name } = entry;
+      return {
+        modelId, displayName: name, provider: model.provider,
+        ...modelReasoningMetadata(entry),
+        maxTokens: model.contextWindow ?? undefined, maxOutputTokens: model.maxOutputTokens,
+        inputPricePerMTok: model.inputPricePerMTok, outputPricePerMTok: model.outputPricePerMTok,
+        cacheReadPricePerMTok: model.cacheReadPricePerMTok ?? undefined,
+        cacheWrite5mPricePerMTok: model.cacheWrite5mPricePerMTok ?? undefined,
+        cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
+      };
+    }) };
   },
 
   getUserUsageLogs: async ({ query, context }) => ({

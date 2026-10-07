@@ -161,6 +161,89 @@ describe("OpenAI-compatible handler", () => {
     expect(sent[0]!.input.additionalModelRequestFields).toMatchObject({ output_config: { effort: "max" } });
     expect(text).toContain("credit_usage");
   });
+  for (const stream of [false, true]) {
+    for (const publicId of ["opus-max-thinking", "chat-app-max"]) {
+      test(`client alias respects OpenAI reasoning_effort (${publicId}, stream=${stream})`, async () => {
+        configureAlias();
+        aliases[0]!.reasoningSource = "client";
+        modelRow = model({ modelId: "anthropic.claude-opus-5", defaultReasoningEffort: "high" });
+        streamEvents = [{ messageStart: { role: "assistant" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
+        for (const effort of ["low", "none", undefined]) {
+          sent = [];
+          const response = await call({ model: publicId, stream, reasoning_effort: effort, messages: [{ role: "user", content: "Hi" }] });
+          expect(response.status).toBe(200);
+          const text = await response.text();
+          expect(text).toContain(`"model":"${publicId}"`);
+          expect(sent[0]!.input.modelId).toBe(modelRow!.modelId as string);
+          expect(sent[0]!.input.additionalModelRequestFields).toEqual(effort === "none"
+            ? { thinking: { type: "disabled" } }
+            : { thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: effort ?? "high" } });
+          expect(settlements.at(-1)!.modelId).toBe(modelRow!.modelId);
+        }
+      });
+    }
+  }
+  test("client alias leaves provider defaults alone when no request or upstream default is set", async () => {
+    configureAlias();
+    aliases[0]!.reasoningSource = "client";
+    aliases[0]!.thinking = false;
+    aliases[0]!.effort = null;
+    const response = await call({ model: "opus-max-thinking", temperature: 0.3, messages: [{ role: "user", content: "Hi" }] });
+    expect(response.status).toBe(200);
+    expect(sent[0]!.input.additionalModelRequestFields).toBeUndefined();
+    expect(sent[0]!.input.inferenceConfig?.temperature).toBe(0.3);
+  });
+  test("client aliases retain request validation and model output limits", async () => {
+    configureAlias();
+    aliases[0]!.reasoningSource = "client";
+    for (const options of [{ reasoning_effort: "extreme" }, { max_tokens: 64001 }]) {
+      expect((await call({ model: "opus-max-thinking", ...options, messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
+    }
+    expect(sent).toHaveLength(0);
+  });
+  test("client alias respects reasoning capability and budget validation just like a direct model", async () => {
+    configureAlias();
+    aliases[0]!.reasoningSource = "client";
+    modelRow = model({ thinking: false });
+    expect((await call({ model: "opus-max-thinking", reasoning_effort: "low", messages: [{ role: "user", content: "Hi" }] })).status).toBe(200);
+    expect(sent[0]!.input.additionalModelRequestFields).toBeUndefined();
+    sent = [];
+    modelRow = model({ modelId: "anthropic.claude-sonnet-4-5", maxOutputTokens: 8000 });
+    expect((await call({ model: "opus-max-thinking", reasoning_effort: "high", messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
+    expect(sent).toHaveLength(0);
+  });
+  test("client alias playground requests respect the requested effort", async () => {
+    configureAlias();
+    aliases[0]!.reasoningSource = "client";
+    const response = await handleOpenAIProxy(new Request("https://gateway.test/api/playground/chat/completions", {
+      method: "POST", body: JSON.stringify({ model: "chat-app-max", stream: true, reasoning_effort: "low", messages: [{ role: "user", content: "Hi" }] }),
+    }), "session");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"model":"chat-app-max"');
+    expect(sent[0]!.input.additionalModelRequestFields).toMatchObject({ output_config: { effort: "low" } });
+  });
+  test("client aliases preserve native request options on all Bedrock endpoints, including non-Anthropic Invoke", async () => {
+    configureAlias();
+    aliases[0]!.reasoningSource = "client";
+    modelRow = model({ modelId: "openai.gpt-oss-120b-1:0" });
+    for (const endpoint of ["converse", "converse-stream", "invoke", "invoke-stream"] as const) {
+      sent = [];
+      converseOutput = { body: new TextEncoder().encode('{"usage":{"input_tokens":2,"output_tokens":3}}') };
+      const response = await handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/" + endpoint, {
+        method: "POST", body: JSON.stringify({ modelId: "chat-app-max", messages: [{ role: "user", content: [{ text: "Hi" }] }],
+          additionalModelRequestFields: { reasoning_effort: "low" },
+          body: { messages: [{ role: "user", content: "Hi" }], max_tokens: 200, reasoning_effort: "low" } }),
+      }), endpoint);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sent[0]!.input.modelId).toBe(modelRow!.modelId as string);
+      const payload = endpoint.startsWith("invoke")
+        ? JSON.parse(new TextDecoder().decode((sent[0]!.input as unknown as { body: Uint8Array }).body))
+        : sent[0]!.input.additionalModelRequestFields;
+      expect(payload).toMatchObject({ reasoning_effort: "low" });
+      if (endpoint.startsWith("invoke")) expect(payload.max_tokens).toBe(200);
+    }
+  });
   test("does not invoke unavailable or invalid aliases", async () => {
     configureAlias();
     modelRow!.enabled = false;

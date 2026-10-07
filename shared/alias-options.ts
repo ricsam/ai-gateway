@@ -1,6 +1,12 @@
 import { detectReasoningProfile, EFFORT_LEVELS, resolveReasoningProfile, type EffortLevel } from "./reasoning";
 
-export interface AliasSettings { thinking: boolean; effort: EffortLevel | null }
+export type AliasReasoningSource = "alias" | "client";
+export interface AliasSettings {
+  /** Omitted by legacy callers: preserve the pinned alias policy. */
+  reasoningSource?: AliasReasoningSource;
+  thinking: boolean;
+  effort: EffortLevel | null;
+}
 export interface AliasUpstream {
   modelId: string;
   thinking: boolean;
@@ -31,6 +37,8 @@ export function getAliasCapabilities(model: AliasUpstream) {
 }
 
 export function validateAliasSettings(model: AliasUpstream, settings: AliasSettings): string | null {
+  if (settings.reasoningSource === "client") return null;
+  if (settings.reasoningSource !== undefined && settings.reasoningSource !== "alias") return "Unsupported alias reasoning source";
   const capabilities = getAliasCapabilities(model);
   if (settings.effort !== null && !(EFFORT_LEVELS as readonly string[]).includes(settings.effort)) return "Unsupported alias effort";
   if (settings.thinking) {

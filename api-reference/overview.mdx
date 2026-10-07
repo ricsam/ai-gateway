@@ -33,6 +33,15 @@ Authorization: Bearer aig_...
 
 Each endpoint also enforces a key scope. See [API keys](/docs/api-keys) for the scope matrix.
 
+## Alias reasoning options
+
+Chat Completions accepts an alias or app tier ID in `model`. An alias’s `reasoningSource` determines its reasoning policy:
+
+- `"alias"` (the default for backward compatibility): pinned thinking and effort override client reasoning controls.
+- `"client"`: the supported OpenAI chat option `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) follows the upstream model’s controls. When omitted, the upstream’s configured default effort applies, then its provider default. Stored alias `thinking` and `effort` fields are ignored.
+
+Mapped app tiers inherit that policy. On native Bedrock endpoints, client-mode aliases route to the upstream without overriding native reasoning options; existing pinned behavior is unchanged. See [Chat Completions](/docs/chat-completions) for examples and model-specific effort handling.
+
 ## Request IDs
 
 Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logical request to make credit settlement exactly-once. Responses from native compatibility endpoints return the effective request ID in the same header.

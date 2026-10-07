@@ -3,6 +3,25 @@ import { applyAliasConverse, applyAliasInvoke } from "./alias-reasoning";
 import { getAliasCapabilities, validateAliasSettings } from "../shared/alias-options";
 const upstream = (modelId = "anthropic.claude-opus-5") => ({ modelId, thinking: true, reasoningMode: "auto", maxOutputTokens: 32000 });
 
+describe("client-controlled alias reasoning", () => {
+  const settings = { reasoningSource: "client" as const, thinking: false, effort: null };
+  test("does not validate inactive pinned settings against upstream capabilities", () => {
+    for (const modelId of ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5", "openai.gpt-oss-120b-1:0"]) {
+      expect(validateAliasSettings(upstream(modelId), settings)).toBeNull();
+      expect(validateAliasSettings({ ...upstream(modelId), thinking: false }, { ...settings, thinking: true, effort: "max" })).toBeNull();
+    }
+  });
+  test("preserves native Converse options and only changes the model ID", () => {
+    const input = { modelId: "alias", inferenceConfig: { temperature: 0.5 }, additionalModelRequestFields: { thinking: { type: "adaptive" }, output_config: { effort: "low" } } };
+    expect(applyAliasConverse(input, upstream(), settings)).toEqual({ ...input, modelId: upstream().modelId });
+    expect(input.modelId).toBe("alias");
+  });
+  test("native Invoke accepts provider-specific options without alias rewriting", () => {
+    const input = { messages: [], reasoning_effort: "low", max_tokens: 200 };
+    expect(applyAliasInvoke(JSON.stringify(input), upstream("openai.gpt-oss-120b-1:0"), settings)).toEqual(input);
+  });
+});
+
 describe("pinned alias reasoning", () => {
   test("adaptive thinking and effort override client native fields without mutating input", () => {
     const input = { modelId: "app-max", inferenceConfig: { temperature: 0.5, topP: 0.9 }, additionalModelRequestFields: { thinking: { type: "disabled" }, reasoning_effort: "low", output_config: { effort: "low", format: { type: "json_schema" } } } };

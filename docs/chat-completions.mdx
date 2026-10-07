@@ -75,9 +75,26 @@ Administrators can expose a configured alias such as `claude-opus-max-thinking`,
 }
 ```
 
-The alias pins its upstream model, effort and thinking setting. Its policy overrides `reasoning_effort`; other supported generation controls still work subject to model restrictions. Ordinary request validation still applies. Non-streaming responses and streaming chunks retain the requested alias or tier ID. Pricing, output limits, cache settings and AWS region come from the upstream; usage reporting records that upstream model.
+An alias always selects its upstream model. Its **Reasoning configured by** setting determines who controls reasoning:
 
-Use **Admin → Model aliases** to define presets, then **Admin → Apps** to create named apps with custom tiers and alias mappings. Remap a tier without changing client model IDs. Renaming an app or tier changes its public ID. `/v1/models` lists only enabled, valid targets; unmapped tiers and aliases whose upstream is disabled are unavailable. Alias settings must be supported exactly: the UI does not offer thinking off on always-thinking models or effort levels the model cannot honor.
+- **Alias (pinned)** (`reasoningSource: "alias"`, the backward-compatible default) pins effort and thinking and overrides client `reasoning_effort` exactly as before.
+- **Client (OpenAI options)** (`reasoningSource: "client"`) honors the supported OpenAI Chat Completions option `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`) using the upstream model’s reasoning controls. If omitted, the upstream model’s configured default effort applies; if none is configured, its provider default applies. Stored alias thinking/effort fields are ignored in this mode.
+
+App tier IDs inherit their mapped alias’s mode. For example, if `chat-app-max` maps to a client-configured alias:
+
+```json
+{
+  "model": "chat-app-max",
+  "reasoning_effort": "low",
+  "messages": [{"role": "user", "content": "Solve this problem."}]
+}
+```
+
+The playground shows the upstream model’s supported effort choices for client-configured aliases and app tiers; pinned aliases instead show read-only settings. Other supported generation controls still work subject to model restrictions. Ordinary request validation still applies. Non-streaming responses and streaming chunks retain the requested alias or tier ID. Pricing, output limits, cache settings and AWS region come from the upstream; usage reporting records that upstream model.
+
+Use **Admin → Model aliases** to define presets, then **Admin → Apps** to create named apps with custom tiers and alias mappings. Remap a tier without changing client model IDs. Renaming an app or tier changes its public ID. `/v1/models` lists only enabled, valid targets; unmapped tiers and aliases whose upstream is disabled are unavailable. Pinned alias settings must be supported exactly: the UI does not offer thinking off on always-thinking models or effort levels the model cannot honor.
+
+Native Bedrock endpoints also honor reasoning ownership: client-configured aliases and app tiers route to the upstream model without overriding caller-supplied native reasoning options. Pinned policies remain unchanged; pinned Invoke rewriting is supported for Anthropic models only.
 
 ## Reasoning effort
 

@@ -40,6 +40,13 @@ test("complete alias bodies and strict slug/effort vocabulary", () => {
   }
   expect(aliasInputSchema.safeParse({ modelId: "a" }).success).toBe(false);
 });
+test("alias reasoning source defaults to pinned and client mode needs no pinned controls", () => {
+  const input = { modelId: "client-model", name: "Client model", description: null, upstreamModelId: crypto.randomUUID(), enabled: true };
+  expect(aliasInputSchema.parse({ ...input, thinking: true, effort: "high" }).reasoningSource).toBe("alias");
+  expect(aliasInputSchema.parse({ ...input, reasoningSource: "client" })).toMatchObject({ reasoningSource: "client", thinking: false, effort: null });
+  expect(aliasInputSchema.safeParse({ ...input, reasoningSource: "unknown" }).success).toBe(false);
+});
+
 test("app slugs and generated tier output", () => {
   const input = { name: "my-app", description: null, enabled: false, tiers: [{ name: "fast", aliasId: null }] };
   expect(appInputSchema.safeParse(input).success).toBe(true);

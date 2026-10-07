@@ -91,7 +91,7 @@ export const contract = defineContract({
       maxTokens: z.number().optional(), maxOutputTokens: z.number(), inputPricePerMTok: z.number(),
       outputPricePerMTok: z.number(), cacheReadPricePerMTok: z.number().optional(),
       cacheWrite5mPricePerMTok: z.number().optional(), cacheWrite1hPricePerMTok: z.number().optional(),
-      alias: z.object({ modelId: z.string(), thinking: z.boolean(), effort: z.enum(EFFORT_LEVELS).nullable() }).optional(),
+      alias: z.object({ modelId: z.string(), reasoningSource: z.enum(["alias", "client"]), thinking: z.boolean(), effort: z.enum(EFFORT_LEVELS).nullable() }).optional(),
       /** Editable reasoning_effort values; empty for pinned aliases and disabled controls. */
       reasoningEfforts: z.array(reasoningEffortSchema),
       defaultReasoningEffort: reasoningEffortSchema.nullable(),

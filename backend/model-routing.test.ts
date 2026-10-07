@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { resolveModelCatalog, type ModelCatalog } from "./model-routing";
+import { modelReasoningMetadata, resolveModelCatalog, type ModelCatalog } from "./model-routing";
 function catalog(): ModelCatalog {
   return {
     models: [{ id: "up", modelId: "anthropic.claude-opus-5-5", name: "Opus", enabled: true, provider: "bedrock", thinking: true, reasoningMode: "auto", maxOutputTokens: 32000, inputPricePerMTok: 5, region: "us-east-1", createdAt: new Date(0) }] as ModelCatalog["models"],
@@ -29,6 +29,27 @@ test("disabling any dependency hides its downstream IDs; dangling/invalid mappin
   data.aliases[0]!.thinking = true;
   data.aliases[0]!.upstreamModelId = "missing";
   expect(resolveModelCatalog(data)).toHaveLength(1);
+});
+test("client aliases and app tiers expose upstream reasoning controls instead of pinned values", () => {
+  const data = catalog();
+  data.aliases[0]!.reasoningSource = "client";
+  data.aliases[0]!.thinking = false;
+  data.aliases[0]!.effort = null;
+  data.models[0]!.defaultReasoningEffort = "medium";
+  const entries = resolveModelCatalog(data);
+  expect(entries).toHaveLength(3); // False thinking is not a promise to disable an always-thinking model.
+  for (const entry of entries.filter((entry) => entry.alias)) {
+    expect(modelReasoningMetadata(entry)).toMatchObject({
+      thinking: true, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium",
+      alias: { reasoningSource: "client", thinking: false, effort: null },
+    });
+  }
+  data.models[0]!.thinking = false;
+  expect(modelReasoningMetadata(resolveModelCatalog(data)[1]!)).toMatchObject({ thinking: false, reasoningEfforts: [], defaultReasoningEffort: null });
+});
+test("pinned and legacy aliases have no editable reasoning controls", () => {
+  const entry = resolveModelCatalog(catalog()).find((entry) => entry.alias)!;
+  expect(modelReasoningMetadata(entry)).toMatchObject({ thinking: true, reasoningEfforts: [], defaultReasoningEffort: "max", alias: { reasoningSource: "alias" } });
 });
 test("remapping a tier preserves its public ID while changing the upstream policy", () => {
   const data = catalog();

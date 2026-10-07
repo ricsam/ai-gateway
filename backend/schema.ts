@@ -200,6 +200,8 @@ export const modelAliasesTable = pgTable("model_aliases", {
   name: text("name").notNull(),
   description: text("description"),
   upstreamModelId: text("upstream_model_id").notNull().references(() => modelsTable.id, { onDelete: "restrict" }),
+  /** Client mode uses request options and upstream defaults instead of pinned settings. */
+  reasoningSource: text("reasoning_source").$type<import("../shared/alias-options").AliasReasoningSource>().notNull().default("alias"),
   thinking: boolean("thinking").notNull(),
   effort: text("effort").$type<import("../shared/reasoning").EffortLevel>(),
   enabled: boolean("enabled").notNull().default(true),
@@ -209,6 +211,7 @@ export const modelAliasesTable = pgTable("model_aliases", {
   index("model_aliases_upstream_idx").on(table.upstreamModelId),
   check("model_aliases_slug_check", sql`${table.modelId} ~ '^[a-z0-9._-]{1,128}$'`),
   check("model_aliases_effort_check", sql`${table.effort} in ('low', 'medium', 'high', 'xhigh', 'max')`),
+  check("model_aliases_reasoning_source_check", sql`${table.reasoningSource} in ('alias', 'client')`),
 ]);
 
 export const modelAppsTable = pgTable("model_apps", {

@@ -148,7 +148,8 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
 
   try {
     body = { ...body, modelId: model.modelId };
-    if (resolved?.alias) {
+    // Client-controlled aliases only route the model ID; native options stay untouched.
+    if (resolved?.alias && resolved.alias.reasoningSource !== "client") {
       body = endpoint === "converse" || endpoint === "converse-stream"
         ? applyAliasConverse(body as ConverseCommandInput, model, resolved.alias) as ProxyBody
         : { ...body, body: applyAliasInvoke(body.body, model, resolved.alias) };

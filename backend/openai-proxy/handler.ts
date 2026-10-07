@@ -230,13 +230,14 @@ export async function handleOpenAIProxy(
     throw error;
   }
 
-  // Aliases pin the policy; direct models retain request-over-default precedence.
+  // Only alias-controlled policies override requests; client aliases behave like direct models.
+  const pinnedAlias = resolved?.alias?.reasoningSource !== "client" ? resolved?.alias : undefined;
   const reasoningEffort = body.reasoning_effort
     ?? (isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : undefined);
-  if (resolved?.alias || (model.thinking && reasoningEffort)) {
+  if (pinnedAlias || (model.thinking && reasoningEffort)) {
     try {
-      if (resolved?.alias) {
-        bedrockRequest = applyAliasConverse(bedrockRequest, model, resolved.alias);
+      if (pinnedAlias) {
+        bedrockRequest = applyAliasConverse(bedrockRequest, model, pinnedAlias);
       } else {
         bedrockRequest = applyReasoning(bedrockRequest, {
           profile: resolveReasoningProfile(model.modelId, model.reasoningMode),

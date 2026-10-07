@@ -60,6 +60,15 @@ With **Reasoning / effort** enabled, API clients and the playground can send `re
 
 A **Default effort** makes reasoning apply even to clients that never send `reasoning_effort`, which raises output-token usage. **None** as a default turns thinking off on models that think by default and allow disabling it. Effort changes start a new prompt-cache prefix, so prefer a stable default. Reasoning tokens are billed as output tokens.
 
+## Alias reasoning ownership
+
+In **Admin → Model aliases**, select the upstream model and choose **Reasoning configured by**:
+
+- **Alias (pinned)** is the default for new and existing aliases. Configure thinking and effort explicitly; clients cannot override these settings. Unsupported pinned combinations are rejected.
+- **Client (OpenAI options)** hides the pinned controls. Clients and the playground can choose `reasoning_effort` using the upstream model’s supported controls. Omission uses the upstream’s configured default effort, then its provider default. Stored alias `thinking` and `effort` values are retained but ignored while in client mode; review them when switching back to pinned mode.
+
+The alias saves this choice as `reasoningSource: "alias"` or `"client"`. App tier IDs inherit their mapped alias’s ownership. Client-mode native Bedrock requests preserve caller-supplied reasoning options rather than applying the alias’s pinned settings. Pricing and limits remain inherited from the upstream in either mode. See [Chat Completions](/docs/chat-completions) for request examples.
+
 ## Image URL downloads
 
 The OpenAI-compatible API accepts images as base64 data URLs or `http(s)` URLs. **Admin → Brand & AWS → Inference → Download image URLs** controls whether the gateway downloads image URLs (enabled by default). Downloads only reach public addresses on default ports, follow at most three re-validated redirects, and are limited to 10 seconds and 3.75 MB per image. Turn downloads off if the deployment must not make outbound requests on behalf of API clients; data URLs keep working. The same setting is available through the management API at `/management/v1/settings`.

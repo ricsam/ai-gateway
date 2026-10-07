@@ -6,8 +6,10 @@ const slug = z.string().min(1).max(128).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export const aliasInputSchema = z.object({
   modelId: z.string().min(1).max(128).regex(/^[a-z0-9._-]+$/),
   name: z.string().trim().min(1).max(200), description: z.string().max(2000).nullable(),
-  upstreamModelId: z.string().uuid(), thinking: z.boolean(),
-  effort: z.enum(EFFORT_LEVELS).nullable(), enabled: z.boolean(),
+  upstreamModelId: z.string().uuid(),
+  reasoningSource: z.enum(["alias", "client"]).default("alias"),
+  thinking: z.boolean().default(false),
+  effort: z.enum(EFFORT_LEVELS).nullable().default(null), enabled: z.boolean(),
 });
 export const appTierInputSchema = z.object({ name: slug, aliasId: z.string().uuid().nullable() });
 export const appInputSchema = z.object({

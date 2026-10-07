@@ -1,11 +1,11 @@
-import { validateAliasSettings } from "../shared/alias-options";
+import { validateAliasSettings, type AliasSettings } from "../shared/alias-options";
 import type { modelsTable } from "./schema";
-import type { EffortLevel } from "../shared/reasoning";
+import { isReasoningEffort, supportedReasoningEfforts } from "../shared/reasoning";
 
 type Model = typeof modelsTable.$inferSelect;
-export interface RoutingAlias {
+export interface RoutingAlias extends AliasSettings {
   id: string; modelId: string; name: string; description: string | null;
-  upstreamModelId: string; thinking: boolean; effort: EffortLevel | null; enabled: boolean; createdAt: Date;
+  upstreamModelId: string; enabled: boolean; createdAt: Date;
 }
 export interface RoutingApp {
   id: string; name: string; description: string | null; enabled: boolean;
@@ -18,6 +18,17 @@ export interface ResolvedModel {
   createdAt: Date;
   upstream: Model;
   alias?: RoutingAlias;
+}
+
+/** Discovery and playground controls must match invocation policy, including app tiers. */
+export function modelReasoningMetadata({ upstream: model, alias }: ResolvedModel) {
+  const pinned = alias && alias.reasoningSource !== "client";
+  return {
+    thinking: pinned ? alias.thinking : model.thinking,
+    ...(alias && { alias: { modelId: alias.modelId, reasoningSource: alias.reasoningSource ?? "alias", thinking: alias.thinking, effort: alias.effort } }),
+    reasoningEfforts: pinned ? [] : supportedReasoningEfforts(model),
+    defaultReasoningEffort: pinned ? alias.effort : model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
+  };
 }
 
 /** One authoritative enabled catalog for invocation and discovery. No fallback from broken aliases. */

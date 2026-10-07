@@ -21,6 +21,7 @@ function cleanFields(value: unknown): Fields {
 }
 
 export function applyAliasConverse(request: ConverseCommandInput, model: AliasUpstream, settings: AliasSettings): ConverseCommandInput {
+  if (settings.reasoningSource === "client") return { ...request, modelId: model.modelId };
   const invalid = validateAliasSettings(model, settings);
   if (invalid) throw new ReasoningConfigError(invalid, "invalid_alias_configuration");
   if (request.inferenceConfig?.maxTokens !== undefined && (!Number.isInteger(request.inferenceConfig.maxTokens) || request.inferenceConfig.maxTokens <= 0 || request.inferenceConfig.maxTokens > model.maxOutputTokens)) {
@@ -58,7 +59,7 @@ export function applyAliasConverse(request: ConverseCommandInput, model: AliasUp
 /** Native Invoke bodies are provider-specific. Only the supported Anthropic shape is rewritten. */
 export function applyAliasInvoke(value: unknown, model: AliasUpstream, settings: AliasSettings): Fields {
   const profile = resolveReasoningProfile(model.modelId, model.reasoningMode);
-  if (!profile.style.startsWith("anthropic_") || (!detectReasoningProfile(model.modelId) && (!model.reasoningMode || model.reasoningMode === "auto"))) {
+  if (settings.reasoningSource !== "client" && (!profile.style.startsWith("anthropic_") || (!detectReasoningProfile(model.modelId) && (!model.reasoningMode || model.reasoningMode === "auto")))) {
     throw new ReasoningConfigError("Use chat/completions or Converse for this alias; native Invoke aliasing supports configured Anthropic models only", "alias_endpoint_unsupported");
   }
   let parsed = value;
@@ -67,6 +68,7 @@ export function applyAliasInvoke(value: unknown, model: AliasUpstream, settings:
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ReasoningConfigError("Alias Invoke body must be a JSON object", "invalid_json");
   const body = { ...parsed } as Fields;
+  if (settings.reasoningSource === "client") return body;
   const input = applyAliasConverse({
     modelId: model.modelId,
     inferenceConfig: {
