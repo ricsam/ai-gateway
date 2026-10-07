@@ -194,6 +194,33 @@ export const modelsTable = pgTable("models", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
 });
 
+export const modelAliasesTable = pgTable("model_aliases", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  modelId: text("model_id").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description"),
+  upstreamModelId: text("upstream_model_id").notNull().references(() => modelsTable.id, { onDelete: "restrict" }),
+  thinking: boolean("thinking").notNull(),
+  effort: text("effort").$type<import("../shared/reasoning").EffortLevel>(),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index("model_aliases_upstream_idx").on(table.upstreamModelId),
+  check("model_aliases_slug_check", sql`${table.modelId} ~ '^[a-z0-9._-]{1,128}$'`),
+  check("model_aliases_effort_check", sql`${table.effort} in ('low', 'medium', 'high', 'xhigh', 'max')`),
+]);
+
+export const modelAppsTable = pgTable("model_apps", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  enabled: boolean("enabled").notNull().default(true),
+  tiers: jsonb("tiers").$type<Array<{ name: string; aliasId: string | null }>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+}, (table) => [check("model_apps_name_check", sql`${table.name} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`)]);
+
 export const apiKeysTable = pgTable("api_keys", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "cascade" }),

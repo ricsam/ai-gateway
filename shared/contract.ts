@@ -1,6 +1,8 @@
 import { defineContract, Status } from "@richie-rpc/core";
 import { z } from "zod";
-import { REASONING_EFFORT_VALUES, REASONING_MODES } from "./reasoning";
+import { aliasContract } from "./alias-contract";
+const catalogErrors = { [Status.BadRequest]: z.object({ error: z.string() }), [Status.NotFound]: z.object({ error: z.string() }), [Status.Conflict]: z.object({ error: z.string() }) };
+import { EFFORT_LEVELS, REASONING_EFFORT_VALUES, REASONING_MODES } from "./reasoning";
 
 const reasoningModeSchema = z.enum(REASONING_MODES);
 const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
@@ -73,6 +75,7 @@ const usageLogSchema = z.object({
 });
 
 export const contract = defineContract({
+  ...aliasContract,
   getProfile: {
     type: "standard", method: "GET", path: "/profile",
     responses: { [Status.OK]: z.object({
@@ -88,7 +91,8 @@ export const contract = defineContract({
       maxTokens: z.number().optional(), maxOutputTokens: z.number(), inputPricePerMTok: z.number(),
       outputPricePerMTok: z.number(), cacheReadPricePerMTok: z.number().optional(),
       cacheWrite5mPricePerMTok: z.number().optional(), cacheWrite1hPricePerMTok: z.number().optional(),
-      /** reasoning_effort values the model accepts; empty when reasoning is disabled. */
+      alias: z.object({ modelId: z.string(), thinking: z.boolean(), effort: z.enum(EFFORT_LEVELS).nullable() }).optional(),
+      /** Editable reasoning_effort values; empty for pinned aliases and disabled controls. */
       reasoningEfforts: z.array(reasoningEffortSchema),
       defaultReasoningEffort: reasoningEffortSchema.nullable(),
     })) },
@@ -165,6 +169,7 @@ export const contract = defineContract({
       enabled: z.boolean().optional(), region: z.string().optional(),
     }),
     responses: { [Status.Created]: modelSchema },
+    errorResponses: catalogErrors,
   },
   adminUpdateModel: {
     type: "standard", method: "PATCH", path: "/admin/models/:id", params: z.object({ id: z.string() }),
@@ -178,12 +183,12 @@ export const contract = defineContract({
       region: z.string().optional(), enabled: z.boolean().optional(),
     }),
     responses: { [Status.OK]: modelSchema },
-    errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
+    errorResponses: catalogErrors,
   },
   adminDeleteModel: {
     type: "standard", method: "DELETE", path: "/admin/models/:id", params: z.object({ id: z.string() }),
     responses: { [Status.OK]: z.object({ success: z.boolean() }) },
-    errorResponses: { [Status.NotFound]: z.object({ error: z.string() }) },
+    errorResponses: catalogErrors,
   },
   adminTestModel: {
     type: "standard", method: "POST", path: "/admin/models/test",

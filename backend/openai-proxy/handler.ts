@@ -8,9 +8,8 @@ import {
   ConverseStreamCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { BedrockRuntimeClient, ConverseStreamOutput } from "@aws-sdk/client-bedrock-runtime";
-import db from "@/db";
-import { modelsTable } from "../schema";
-import { and, eq } from "drizzle-orm";
+import { resolveModel } from "../model-catalog";
+import { applyAliasConverse } from "../alias-reasoning";
 import {
   authenticateApiKeyPrincipal,
   authenticateSessionPrincipal,
@@ -141,17 +140,9 @@ export async function handleOpenAIProxy(
     throw error;
   }
 
-  // 3. Validate model exists in the single enabled Bedrock catalog.
-  const [model] = await db
-    .select()
-    .from(modelsTable)
-    .where(and(
-      eq(modelsTable.modelId, body.model),
-      eq(modelsTable.enabled, true),
-      eq(modelsTable.provider, "bedrock"),
-    ))
-    .limit(1);
-
+  // 3. Resolve a direct model, configured alias, or app tier to an enabled upstream.
+  const resolved = await resolveModel(body.model);
+  const model = resolved?.upstream;
   if (!model) {
     return errorResponse(
       `Model "${body.model}" is not available for API access`,
@@ -229,6 +220,7 @@ export async function handleOpenAIProxy(
   try {
     bedrockRequest = transformRequest({
       ...body,
+      model: model.modelId,
       max_tokens: body.max_tokens ?? model.maxOutputTokens,
     }, { remoteImages });
   } catch (error) {
@@ -238,16 +230,20 @@ export async function handleOpenAIProxy(
     throw error;
   }
 
-  // Reasoning: an explicit request value wins over the model's configured default.
+  // Aliases pin the policy; direct models retain request-over-default precedence.
   const reasoningEffort = body.reasoning_effort
     ?? (isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : undefined);
-  if (model.thinking && reasoningEffort) {
+  if (resolved?.alias || (model.thinking && reasoningEffort)) {
     try {
-      bedrockRequest = applyReasoning(bedrockRequest, {
-        profile: resolveReasoningProfile(model.modelId, model.reasoningMode),
-        effort: reasoningEffort,
-        maxOutputTokens: model.maxOutputTokens,
-      }).request;
+      if (resolved?.alias) {
+        bedrockRequest = applyAliasConverse(bedrockRequest, model, resolved.alias);
+      } else {
+        bedrockRequest = applyReasoning(bedrockRequest, {
+          profile: resolveReasoningProfile(model.modelId, model.reasoningMode),
+          effort: reasoningEffort!,
+          maxOutputTokens: model.maxOutputTokens,
+        }).request;
+      }
     } catch (error) {
       if (error instanceof ReasoningConfigError) {
         return errorResponse(error.message, "invalid_request_error", 400, error.code, "reasoning_effort");

@@ -48,6 +48,17 @@ The OpenAI endpoint accepts images as base64 data URLs or public `http(s)` URLs 
 
 Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 
+## Model aliases and apps
+
+1. Configure the real Bedrock model, reasoning control, pricing and output limit in **Admin → Models**.
+2. In **Admin → Model aliases**, create a public ID such as `claude-opus-max-thinking`, choose its upstream model, and pin thinking and effort.
+3. In **Admin → Apps**, create `chat-app` and map its `max` tier to that alias. Apps start with min/low/medium/high/max tiers; add, remove or rename tiers as needed.
+4. Clients send `"model": "chat-app-max"` without provider-specific reasoning options. Remapping the tier changes its target without changing that public ID.
+
+Enabled aliases and mapped app tiers appear in `/v1/models`, model pricing and the playground. Alias settings override client reasoning controls; pricing, region, caching and limits come from the actual upstream. Responses retain the requested public model ID; billing and usage analytics record the upstream model. Disabled dependencies and unmapped tiers are not exposed. Referenced aliases/models cannot be deleted until remapped, and all public IDs must be unique (including disabled or unmapped tiers).
+
+Effort and thinking are independent where supported. Unsupported combinations—including thinking off on always-thinking models—are rejected. Alias efforts must be supported rather than silently clamped. Native Converse supports aliases; native Invoke alias rewriting supports Anthropic models only (use Converse or Chat Completions for other model families). Existing direct-model requests are unchanged. Apply database migration `0003` before running this version; no aliases or apps are seeded automatically.
+
 ## Authentication and groups
 
 Local username/password login is always the recovery path. Public registration is disabled after the atomic first-boot transaction. Administrators create local users, choose initial passwords, and may force password change on first login. Disabling a user invalidates sessions. Final enabled-administrator safeguards cover demotion, disablement, and deletion.

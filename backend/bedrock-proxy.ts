@@ -7,12 +7,12 @@ import {
   type ConverseCommandInput,
   type ConverseStreamOutput,
 } from "@aws-sdk/client-bedrock-runtime";
-import { and, eq } from "drizzle-orm";
-import db from "@/db";
+import { resolveModel } from "./model-catalog";
+import { applyAliasConverse, applyAliasInvoke } from "./alias-reasoning";
+import { ReasoningConfigError } from "./openai-proxy/transform/reasoning";
 import { getBedrockClient, ProviderNotConfiguredError } from "./bedrock";
 import { calculateCostBreakdown, checkBalance, deductCredits, type CostBreakdown } from "./credit-service";
 import { hasAvailableCredits } from "./credit-settlement";
-import { modelsTable } from "./schema";
 import { authenticateApiKeyPrincipal, requireProxyScope, type ProxyPrincipal } from "./proxy-auth";
 import { addConverseCachePoints } from "./openai-proxy/transform/cache-converse";
 import { addInvokeCacheControl, type AnthropicInvokeBody } from "./openai-proxy/transform/cache-invoke";
@@ -46,6 +46,7 @@ function failure(message: string, status: number, code: string): Response {
 }
 
 function mapError(error: unknown): Response {
+  if (error instanceof ReasoningConfigError) return failure(error.message, 400, error.code);
   if (error instanceof ProviderNotConfiguredError) return failure(error.message, 503, "provider_not_configured");
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message : "Bedrock request failed";
@@ -128,11 +129,8 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
   }
   if (!body.modelId || typeof body.modelId !== "string") return failure("modelId is required", 400, "missing_model");
 
-  const [model] = await db.select().from(modelsTable).where(and(
-    eq(modelsTable.modelId, body.modelId),
-    eq(modelsTable.enabled, true),
-    eq(modelsTable.provider, "bedrock"),
-  )).limit(1);
+  const resolved = await resolveModel(body.modelId);
+  const model = resolved?.upstream;
   if (!model) return failure(`Model "${body.modelId}" is not available for API access`, 400, "model_not_available");
   if (!hasAvailableCredits(await checkBalance(auth.principal.userId))) return failure("Insufficient credit balance", 402, "insufficient_credits");
 
@@ -149,12 +147,18 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
   const requestId = request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
 
   try {
+    body = { ...body, modelId: model.modelId };
+    if (resolved?.alias) {
+      body = endpoint === "converse" || endpoint === "converse-stream"
+        ? applyAliasConverse(body as ConverseCommandInput, model, resolved.alias) as ProxyBody
+        : { ...body, body: applyAliasInvoke(body.body, model, resolved.alias) };
+    }
     const client = await getBedrockClient(model.region);
     switch (endpoint) {
-      case "converse": return handleConverse(body, modelInfo, auth.principal, requestId, client);
-      case "converse-stream": return handleConverseStream(body, modelInfo, auth.principal, requestId, client, request.signal);
-      case "invoke": return handleInvoke(body, modelInfo, auth.principal, requestId, client);
-      case "invoke-stream": return handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal);
+      case "converse": return await handleConverse(body, modelInfo, auth.principal, requestId, client);
+      case "converse-stream": return await handleConverseStream(body, modelInfo, auth.principal, requestId, client, request.signal);
+      case "invoke": return await handleInvoke(body, modelInfo, auth.principal, requestId, client);
+      case "invoke-stream": return await handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal);
     }
   } catch (error) {
     return mapError(error);

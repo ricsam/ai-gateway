@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import db from "@/db";
 import env from "./env";
 import { getPublicConfig } from "./config-service";
@@ -8,7 +8,8 @@ import {
   requireProxyScope,
   type ProxyAuthResult,
 } from "./proxy-auth";
-import { modelsTable, userTable } from "./schema";
+import { userTable } from "./schema";
+import { listAvailableModels } from "./model-catalog";
 import { UsageValidationError } from "./usage-contract";
 import { getLiteLLMDailyActivity, getNativeMonthlyUsage } from "./usage-service";
 
@@ -37,15 +38,12 @@ export async function handleListModels(request: Request): Promise<Response> {
   const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "models.read");
   if (!auth.ok) return openAIError(auth);
 
-  const models = await db
-    .select({ id: modelsTable.modelId, createdAt: modelsTable.createdAt })
-    .from(modelsTable)
-    .where(and(eq(modelsTable.enabled, true), eq(modelsTable.provider, "bedrock")));
+  const models = await listAvailableModels();
 
   return Response.json({
     object: "list",
     data: models.map((model) => ({
-      id: model.id,
+      id: model.modelId,
       object: "model",
       created: Math.floor(model.createdAt.getTime() / 1000),
       owned_by: "ai-gateway",

@@ -104,7 +104,7 @@ function Playground() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model, stream: true, messages: outgoing.map(toApiMessage),
-          ...(effort !== "default" && { reasoning_effort: effort }),
+          ...(!selected?.alias && effort !== "default" && { reasoning_effort: effort }),
         }),
       });
       if (!response.ok || !response.body) {
@@ -146,7 +146,7 @@ function Playground() {
           <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm" title="Available credit balance"><IconCoins size={16} className="text-muted-foreground" /><span className="text-muted-foreground">Balance</span><span className="font-mono font-medium">{creditUsage ? formatCredits(creditUsage.balance_after) : profile ? formatCredits(profile.creditBalance) : "—"}</span></div>
           <Select value={model} onValueChange={setModel}><SelectTrigger className="w-64" aria-label="Model"><SelectValue placeholder="Choose a model" /></SelectTrigger><SelectContent>{models.map((entry) => <SelectItem key={entry.modelId} value={entry.modelId}>{entry.displayName}</SelectItem>)}</SelectContent></Select>
-          <div className="flex items-center gap-2 text-sm" title={efforts.length ? "Reasoning effort sent as reasoning_effort" : "This model does not have reasoning controls enabled"}>
+          {selected?.alias ? <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs" title="Reasoning is pinned by this alias and cannot be overridden"><span className="flex items-center gap-2 font-medium"><IconBrain size={16} />Pinned alias settings</span><span>Thinking {selected.alias.thinking ? "on" : "off"} · Effort {selected.alias.effort ? EFFORT_LABELS[selected.alias.effort] : "provider default"}</span><span className="block font-mono text-muted-foreground">{selected.alias.modelId}</span></div> : <div className="flex items-center gap-2 text-sm" title={efforts.length ? "Reasoning effort sent as reasoning_effort" : "This model does not have reasoning controls enabled"}>
             <IconBrain size={16} />
             <Select value={effort} onValueChange={(value) => setEffort(value as ReasoningEffort | "default")} disabled={!efforts.length}>
               <SelectTrigger className="w-40" aria-label="Reasoning effort"><SelectValue /></SelectTrigger>
@@ -155,7 +155,7 @@ function Playground() {
                 {efforts.map((level) => <SelectItem key={level} value={level}>{EFFORT_LABELS[level]}</SelectItem>)}
               </SelectContent>
             </Select>
-          </div>
+          </div>}
           <Button variant="outline" size="icon" onClick={reset} title="Reset"><IconRefresh /></Button>
           </div>
         </div>

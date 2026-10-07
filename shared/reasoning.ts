@@ -41,6 +41,8 @@ export interface ReasoningProfile {
    * or cannot be turned off, in which case the model default is used.
    */
   thinkingOff?: { type: "disabled" } | { type: "between_tools" };
+  /** Adaptive models that allow fully disabling thinking even though it is off by default. */
+  thinkingOptional?: boolean;
   /** Anthropic adaptive only: request summarized thinking text (models whose default display is omitted). */
   summarizedDisplay?: boolean;
   /** Anthropic budget only: the model also accepts `output_config.effort` behind the effort-2025-11-24 beta. */
@@ -74,7 +76,7 @@ function parseClaudeModel(id: string): ClaudeModel | null {
   return null;
 }
 
-function adaptive(label: string, efforts: readonly EffortLevel[], options: Pick<ReasoningProfile, "thinkingOff" | "summarizedDisplay"> = {}): ReasoningProfile {
+function adaptive(label: string, efforts: readonly EffortLevel[], options: Pick<ReasoningProfile, "thinkingOff" | "summarizedDisplay" | "thinkingOptional"> = {}): ReasoningProfile {
   return { style: "anthropic_adaptive", efforts, label, detected: true, ...options };
 }
 
@@ -102,7 +104,7 @@ function claudeProfile(model: ClaudeModel): ReasoningProfile {
     // 4.7+ reject budget thinking, default to omitted thinking display, and add xhigh.
     if (minor >= 7) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true });
     // 4.6 deprecates budget thinking; its default display is already summarized.
-    if (minor === 6) return adaptive(name, WITHOUT_XHIGH);
+    if (minor === 6) return adaptive(name, WITHOUT_XHIGH, { thinkingOptional: true });
     if (minor === 5 && family === "opus") return budget(name, true);
     return budget(name);
   }

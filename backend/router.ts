@@ -4,6 +4,8 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import db from "@/db";
 import { contract } from "@/shared/contract";
 import { requireAdmin } from "./admin-guard";
+import { aliasResponse, appResponse, assertModelPublicId, assertModelUnreferenced, catalogErrorResponse, deleteCatalogEntry, loadModelCatalog, lockModelCatalog, saveAlias, saveApp, validateModelWrite } from "./model-alias-service";
+import { listAvailableModels } from "./model-catalog";
 import { authenticateRequest } from "./auth";
 import { updateUser } from "./user-service";
 import type { ManagementPrincipal } from "./management-auth";
@@ -111,16 +113,17 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
 
   getModels: async () => {
-    const models = await db.select().from(modelsTable).where(eq(modelsTable.enabled, true)).orderBy(asc(modelsTable.name));
-    return { status: Status.OK, body: models.map((model) => ({
-      modelId: model.modelId, displayName: model.name, thinking: model.thinking, provider: model.provider,
+    const models = await listAvailableModels();
+    return { status: Status.OK, body: models.map(({ upstream: model, alias, modelId, name }) => ({
+      modelId, displayName: name, thinking: alias?.thinking ?? model.thinking, provider: model.provider,
+      ...(alias && { alias: { modelId: alias.modelId, thinking: alias.thinking, effort: alias.effort } }),
       maxTokens: model.contextWindow ?? undefined, maxOutputTokens: model.maxOutputTokens,
       inputPricePerMTok: model.inputPricePerMTok, outputPricePerMTok: model.outputPricePerMTok,
       cacheReadPricePerMTok: model.cacheReadPricePerMTok ?? undefined,
       cacheWrite5mPricePerMTok: model.cacheWrite5mPricePerMTok ?? undefined,
       cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
-      reasoningEfforts: supportedReasoningEfforts(model),
-      defaultReasoningEffort: model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
+      reasoningEfforts: alias ? [] : supportedReasoningEfforts(model),
+      defaultReasoningEffort: alias ? alias.effort : model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
     })) };
   },
 
@@ -185,6 +188,45 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     return { status: Status.OK, body: { success: true } };
   },
 
+  adminListAliases: async ({ request }) => {
+    await requireAdmin(request);
+    return { status: Status.OK, body: (await loadModelCatalog()).aliases.map(aliasResponse) };
+  },
+  adminCreateAlias: async ({ body, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.Created, body: await saveAlias(body, undefined, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+  adminUpdateAlias: async ({ body, params, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.OK, body: await saveAlias(body, params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+  adminDeleteAlias: async ({ params, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.OK, body: await deleteCatalogEntry("alias", params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+  adminListApps: async ({ request }) => {
+    await requireAdmin(request);
+    return { status: Status.OK, body: (await loadModelCatalog()).apps.map(appResponse) };
+  },
+  adminCreateApp: async ({ body, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.Created, body: await saveApp(body, undefined, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+  adminUpdateApp: async ({ body, params, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.OK, body: await saveApp(body, params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+  adminDeleteApp: async ({ params, request }) => {
+    const actor = await requireAdmin(request);
+    try { return { status: Status.OK, body: await deleteCatalogEntry("app", params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    catch (error) { return catalogErrorResponse(error); }
+  },
+
   adminListModels: async ({ request }) => {
     await requireAdmin(request);
     const models = await db.select().from(modelsTable).orderBy(asc(modelsTable.name));
@@ -193,34 +235,48 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
 
   adminCreateModel: async ({ body, request }) => {
     const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    try {
     const [model] = await db.transaction(async (tx) => {
+      await lockModelCatalog(tx);
+      await assertModelPublicId(tx, body.modelId);
       const created = await tx.insert(modelsTable).values(body).returning();
       await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.created", targetType: "model", targetId: created[0]!.id, requestId, metadata: { modelId: created[0]!.modelId } });
       return created;
     });
     return { status: Status.Created, body: modelResponse(model!) };
+    } catch (error) { return catalogErrorResponse(error); }
   },
 
   adminUpdateModel: async ({ params, body, request }) => {
     const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    try {
     const model = await db.transaction(async (tx) => {
+      await lockModelCatalog(tx);
+      const [previous] = await tx.select().from(modelsTable).where(eq(modelsTable.id, params.id));
+      if (!previous) return undefined;
+      await validateModelWrite(tx, { ...previous, ...body });
       const [changed] = await tx.update(modelsTable).set({ ...body, updatedAt: new Date() }).where(eq(modelsTable.id, params.id)).returning();
       if (changed) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.updated", targetType: "model", targetId: changed.id, requestId, metadata: { fields: Object.keys(body) } });
       return changed;
     });
     if (!model) return { status: Status.NotFound, body: { error: "Model not found" } };
     return { status: Status.OK, body: modelResponse(model) };
+    } catch (error) { return catalogErrorResponse(error); }
   },
 
   adminDeleteModel: async ({ params, request }) => {
     const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    try {
     const removed = await db.transaction(async (tx) => {
+      await lockModelCatalog(tx);
+      await assertModelUnreferenced(tx, params.id);
       const rows = await tx.delete(modelsTable).where(eq(modelsTable.id, params.id)).returning({ id: modelsTable.id, modelId: modelsTable.modelId });
       if (rows[0]) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.deleted", targetType: "model", targetId: rows[0].id, requestId, metadata: { modelId: rows[0].modelId } });
       return rows;
     });
     if (!removed.length) return { status: Status.NotFound, body: { error: "Model not found" } };
     return { status: Status.OK, body: { success: true } };
+    } catch (error) { return catalogErrorResponse(error); }
   },
 
   adminTestModel: async ({ body, request }) => {

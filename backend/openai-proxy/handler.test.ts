@@ -1,18 +1,22 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { ConverseStreamCommand, type ConverseCommandInput } from "@aws-sdk/client-bedrock-runtime";
+import { ConverseStreamCommand, InvokeModelWithResponseStreamCommand, type ConverseCommandInput } from "@aws-sdk/client-bedrock-runtime";
 
 // The handler's persistence, authentication, billing, settings, and AWS client
 // dependencies are replaced so the full request pipeline runs in memory.
+import { resolveModelCatalog, type ModelCatalog, type RoutingAlias, type RoutingApp } from "../model-routing";
 type ModelRow = Record<string, unknown>;
 let modelRow: ModelRow | null = null;
+let aliases: RoutingAlias[] = [];
+let apps: RoutingApp[] = [];
+let settlements: Record<string, unknown>[] = [];
 let remoteImagesEnabled = true;
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
-let settlements: Array<Record<string, unknown>> = [];
 
-mock.module("@/db", () => ({
-  default: { select: () => ({ from: () => ({ where: () => ({ limit: async () => (modelRow ? [modelRow] : []) }) }) }) },
+mock.module("../model-catalog", () => ({
+  listAvailableModels: async () => resolveModelCatalog({ models: modelRow ? [modelRow] : [], aliases, apps } as ModelCatalog),
+  resolveModel: async (id: string) => resolveModelCatalog({ models: modelRow ? [modelRow] : [], aliases, apps } as ModelCatalog).find((entry) => entry.modelId === id),
 }));
 mock.module("../proxy-auth", () => {
   const principal = { userId: "user-1234567890", credentialType: "api_key", credentialId: "key-1", scopes: new Set(["ai.invoke"]) };
@@ -32,10 +36,12 @@ mock.module("../credit-service", () => ({
 }));
 mock.module("../config-service", () => ({ getRemoteImageUrlsEnabled: async () => remoteImagesEnabled }));
 mock.module("../bedrock", () => ({
+  ProviderNotConfiguredError: class ProviderNotConfiguredError extends Error {},
   getBedrockClient: async () => ({
     send: async (command: { input: ConverseCommandInput }) => {
       const streaming = command instanceof ConverseStreamCommand;
       sent.push({ streaming, input: command.input });
+      if (command instanceof InvokeModelWithResponseStreamCommand) return { body: (async function* () { yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_stop"}') } }; })() };
       if (!streaming) return converseOutput;
       return { stream: (async function* () { for (const event of streamEvents) yield event; })() };
     },
@@ -43,12 +49,13 @@ mock.module("../bedrock", () => ({
 }));
 
 const { handleOpenAIProxy } = await import("./handler");
+const { handleBedrockProxy } = await import("../bedrock-proxy");
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 function model(overrides: ModelRow = {}): ModelRow {
   return {
-    modelId: "global.anthropic.claude-opus-4-7", inputPricePerMTok: 5, outputPricePerMTok: 25,
+    id: "model-1", name: "Opus", createdAt: new Date(0), modelId: "global.anthropic.claude-opus-4-7", inputPricePerMTok: 5, outputPricePerMTok: 25,
     cacheReadPricePerMTok: null, cacheWrite5mPricePerMTok: null, cacheWrite1hPricePerMTok: null,
     managedCache: false, region: null, maxOutputTokens: 64000, thinking: true, reasoningMode: "auto",
     defaultReasoningEffort: null, enabled: true, provider: "bedrock", ...overrides,
@@ -65,6 +72,7 @@ function call(body: unknown) {
 
 beforeEach(() => {
   modelRow = model();
+  aliases = []; apps = [];
   remoteImagesEnabled = true;
   sent = [];
   streamEvents = [];
@@ -108,6 +116,60 @@ describe("OpenAI-compatible handler", () => {
     });
   }
 
+  function configureAlias() {
+    aliases = [{ id: "alias-1", modelId: "opus-max-thinking", name: "Opus max", description: null,
+      upstreamModelId: "model-1", thinking: true, effort: "max", enabled: true, createdAt: new Date(0) }];
+    apps = [{ id: "app-1", name: "chat-app", description: null, enabled: true,
+      tiers: [{ name: "max", aliasId: "alias-1" }], createdAt: new Date(0) }];
+  }
+  test("native Converse and Invoke endpoints resolve and enforce the alias policy", async () => {
+    configureAlias();
+    for (const endpoint of ["converse", "converse-stream", "invoke", "invoke-stream"] as const) {
+      sent = [];
+      converseOutput = { body: new TextEncoder().encode('{"usage":{"input_tokens":2,"output_tokens":3}}') };
+      const response = await handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/" + endpoint, {
+        method: "POST", body: JSON.stringify({ modelId: "chat-app-max", messages: [{ role: "user", content: [{ text: "Hi" }] }],
+          additionalModelRequestFields: { thinking: { type: "disabled" }, output_config: { effort: "low" } },
+          body: { messages: [{ role: "user", content: "Hi" }], max_tokens: 200, thinking: { type: "disabled" }, output_config: { effort: "low" } } }),
+      }), endpoint);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sent[0]!.input.modelId).toBe(modelRow!.modelId as string);
+      const payload = endpoint.startsWith("invoke")
+        ? JSON.parse(new TextDecoder().decode((sent[0]!.input as unknown as { body: Uint8Array }).body))
+        : sent[0]!.input.additionalModelRequestFields;
+      expect(payload).toMatchObject({ thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "max" } });
+    }
+  });
+  test("resolves app tiers, pins settings, preserves response ID and bills upstream", async () => {
+    configureAlias();
+    const response = await call({ model: "chat-app-max", reasoning_effort: "none", thinking: { type: "disabled" }, messages: [{ role: "user", content: "Hi" }] });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { model: string }).model).toBe("chat-app-max");
+    expect(sent[0]!.input).toMatchObject({ modelId: modelRow!.modelId, additionalModelRequestFields: { thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "max" } } });
+    expect(settlements[0]!.modelId).toBe(modelRow!.modelId);
+  });
+  test("uses the alias policy for playground and streaming responses", async () => {
+    configureAlias();
+    streamEvents = [{ messageStart: { role: "assistant" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
+    const response = await handleOpenAIProxy(new Request("https://gateway.test/api/playground/chat/completions", {
+      method: "POST", body: JSON.stringify({ model: "opus-max-thinking", stream: true, reasoning_effort: "low", messages: [{ role: "user", content: "Hi" }] }),
+    }), "session");
+    const text = await response.text();
+    expect(text).toContain('"model":"opus-max-thinking"');
+    expect(sent[0]!.input.modelId).toBe(modelRow!.modelId as string);
+    expect(sent[0]!.input.additionalModelRequestFields).toMatchObject({ output_config: { effort: "max" } });
+    expect(text).toContain("credit_usage");
+  });
+  test("does not invoke unavailable or invalid aliases", async () => {
+    configureAlias();
+    modelRow!.enabled = false;
+    expect((await call({ model: "chat-app-max", messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
+    modelRow!.enabled = true;
+    aliases[0]!.thinking = false;
+    expect((await call({ model: "opus-max-thinking", messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
+    expect(sent).toHaveLength(0);
+  });
   test("sends images and adaptive effort to Bedrock and returns reasoning", async () => {
     const response = await call({
       model: "global.anthropic.claude-opus-4-7",

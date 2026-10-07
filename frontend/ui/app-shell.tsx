@@ -40,6 +40,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 export const adminLinks = [
   { to: "/admin/models" as const, label: "Models", icon: IconAdjustments },
+  { to: "/admin/aliases" as const, label: "Model aliases", icon: IconBrain },
+  { to: "/admin/apps" as const, label: "Apps", icon: IconSettings },
   { to: "/admin/users" as const, label: "Users", icon: IconActivity },
   { to: "/admin/groups" as const, label: "Groups", icon: IconUsersGroup },
   { to: "/admin/analytics" as const, label: "Analytics", icon: IconChartBar },

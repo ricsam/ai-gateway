@@ -64,6 +64,21 @@ Bedrock reports uncached input and cached input separately. The gateway combines
 
 Clients own conversation history, tool results, and context resets. Use the latest model call's `prompt_tokens` to measure its input context, rather than summing usage across calls. Include the latest output or subsequent tool results in a local estimate when projecting the next request. `/v1/usage` reports account usage over a period; it is not a session context endpoint.
 
+## Model aliases and app tiers
+
+Administrators can expose a configured alias such as `claude-opus-max-thinking`, and map an app tier such as `chat-app-max` to it. Send either ID as `model`; no provider-specific options are needed:
+
+```json
+{
+  "model": "chat-app-max",
+  "messages": [{"role": "user", "content": "Solve this problem."}]
+}
+```
+
+The alias pins its upstream model, effort and thinking setting. Its policy overrides `reasoning_effort`; other supported generation controls still work subject to model restrictions. Ordinary request validation still applies. Non-streaming responses and streaming chunks retain the requested alias or tier ID. Pricing, output limits, cache settings and AWS region come from the upstream; usage reporting records that upstream model.
+
+Use **Admin → Model aliases** to define presets, then **Admin → Apps** to create named apps with custom tiers and alias mappings. Remap a tier without changing client model IDs. Renaming an app or tier changes its public ID. `/v1/models` lists only enabled, valid targets; unmapped tiers and aliases whose upstream is disabled are unavailable. Alias settings must be supported exactly: the UI does not offer thinking off on always-thinking models or effort levels the model cannot honor.
+
 ## Reasoning effort
 
 For a model with reasoning enabled by an administrator, set `reasoning_effort` to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. When a request omits it, the model's configured default effort (if any) applies; otherwise the model's own default behavior is used. For models without reasoning enabled, `reasoning_effort` is ignored.
