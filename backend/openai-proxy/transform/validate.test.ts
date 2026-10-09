@@ -37,6 +37,33 @@ describe("chat completion request validation", () => {
     expect(failure({ ...valid, max_completion_tokens: 0 }).param).toBe("max_completion_tokens");
   });
 
+  test("normalizes max_output_tokens with deterministic output-limit precedence", () => {
+    const cases = [
+      [{ max_output_tokens: 200 }, 200],
+      [{ max_tokens: 100, max_output_tokens: 200 }, 200],
+      [{ max_output_tokens: 200, max_completion_tokens: 300 }, 300],
+      [{ max_tokens: 100, max_output_tokens: 200, max_completion_tokens: 300 }, 300],
+      [{ max_output_tokens: 200, max_completion_tokens: null }, 200],
+      [{ max_tokens: 100, max_output_tokens: null }, 100],
+      [{ max_output_tokens: null }, undefined],
+    ] as const;
+    for (const [options, expected] of cases) {
+      const body = validateChatCompletionRequest({ ...valid, ...options });
+      expect(body.max_tokens).toBe(expected);
+      expect("max_output_tokens" in body).toBe(false);
+      expect("max_completion_tokens" in body).toBe(false);
+    }
+  });
+
+  test("rejects invalid max_output_tokens even when another limit takes precedence", () => {
+    for (const value of [0, -1, 1.5, "200", true, {}, [], NaN, Infinity]) {
+      for (const options of [{}, { max_completion_tokens: 300 }]) {
+        expect(failure({ ...valid, ...options, max_output_tokens: value }))
+          .toMatchObject({ code: "invalid_max_tokens", param: "max_output_tokens" });
+      }
+    }
+  });
+
   test("drops explicit null options", () => {
     const body = validateChatCompletionRequest({
       ...valid, temperature: null, top_p: null, stop: null, tool_choice: null, max_tokens: null, n: null,

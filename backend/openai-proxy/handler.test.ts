@@ -196,7 +196,7 @@ describe("OpenAI-compatible handler", () => {
   test("client aliases retain request validation and model output limits", async () => {
     configureAlias();
     aliases[0]!.reasoningSource = "client";
-    for (const options of [{ reasoning_effort: "extreme" }, { max_tokens: 64001 }]) {
+    for (const options of [{ reasoning_effort: "extreme" }, { max_tokens: 64001 }, { max_output_tokens: 64001 }]) {
       expect((await call({ model: "opus-max-thinking", ...options, messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
     }
     expect(sent).toHaveLength(0);
@@ -253,6 +253,38 @@ describe("OpenAI-compatible handler", () => {
     expect((await call({ model: "opus-max-thinking", messages: [{ role: "user", content: "Hi" }] })).status).toBe(400);
     expect(sent).toHaveLength(0);
   });
+  for (const stream of [false, true]) {
+    for (const route of ["direct", "client-alias", "pinned-alias", "app-tier"] as const) {
+      test(`forwards max_output_tokens to Bedrock (${route}, stream=${stream})`, async () => {
+        configureAlias();
+        if (route === "client-alias") aliases[0]!.reasoningSource = "client";
+        const modelId = route === "direct" ? modelRow!.modelId
+          : route === "app-tier" ? "chat-app-max" : "opus-max-thinking";
+        const response = await call({ model: modelId, stream, max_output_tokens: 1234, messages: [{ role: "user", content: "Hi" }] });
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.streaming).toBe(stream);
+        expect(sent[0]!.input.inferenceConfig?.maxTokens).toBe(1234);
+        expect(sent[0]!.input).not.toHaveProperty("max_output_tokens");
+      });
+    }
+    test(`validates max_output_tokens before calling Bedrock (stream=${stream})`, async () => {
+      for (const limit of [0, -1, 1.5, "1234", 64001]) {
+        const response = await call({ model: modelRow!.modelId, stream, max_output_tokens: limit, messages: [{ role: "user", content: "Hi" }] });
+        expect(response.status).toBe(400);
+        expect((await response.json()).error.code).toBe("invalid_max_tokens");
+      }
+      expect(sent).toHaveLength(0);
+    });
+    test(`retains the configured default when max_output_tokens is null (stream=${stream})`, async () => {
+      const response = await call({ model: modelRow!.modelId, stream, max_output_tokens: null, messages: [{ role: "user", content: "Hi" }] });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sent[0]!.input.inferenceConfig?.maxTokens).toBe(64000);
+    });
+  }
+
   test("sends images and adaptive effort to Bedrock and returns reasoning", async () => {
     const response = await call({
       model: "global.anthropic.claude-opus-4-7",

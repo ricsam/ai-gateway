@@ -125,8 +125,10 @@ export interface OpenAIChatCompletionRequest {
   messages: OpenAIMessage[];
   temperature?: number;
   max_tokens?: number;
-  /** Newer alias for max_tokens; takes precedence when both are sent. */
+  /** Newer alias for max_tokens; takes precedence over other output-limit fields. */
   max_completion_tokens?: number;
+  /** Gateway alias for max_tokens; takes precedence over max_tokens only. */
+  max_output_tokens?: number;
   top_p?: number;
   stop?: string | string[];
   stream?: boolean;

@@ -116,7 +116,7 @@ function validateMessage(message: unknown, index: number): OpenAIMessage {
   }
 }
 
-function positiveInteger(body: Json, key: "max_tokens" | "max_completion_tokens"): number | undefined {
+function positiveInteger(body: Json, key: "max_tokens" | "max_completion_tokens" | "max_output_tokens"): number | undefined {
   const value = body[key];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
@@ -146,14 +146,16 @@ export function validateChatCompletionRequest(input: unknown): OpenAIChatComplet
   }
   const maxTokens = positiveInteger(input, "max_tokens");
   const maxCompletionTokens = positiveInteger(input, "max_completion_tokens");
+  const maxOutputTokens = positiveInteger(input, "max_output_tokens");
   const messages = input.messages.map(validateMessage);
 
   const normalized = { ...input, messages } as OpenAIChatCompletionRequest;
   delete normalized.reasoning_effort;
   delete normalized.max_completion_tokens;
+  delete normalized.max_output_tokens;
   delete normalized.max_tokens;
   if (reasoningEffort !== undefined) normalized.reasoning_effort = reasoningEffort;
-  const effectiveMaxTokens = maxCompletionTokens ?? maxTokens;
+  const effectiveMaxTokens = maxCompletionTokens ?? maxOutputTokens ?? maxTokens;
   if (effectiveMaxTokens !== undefined) normalized.max_tokens = effectiveMaxTokens;
   if (input.temperature === null) delete normalized.temperature;
   if (input.top_p === null) delete normalized.top_p;

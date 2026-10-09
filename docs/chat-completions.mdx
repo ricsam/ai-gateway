@@ -24,7 +24,7 @@ curl https://gateway.example.com/v1/chat/completions \
   }'
 ```
 
-Supported generation controls include `max_tokens` (or its newer alias `max_completion_tokens`, which wins when both are sent), `temperature`, `top_p`, and `stop`. Only `n: 1` is supported. The requested output limit cannot exceed the model's administrator-configured maximum.
+Supported generation controls include `max_tokens`, `max_completion_tokens`, `max_output_tokens` (a gateway compatibility alias), `temperature`, `top_p`, and `stop`. Output limits are forwarded to Bedrock as `inferenceConfig.maxTokens` for both streaming and non-streaming requests, subject to the [reasoning restrictions below](#reasoning-effort). If multiple limits are sent, the first non-null value wins in this order: `max_completion_tokens`, `max_output_tokens`, `max_tokens`. Each supplied limit must be a positive integer; the effective limit cannot exceed the model's administrator-configured maximum. If no limit is provided, that configured maximum is used. Only `n: 1` is supported.
 
 Invalid requests return an OpenAI-style error whose `param` names the offending field, for example `messages[2].content[1].image_url.url`.
 
