@@ -54,6 +54,42 @@ Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logi
 - Native `invoke-stream` passes provider binary event bytes through as `application/octet-stream`.
 - `/v1/usage` and `/user/daily/activity` return `Cache-Control: no-store` and are always scoped to the owner of the presented inference key.
 
+## Per-request Chat Completions accounting
+
+Both API-key `/v1/chat/completions` and session-authenticated playground completions expose optional, non-standard accounting fields inside `usage`. No pricing lookup or client-side estimate is needed.
+
+```ts
+interface UsageAccounting {
+  // Actual charged USD, only present after successful ledger settlement.
+  cost?: number;
+  cost_details?: {
+    currency: "USD";
+    status: "settled" | "failed" | "unavailable";
+    calculated_cost?: number;
+    input_cost?: number;
+    output_cost?: number;
+    cache_read_cost?: number;
+    cache_write_5m_cost?: number;
+    cache_write_1h_cost?: number;
+    partially_charged?: boolean;
+  };
+}
+```
+
+`settled` includes every field above. Category costs sum to `calculated_cost`, the gateway's metered cost before balance capping; `cost` is the actual ledger charge and can be smaller when `partially_charged` is true. A settled `cost: 0` is a known zero charge, not missing accounting. `failed` (ledger settlement error) and `unavailable` (no provider usage metadata) currently include only `currency` and `status`, with **no `cost` or numeric cost fields**. These states must not be displayed as free usage. API-key completed model responses remain available even when settlement fails. The existing session-authenticated playground instead retains its prior HTTP error (non-streaming) or stream error behavior on settlement failure, so its UI surfaces the error. Pre-inference/authentication and upstream failures retain their normal error behavior.
+
+For streaming, an early token-only usage chunk may be followed by a final `choices: []` usage chunk after settlement and before `[DONE]`. The final chunk repeats token totals and adds accounting. Upsert by completion `id`; **do not add repeated chunks as separate requests**. Read through `[DONE]`, not just the finish-reason chunk. A disconnected/error stream may never deliver final accounting: do not infer a charge. Non-streaming responses include final accounting in the JSON `usage`. Existing session-only `credit_usage` remains for successful playground settlements.
+
+`prompt_tokens` includes uncached input, cache reads, and cache writes. When cache activity exists, `prompt_tokens_details` includes:
+
+- `cached_tokens`: cache reads;
+- `cache_creation_tokens` and its alias `cache_write_tokens`: total cache writes;
+- `cache_write_5m_tokens` / `cache_write_1h_tokens`: billing TTL buckets (writes without provider TTL details use the existing 5m fallback).
+
+Legacy top-level `cache_read_input_tokens` and `cache_creation_input_tokens` remain. All cache counts are already included in prompt totals; do not add them again. Separate reasoning-token counts are not supplied. Absent provider token metadata retains legacy zero token totals but has cost status `unavailable`.
+
+Completion `id` is the effective request ID. Clients can associate it with their own conversations; the gateway has no conversation coupling. `/v1/usage` is an account-wide monthly aggregate, **not** a request/conversation cost source. This implementation adds no pricing endpoint and no request-usage lookup endpoint; clients must persist accounting received with completions.
+
 ## Errors
 
 OpenAI-compatible endpoints return an `error` object with `message`, `type`, and `code`. Native endpoints return an `error` object with `message` and `code`.

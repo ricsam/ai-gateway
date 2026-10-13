@@ -22,7 +22,7 @@ import { getRemoteImageUrlsEnabled } from "../config-service";
 import { isReasoningEffort, resolveReasoningProfile } from "@/shared/reasoning";
 import { transformRequest } from "./transform/request";
 import { transformResponse } from "./transform/response";
-import { transformUsage } from "./transform/usage";
+import { transformUsage, settledUsage } from "./transform/usage";
 import { applyReasoning, ReasoningConfigError } from "./transform/reasoning";
 import { collectRemoteImageUrls, RequestValidationError, validateChatCompletionRequest } from "./transform/validate";
 import { ImageInputError, type ResolvedImage } from "./images";
@@ -318,6 +318,12 @@ async function handleNonStreamingRequest(
   // Extract cache usage
   const cacheUsage = extractConverseCacheUsage(response.usage);
 
+  const openaiResponse = transformResponse(response, requestedModel, requestId);
+  if (!response.usage) {
+    openaiResponse.usage.cost_details = { currency: "USD", status: "unavailable" };
+    return Response.json(openaiResponse);
+  }
+
   // Calculate and deduct credits with cache pricing
   const costBreakdown = calculateCostBreakdown({
     inputTokens,
@@ -332,36 +338,40 @@ async function handleNonStreamingRequest(
     cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok ?? undefined,
   });
 
-  const settlement = await deductCredits({
-    userId,
-    amount: costBreakdown.total,
-    type: principal.credentialType === "session" ? "chat" : "api",
-    description: `Chat completion using ${model.modelId}`,
-    requestId,
-    apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
-    source: principal.credentialType === "session" ? "playground" : "api",
-    modelId: model.modelId,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens: cacheUsage.cacheReadTokens,
-    cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
-    cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
-    inputCost: costBreakdown.inputCost,
-    outputCost: costBreakdown.outputCost,
-    cacheReadCost: costBreakdown.cacheReadCost,
-    cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
-    cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
-  });
+  try {
+    const settlement = await deductCredits({
+      userId,
+      amount: costBreakdown.total,
+      type: principal.credentialType === "session" ? "chat" : "api",
+      description: `Chat completion using ${model.modelId}`,
+      requestId,
+      apiKeyId: principal.credentialType === "api_key" ? principal.credentialId : undefined,
+      source: principal.credentialType === "session" ? "playground" : "api",
+      modelId: model.modelId,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: cacheUsage.cacheReadTokens,
+      cacheWrite5mTokens: cacheUsage.cacheWrite5mTokens,
+      cacheWrite1hTokens: cacheUsage.cacheWrite1hTokens,
+      inputCost: costBreakdown.inputCost,
+      outputCost: costBreakdown.outputCost,
+      cacheReadCost: costBreakdown.cacheReadCost,
+      cacheWrite5mCost: costBreakdown.cacheWrite5mCost,
+      cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
+    });
 
-  // Log completion
-  console.log(
-    `[OpenAI Proxy] Complete: model=${model.modelId} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
-  );
-
-  // Transform response to OpenAI format
-  const openaiResponse = transformResponse(response, requestedModel, requestId);
-  if (principal.credentialType === "session" && settlement) {
-    openaiResponse.credit_usage = playgroundCreditUsage(settlement);
+    console.log(
+      `[OpenAI Proxy] Complete: model=${model.modelId} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${settlement.creditsCharged.toFixed(6)} balanceAfter=${settlement.balanceAfter.toFixed(6)} partial=${settlement.partiallyCharged}`,
+    );
+    openaiResponse.usage = settledUsage(openaiResponse.usage, costBreakdown, settlement);
+    if (principal.credentialType === "session") {
+      openaiResponse.credit_usage = playgroundCreditUsage(settlement);
+    }
+  } catch (error) {
+    // The existing playground displays transport errors, not cost_details failures.
+    if (principal.credentialType === "session") throw error;
+    console.error("[OpenAI Proxy] Billing settlement failed", error instanceof Error ? error.message : "unknown error");
+    openaiResponse.usage.cost_details = { currency: "USD", status: "failed" };
   }
   return Response.json(openaiResponse);
 }
@@ -426,6 +436,7 @@ async function handleStreamingRequest(
   let outputTokens = 0;
   let cacheUsage = emptyCacheUsage();
   let hasUsageMetadata = false;
+  let finalUsage = transformUsage(undefined);
   let sawUnexpectedError = false;
   let streamCompleted = false;
   let isCanceled = false;
@@ -707,6 +718,7 @@ async function handleStreamingRequest(
             outputTokens = event.metadata.usage.outputTokens ?? 0;
             cacheUsage = extractStreamingCacheUsage(event.metadata);
             hasUsageMetadata = true;
+            finalUsage = transformUsage(event.metadata.usage);
             
             const enqueued = sendChunk({
               id,
@@ -714,7 +726,7 @@ async function handleStreamingRequest(
               created,
               model: requestedModel,
               choices: [],
-              usage: transformUsage(event.metadata.usage),
+              usage: finalUsage,
             });
             if (!enqueued) {
               break;
@@ -743,7 +755,7 @@ async function handleStreamingRequest(
           logCancellationOnce(hasUsageMetadata ? "billed using metadata" : "no usage metadata, not billed");
         }
 
-        const shouldBill = !sawUnexpectedError && (streamCompleted || (streamCanceled && hasUsageMetadata));
+        const shouldBill = !sawUnexpectedError && hasUsageMetadata && (streamCompleted || streamCanceled);
         if (shouldBill) {
           try {
             const costBreakdown = calculateCostBreakdown({
@@ -780,14 +792,15 @@ async function handleStreamingRequest(
               cacheWrite1hCost: costBreakdown.cacheWrite1hCost,
             });
 
-            if (principal.credentialType === "session" && settlement && !isStreamCanceled()) {
+            if (!isStreamCanceled()) {
               sendChunk({
                 id,
                 object: "chat.completion.chunk",
                 created,
                 model: requestedModel,
                 choices: [],
-                credit_usage: playgroundCreditUsage(settlement),
+                usage: settledUsage(finalUsage, costBreakdown, settlement),
+                ...(principal.credentialType === "session" ? { credit_usage: playgroundCreditUsage(settlement) } : {}),
               });
             }
 
@@ -800,18 +813,25 @@ async function handleStreamingRequest(
               "[OpenAI Proxy] Stream billing error:",
               billingError instanceof Error ? { name: billingError.name, message: billingError.message } : billingError
             );
-            if (principal.credentialType === "session" && !isStreamCanceled()) {
-              sawUnexpectedError = true;
-              safeError(new Error("The response completed, but playground credits could not be settled"));
+            if (!isStreamCanceled()) {
+              if (principal.credentialType === "session") {
+                sawUnexpectedError = true;
+                safeError(new Error("The response completed, but playground credits could not be settled"));
+              } else {
+                sendChunk({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [],
+                  usage: { ...finalUsage, cost_details: { currency: "USD", status: "failed" } } });
+              }
             }
           }
         }
 
         if (!sawUnexpectedError) {
-          // Playground billing settles before DONE so the UI receives the final,
-          // authoritative charge and balance. API streams keep the historical
-          // behavior of completing even if asynchronous ledger settlement fails.
+          // Final accounting always precedes DONE; missing metadata is not a zero charge.
           if (streamCompleted && !isStreamCanceled()) {
+            if (!hasUsageMetadata) {
+              sendChunk({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [],
+                usage: { ...finalUsage, cost_details: { currency: "USD", status: "unavailable" } } });
+            }
             safeEnqueue(encoder.encode("data: [DONE]\n\n"));
           }
           safeClose();

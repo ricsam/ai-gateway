@@ -329,9 +329,38 @@
         "type": "object",
         "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
         "properties": {
-          "prompt_tokens": { "type": "integer" },
+          "prompt_tokens": { "type": "integer", "description": "Includes uncached input, cache reads and cache writes; do not add cache counts again." },
           "completion_tokens": { "type": "integer" },
-          "total_tokens": { "type": "integer" }
+          "total_tokens": { "type": "integer" },
+          "prompt_tokens_details": {
+            "type": "object",
+            "properties": {
+              "cached_tokens": { "type": "integer" },
+              "cache_creation_tokens": { "type": "integer" },
+              "cache_write_tokens": { "type": "integer", "description": "Alias of cache_creation_tokens." },
+              "cache_write_5m_tokens": { "type": "integer" },
+              "cache_write_1h_tokens": { "type": "integer" }
+            }
+          },
+          "cache_read_input_tokens": { "type": "integer" },
+          "cache_creation_input_tokens": { "type": "integer" },
+          "cost": { "type": "number", "minimum": 0, "description": "Actual settled ledger charge in USD. Present only after successful settlement; a known zero is valid." },
+          "cost_details": {
+            "type": "object",
+            "description": "Optional accounting extension. Settled includes calculated category costs (before balance capping); failed/unavailable omit unknown fields and cost. Streaming final usage replaces earlier usage for the same completion id and precedes DONE.",
+            "required": ["currency", "status"],
+            "properties": {
+              "currency": { "const": "USD" },
+              "status": { "enum": ["settled", "failed", "unavailable"] },
+              "calculated_cost": { "type": "number" },
+              "input_cost": { "type": "number" },
+              "output_cost": { "type": "number" },
+              "cache_read_cost": { "type": "number" },
+              "cache_write_5m_cost": { "type": "number" },
+              "cache_write_1h_cost": { "type": "number" },
+              "partially_charged": { "type": "boolean" }
+            }
+          }
         }
       },
       "ChatCompletionResponse": {

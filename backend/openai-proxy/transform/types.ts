@@ -159,9 +159,25 @@ export interface OpenAIUsage {
     cached_tokens: number;
     /** LiteLLM extension for newly cached input. */
     cache_creation_tokens: number;
+    cache_write_tokens: number;
+    cache_write_5m_tokens: number;
+    cache_write_1h_tokens: number;
   };
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  /** Actual ledger-settled charge in USD; absent until settlement succeeds. */
+  cost?: number;
+  cost_details?: {
+    currency: "USD";
+    status: "settled" | "failed" | "unavailable";
+    calculated_cost?: number;
+    input_cost?: number;
+    output_cost?: number;
+    cache_read_cost?: number;
+    cache_write_5m_cost?: number;
+    cache_write_1h_cost?: number;
+    partially_charged?: boolean;
+  };
 }
 
 /** Authoritative credit settlement metadata returned to the built-in playground. */

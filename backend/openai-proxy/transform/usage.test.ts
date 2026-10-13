@@ -8,7 +8,8 @@ test("counts cached input once, including both cache-write TTLs", () => {
     cacheDetails: [{ ttl: "5m", inputTokens: 1000 }, { ttl: "1h", inputTokens: 412 }],
   })).toEqual({
     prompt_tokens: 9097, completion_tokens: 510, total_tokens: 9607,
-    prompt_tokens_details: { cached_tokens: 7683, cache_creation_tokens: 1412 },
+    prompt_tokens_details: { cached_tokens: 7683, cache_creation_tokens: 1412,
+      cache_write_tokens: 1412, cache_write_5m_tokens: 1000, cache_write_1h_tokens: 412 },
     cache_read_input_tokens: 7683, cache_creation_input_tokens: 1412,
   });
 });

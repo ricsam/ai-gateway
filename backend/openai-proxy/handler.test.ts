@@ -10,6 +10,9 @@ let aliases: RoutingAlias[] = [];
 let apps: RoutingApp[] = [];
 let settlements: Record<string, unknown>[] = [];
 let remoteImagesEnabled = true;
+let settlementFails = false;
+let charged = 0.01;
+let settlementGate: Promise<void> | undefined;
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
@@ -28,10 +31,12 @@ mock.module("../proxy-auth", () => {
 });
 mock.module("../credit-service", () => ({
   checkBalance: async () => 100,
-  calculateCostBreakdown: () => ({ total: 0.01, inputCost: 0.005, outputCost: 0.005, cacheReadCost: 0, cacheWrite5mCost: 0, cacheWrite1hCost: 0 }),
+  calculateCostBreakdown: () => ({ total: 0.01, inputCost: 0.001, outputCost: 0.002, cacheReadCost: 0.003, cacheWrite5mCost: 0.0015, cacheWrite1hCost: 0.0025 }),
   deductCredits: async (input: Record<string, unknown>) => {
     settlements.push(input);
-    return { actualCost: 0.01, creditsCharged: 0.01, balanceAfter: 99.99, partiallyCharged: false };
+    await settlementGate;
+    if (settlementFails) throw new Error("test settlement failure");
+    return { actualCost: 0.01, creditsCharged: charged, balanceAfter: 100 - charged, partiallyCharged: charged < 0.01 };
   },
 }));
 mock.module("../config-service", () => ({ getRemoteImageUrlsEnabled: async () => remoteImagesEnabled }));
@@ -77,6 +82,9 @@ beforeEach(() => {
   sent = [];
   streamEvents = [];
   settlements = [];
+  settlementFails = false;
+  charged = 0.01;
+  settlementGate = undefined;
   converseOutput = {
     output: { message: { role: "assistant", content: [
       { reasoningContent: { reasoningText: { text: "Looking at the image.", signature: "sig" } } },
@@ -88,6 +96,100 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible handler", () => {
+  test("stream accounting waits for ledger completion and precedes DONE", async () => {
+    let release!: () => void;
+    settlementGate = new Promise<void>(resolve => { release = resolve; });
+    streamEvents = [{ metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } } }];
+    const response = await call({ model: "global.anthropic.claude-opus-4-7", stream: true, messages: [{ role: "user", content: "Hi" }] });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let before = "";
+    try {
+      while (!before.includes('"usage"')) before += decoder.decode((await reader.read()).value);
+      expect(before).not.toContain('"cost"');
+      expect(before).not.toContain("[DONE]");
+    } finally { release(); }
+    let after = "";
+    while (true) { const part = await reader.read(); if (part.done) break; after += decoder.decode(part.value); }
+    expect(after).toContain('"cost":0.01');
+    expect(after.indexOf('"cost":0.01')).toBeLessThan(after.indexOf("[DONE]"));
+  });
+  test("stream TTL details and fallback buckets exactly match billed tokens", async () => {
+    for (const cacheDetails of [undefined, [{ ttl: "5m", inputTokens: 7 }, { ttl: "1h", inputTokens: 5 }]]) {
+      settlements = [];
+      streamEvents = [{ metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5,
+        cacheReadInputTokens: 10, cacheWriteInputTokens: 12, cacheDetails } } }];
+      const response = await call({ model: "global.anthropic.claude-opus-4-7", stream: true, messages: [{ role: "user", content: "Hi" }] });
+      const frames = (await response.text()).split("\n\n").filter(f => f.startsWith("data: {")).map(f => JSON.parse(f.slice(6)));
+      const details = frames.filter(f => f.usage).at(-1).usage.prompt_tokens_details;
+      expect(details.cached_tokens).toBe(settlements[0]!.cacheReadTokens);
+      expect(details.cache_write_5m_tokens).toBe(settlements[0]!.cacheWrite5mTokens);
+      expect(details.cache_write_1h_tokens).toBe(settlements[0]!.cacheWrite1hTokens);
+      expect(details.cache_write_5m_tokens).toBe(cacheDetails ? 7 : 12);
+      expect(details.cache_write_1h_tokens).toBe(cacheDetails ? 5 : 0);
+    }
+  });
+  for (const stream of [false, true]) for (const auth of ["api_key", "session"] as const) {
+    for (const state of ["full", "partial", "zero", "failed", "unavailable"] as const) {
+      test(`authoritative cost ${state} (${auth}, stream=${stream})`, async () => {
+        settlementFails = state === "failed";
+        charged = state === "zero" ? 0 : state === "partial" ? 0.003 : 0.01;
+        const usage = { inputTokens: 2, outputTokens: 3, totalTokens: 5, cacheReadInputTokens: 10,
+          cacheWriteInputTokens: 12, cacheDetails: [{ ttl: "5m", inputTokens: 8 }, { ttl: "1h", inputTokens: 4 }] };
+        converseOutput = { output: { message: { role: "assistant", content: [{ text: "Done" }] } },
+          ...(state === "unavailable" ? {} : { usage }) };
+        streamEvents = [{ messageStop: { stopReason: "end_turn" } },
+          ...(state === "unavailable" ? [] : [{ metadata: { usage } }])];
+        const response = await handleOpenAIProxy(new Request("https://gateway.test/v1/chat/completions", {
+          method: "POST", headers: { "content-type": "application/json", "x-request-id": "request-cost-test" },
+          body: JSON.stringify({ model: "global.anthropic.claude-opus-4-7", stream, messages: [{ role: "user", content: "Hi" }] }),
+        }), auth);
+        if (auth === "session" && state === "failed") {
+          if (stream) {
+            expect(response.status).toBe(200);
+            await expect(response.text()).rejects.toThrow("playground credits could not be settled");
+          } else {
+            expect(response.status).toBe(500);
+            expect((await response.json()).error).toBeDefined();
+          }
+          expect(settlements).toHaveLength(1);
+          return;
+        }
+        expect(response.status).toBe(200);
+        let result;
+        if (stream) {
+          const text = await response.text();
+          expect(text.trim().endsWith("data: [DONE]")).toBe(true);
+          const frames = text.split("\n\n").filter(f => f.startsWith("data: {")).map(f => JSON.parse(f.slice(6)));
+          const usages = frames.filter(f => f.usage);
+          result = usages.at(-1);
+          if (state !== "unavailable") {
+            expect(usages).toHaveLength(2);
+            expect(usages[0].usage.cost).toBeUndefined();
+            expect(usages[0].id).toBe(result.id);
+          }
+        } else result = await response.json();
+        expect(result.id).toBe("request-cost-test");
+        const settled = state !== "failed" && state !== "unavailable";
+        expect(result.usage.cost_details.status).toBe(settled ? "settled" : state);
+        expect(result.usage.cost_details.currency).toBe("USD");
+        expect(result.usage.cost).toBe(settled ? charged : undefined);
+        expect(settlements).toHaveLength(state === "unavailable" ? 0 : 1);
+        if (settled) {
+          expect(result.usage.cost_details).toEqual({ currency: "USD", status: "settled", calculated_cost: 0.01,
+            input_cost: 0.001, output_cost: 0.002, cache_read_cost: 0.003, cache_write_5m_cost: 0.0015,
+            cache_write_1h_cost: 0.0025, partially_charged: charged < 0.01 });
+          expect(result.usage.prompt_tokens).toBe(24);
+          expect(result.usage.prompt_tokens_details).toEqual({ cached_tokens: 10, cache_creation_tokens: 12,
+            cache_write_tokens: 12, cache_write_5m_tokens: 8, cache_write_1h_tokens: 4 });
+          expect(result.credit_usage?.credits_charged).toBe(auth === "session" ? charged : undefined);
+        } else {
+          expect(result.usage.cost_details).toEqual({ currency: "USD", status: state });
+          expect(result.credit_usage).toBeUndefined();
+        }
+      });
+    }
+  }
   for (const stream of [false, true]) {
     test(`reports all context tokens with separate billing categories (stream=${stream})`, async () => {
       const usage = {
