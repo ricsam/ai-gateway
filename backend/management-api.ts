@@ -45,7 +45,7 @@ function analyticsInput(url: URL) {
 }
 function userDto(user: typeof userTable.$inferSelect, groups: { id: string; name: string; role: string }[] = []) {
   return { id: user.id, username: user.username, name: user.name, email: user.email, role: user.role, enabled: user.enabled,
-    apiEnabled: user.apiEnabled, mustChangePassword: user.mustChangePassword, creditBalance: user.creditBalance,
+    mustChangePassword: user.mustChangePassword, creditBalance: user.creditBalance,
     defaultMonthlyCredits: user.defaultMonthlyCredits, createdAt: user.createdAt.toISOString(), groups };
 }
 async function audit(principal: ManagementPrincipal, requestId: string, action: string, targetType: string, targetId: string | null, metadata: Record<string, unknown> = {}) {
@@ -225,9 +225,9 @@ export async function handleManagementApi(request: Request): Promise<Response> {
     }
     if (path === "/groups/bulk-user-update" && request.method === "POST") {
       const principal = await requireManagementPrincipal(request, "users.write");
-      const data = await body<{ groupIds: string[]; enabled?: boolean; apiEnabled?: boolean; defaultMonthlyCredits?: number }>(request);
+      const data = await body<{ groupIds: string[]; enabled?: boolean; defaultMonthlyCredits?: number }>(request);
       if (!Array.isArray(data.groupIds) || data.groupIds.some((id) => typeof id !== "string")) return failure(requestId, 400, "validation_error", "groupIds must be an array of group IDs");
-      const usersUpdated = await bulkUpdateUsersByGroups(data.groupIds, { enabled: data.enabled, apiEnabled: data.apiEnabled, defaultMonthlyCredits: data.defaultMonthlyCredits }, principal, requestId);
+      const usersUpdated = await bulkUpdateUsersByGroups(data.groupIds, { enabled: data.enabled, defaultMonthlyCredits: data.defaultMonthlyCredits }, principal, requestId);
       return response(requestId, { data: { usersUpdated } });
     }
     if ((match = path.match(/^\/groups\/([^/]+)$/)) && request.method === "GET") {
@@ -237,7 +237,7 @@ export async function handleManagementApi(request: Request): Promise<Response> {
       const members = await db.select({
         userId: userTable.id, username: userTable.username, name: userTable.name, email: userTable.email,
         role: groupMembersTable.role, source: groupMembersTable.source, joinedAt: groupMembersTable.joinedAt,
-        enabled: userTable.enabled, apiEnabled: userTable.apiEnabled, creditBalance: userTable.creditBalance,
+        enabled: userTable.enabled, creditBalance: userTable.creditBalance,
         defaultMonthlyCredits: userTable.defaultMonthlyCredits,
       }).from(groupMembersTable).innerJoin(userTable, eq(groupMembersTable.userId, userTable.id)).where(eq(groupMembersTable.groupId, id));
       return response(requestId, { data: { ...group, members } });

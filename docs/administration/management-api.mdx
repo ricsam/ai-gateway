@@ -49,7 +49,9 @@ curl --fail-with-body \
 
 `replaceExisting` revokes all same-named keys for that user before creating the replacement. This is intended for repeatable downstream credential provisioning: a rerun rotates the credential instead of leaving multiple active copies. List redacted key metadata with `GET /users/{id}/api-keys` and revoke a key with `DELETE /users/{id}/api-keys/{keyId}`.
 
-The operation is audited as `api_key.provisioned`. Disabled users and users with API access disabled can receive a key, but authentication with that key remains blocked until both controls are enabled.
+The operation is audited as `api_key.provisioned`. Disabled users can receive a key, but authentication with that key remains blocked until the account is enabled. Account enablement controls both login and API access; valid keys with the required scopes and sufficient inference credits are still required.
+
+Use `enabled` in user creation, updates, and group bulk-user updates to control account access. The former `apiEnabled` field is no longer part of the API contract; historical client payloads containing it do not control access. Update those clients to use `enabled` instead.
 
 ## Pagination and errors
 

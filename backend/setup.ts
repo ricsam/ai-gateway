@@ -56,7 +56,7 @@ export async function createInitialAdministrator(input: SetupInput, requestId: s
     const userId = crypto.randomUUID();
     await tx.insert(userTable).values({
       id: userId, username: normalized.username, displayUsername: input.username.trim(), name: normalized.name,
-      email: normalized.email, emailVerified: true, role: "admin", enabled: true, apiEnabled: true,
+      email: normalized.email, emailVerified: true, role: "admin", enabled: true,
       mustChangePassword: false, createdAt: now, updatedAt: now,
     });
     await tx.insert(accountTable).values({

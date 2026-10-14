@@ -55,7 +55,7 @@ export async function handleTrustedHeaderSignIn(request: Request, providerKey: s
     await db.transaction(async (tx) => {
       let username = baseUsername; let suffix = 0;
       while ((await tx.select({ id: userTable.id }).from(userTable).where(eq(userTable.username, username)).limit(1)).length) username = `${baseUsername.slice(0, 27)}-${++suffix}`;
-      await tx.insert(userTable).values({ id: userId!, username, displayUsername: username, email, emailVerified: true, name, role: "user", enabled: true, apiEnabled: true, createdAt: now, updatedAt: now });
+      await tx.insert(userTable).values({ id: userId!, username, displayUsername: username, email, emailVerified: true, name, role: "user", enabled: true, createdAt: now, updatedAt: now });
       await tx.insert(accountTable).values({ id: crypto.randomUUID(), accountId: subject, providerId: provider.providerKey, userId: userId!, password: await hashPassword(crypto.randomUUID()), createdAt: now, updatedAt: now });
     });
   }

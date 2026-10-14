@@ -14,6 +14,7 @@
     "db:studio": "drizzle-kit studio",
     "db:reset": "bun scripts/reset-database.ts",
     "timescale:verify": "bun scripts/verify-timescale.ts",
+    "users:verify-access": "bun scripts/verify-user-access.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts"
   },
   "dependencies": {

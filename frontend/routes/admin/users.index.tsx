@@ -18,7 +18,6 @@ type User = {
   email: string;
   role: "user" | "admin";
   enabled: boolean;
-  apiEnabled: boolean;
   mustChangePassword: boolean;
   creditBalance: number;
   defaultMonthlyCredits: number;
@@ -32,7 +31,6 @@ type UserForm = {
   password: string;
   role: "user" | "admin";
   enabled: boolean;
-  apiEnabled: boolean;
   mustChangePassword: boolean;
   creditBalance: string;
   defaultMonthlyCredits: string;
@@ -40,7 +38,7 @@ type UserForm = {
 };
 
 const blankUser: UserForm = {
-  username: "", email: "", name: "", password: "", role: "user", enabled: true, apiEnabled: true,
+  username: "", email: "", name: "", password: "", role: "user", enabled: true,
   mustChangePassword: true, creditBalance: "0", defaultMonthlyCredits: "0", groupIds: [],
 };
 
@@ -117,7 +115,7 @@ function Users() {
     setEditing(user);
     setEditForm({
       username: user.username, email: user.email, name: user.name, password: "", role: user.role,
-      enabled: user.enabled, apiEnabled: user.apiEnabled, mustChangePassword: user.mustChangePassword,
+      enabled: user.enabled, mustChangePassword: user.mustChangePassword,
       creditBalance: String(user.creditBalance), defaultMonthlyCredits: String(user.defaultMonthlyCredits), groupIds: user.groups.map((group) => group.id),
     });
   };
@@ -127,7 +125,7 @@ function Users() {
     await run(async () => {
       await managementFetch(`/users/${editing.id}`, { method: "PATCH", body: JSON.stringify({
         username: editForm.username, email: editForm.email, name: editForm.name, role: editForm.role,
-        enabled: editForm.enabled, apiEnabled: editForm.apiEnabled, mustChangePassword: editForm.mustChangePassword,
+        enabled: editForm.enabled, mustChangePassword: editForm.mustChangePassword,
       }) });
       await managementFetch(`/users/${editing.id}/groups`, { method: "PUT", body: JSON.stringify({ groupIds: editForm.groupIds }) });
       setEditing(null);
@@ -144,14 +142,14 @@ function Users() {
     }, `Credits saved for @${user.username}`);
   };
 
-  const changeAccess = (user: User, updates: Partial<Pick<User, "enabled" | "apiEnabled" | "role">>) => run(async () => {
+  const changeAccess = (user: User, updates: Partial<Pick<User, "enabled" | "role">>) => run(async () => {
     await managementFetch(`/users/${user.id}`, { method: "PATCH", body: JSON.stringify(updates) });
   }, `Access saved for @${user.username}`);
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap justify-between gap-4">
-        <div><h1 className="text-2xl font-semibold">Users</h1><p className="text-sm text-muted-foreground">Create local accounts and manage identity, access, credits, passwords, and groups.</p></div>
+        <div><h1 className="text-2xl font-semibold">Users</h1><p className="text-sm text-muted-foreground">Manage identity, credits, passwords, and groups. Account enablement controls login and API access; API requests still require a valid key with the required scopes.</p></div>
         <div className="flex gap-2">
           <Button variant="outline" disabled={saving} onClick={() => {
             if (!window.confirm("Reset every user with a monthly quota to that balance now?")) return;
@@ -178,7 +176,6 @@ function Users() {
               <Toggle label="Administrator" checked={form.role === "admin"} onChange={(value) => setForm({ ...form, role: value ? "admin" : "user" })} />
               <Toggle label="Force password change" checked={form.mustChangePassword} onChange={(value) => setForm({ ...form, mustChangePassword: value })} />
               <Toggle label="Account enabled" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
-              <Toggle label="API enabled" checked={form.apiEnabled} onChange={(value) => setForm({ ...form, apiEnabled: value })} />
             </div>
             <div className="space-y-1.5"><Label>Groups</Label><GroupChoices groups={groups} selected={form.groupIds} onChange={(groupIds) => setForm({ ...form, groupIds })} /></div>
             <Button disabled={saving}>Create user</Button>
@@ -189,7 +186,7 @@ function Users() {
       <Input className="max-w-md" placeholder="Filter by user, email, or group" value={search} onChange={(event) => setSearch(event.target.value)} />
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[1180px] text-sm">
-          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th>Role</th><th>Groups</th><th>Balance</th><th>Monthly quota</th><th>Enabled</th><th>API</th><th className="text-right">Actions</th></tr></thead>
+          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th>Role</th><th>Groups</th><th>Balance</th><th>Monthly quota</th><th>Account enabled</th><th className="text-right">Actions</th></tr></thead>
           <tbody>
             {filteredUsers.map((user) => {
               const draft = creditDrafts[user.id] ?? { balance: String(user.creditBalance), monthly: String(user.defaultMonthlyCredits) };
@@ -201,7 +198,6 @@ function Users() {
                 <td className="p-3"><Input className="w-28" type="number" min="0" step="0.01" value={draft.balance} onChange={(event) => setCreditDrafts({ ...creditDrafts, [user.id]: { ...draft, balance: event.target.value } })} /></td>
                 <td className="p-3"><div className="flex items-center gap-1"><Input className="w-28" type="number" min="0" step="0.01" value={draft.monthly} onChange={(event) => setCreditDrafts({ ...creditDrafts, [user.id]: { ...draft, monthly: event.target.value } })} />{creditsChanged && <Button size="sm" onClick={() => void saveCredits(user)} disabled={saving}>Save</Button>}</div></td>
                 <td className="p-3 text-center"><Switch checked={user.enabled} disabled={saving} onCheckedChange={(enabled) => void changeAccess(user, { enabled })} /></td>
-                <td className="p-3 text-center"><Switch checked={user.apiEnabled} disabled={saving} onCheckedChange={(apiEnabled) => void changeAccess(user, { apiEnabled })} /></td>
                 <td className="p-3"><div className="flex justify-end gap-1">
                   <Button variant="ghost" size="icon" title="Edit identity and groups" onClick={() => openEdit(user)}><IconPencil /></Button>
                   <Button variant="ghost" size="icon" title="Set password" onClick={() => { setPasswordUser(user); setPassword(""); setPasswordChangeRequired(true); }}><IconKey /></Button>
@@ -212,7 +208,7 @@ function Users() {
                 </div></td>
               </tr>;
             })}
-            {!filteredUsers.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">No users found</td></tr>}
+            {!filteredUsers.length && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No users found</td></tr>}
           </tbody>
         </table>
       </div>
@@ -225,7 +221,6 @@ function Users() {
             <div className="sm:col-span-2"><Label>Display name</Label><Input value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} /></div>
             <Toggle label="Administrator" checked={editForm.role === "admin"} onChange={(value) => setEditForm({ ...editForm, role: value ? "admin" : "user" })} />
             <Toggle label="Account enabled" checked={editForm.enabled} onChange={(enabled) => setEditForm({ ...editForm, enabled })} />
-            <Toggle label="API enabled" checked={editForm.apiEnabled} onChange={(apiEnabled) => setEditForm({ ...editForm, apiEnabled })} />
             <Toggle label="Require password change" checked={editForm.mustChangePassword} onChange={(mustChangePassword) => setEditForm({ ...editForm, mustChangePassword })} />
             <div className="space-y-1.5 sm:col-span-2"><Label className="flex items-center gap-2"><IconUsersGroup />Manual groups</Label><GroupChoices groups={groups} selected={editForm.groupIds} onChange={(groupIds) => setEditForm({ ...editForm, groupIds })} /></div>
           </div>

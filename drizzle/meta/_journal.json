@@ -36,6 +36,13 @@
       "when": 1791385805506,
       "tag": "0004_alias_reasoning_source",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791979952379,
+      "tag": "0005_remove_user_api_enabled",
+      "breakpoints": true
     }
   ]
 }

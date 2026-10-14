@@ -7,7 +7,7 @@ import type { ManagementPrincipal } from "./management-auth";
 
 export interface UserCreateInput {
   username: string; email: string; name: string; password: string; role?: "user" | "admin";
-  enabled?: boolean; apiEnabled?: boolean; mustChangePassword?: boolean; creditBalance?: number; defaultMonthlyCredits?: number;
+  enabled?: boolean; mustChangePassword?: boolean; creditBalance?: number; defaultMonthlyCredits?: number;
   groupIds?: string[];
 }
 
@@ -21,13 +21,13 @@ export async function createLocalUser(input: UserCreateInput, principal: Managem
   const creditBalance = input.creditBalance ?? 0;
   const defaultMonthlyCredits = input.defaultMonthlyCredits ?? 0;
   if (input.role !== undefined && !["user", "admin"].includes(input.role)) throw new Error("Role must be user or admin");
-  for (const field of ["enabled", "apiEnabled", "mustChangePassword"] as const) if (input[field] !== undefined && typeof input[field] !== "boolean") throw new Error(`${field} must be a boolean`);
+  for (const field of ["enabled", "mustChangePassword"] as const) if (input[field] !== undefined && typeof input[field] !== "boolean") throw new Error(`${field} must be a boolean`);
   if (!Number.isFinite(creditBalance) || !Number.isFinite(defaultMonthlyCredits) || creditBalance < 0 || defaultMonthlyCredits < 0) throw new Error("Credits cannot be negative or invalid");
   return db.transaction(async (tx) => {
     const now = new Date(); const id = crypto.randomUUID();
     const [user] = await tx.insert(userTable).values({
       id, username: valid.username, displayUsername: input.username.trim(), email: valid.email, name: valid.name, emailVerified: true,
-      role: input.role ?? "user", enabled: input.enabled ?? true, apiEnabled: input.apiEnabled ?? true,
+      role: input.role ?? "user", enabled: input.enabled ?? true,
       mustChangePassword: input.mustChangePassword ?? true, creditBalance, defaultMonthlyCredits, createdAt: now, updatedAt: now,
     }).returning();
     await tx.insert(accountTable).values({ id: crypto.randomUUID(), accountId: id, providerId: "credential", userId: id, password: passwordHash, createdAt: now, updatedAt: now });
@@ -69,8 +69,8 @@ export async function updateUser(id: string, updates: Partial<Omit<UserCreateInp
     }
     if (updates.name !== undefined && (!updates.name.trim() || updates.name.trim().length > 100)) throw new Error("Display name is required and must not exceed 100 characters");
     if (updates.role !== undefined && !["user", "admin"].includes(updates.role)) throw new Error("Role must be user or admin");
-    for (const field of ["enabled", "apiEnabled", "mustChangePassword"] as const) if (updates[field] !== undefined && typeof updates[field] !== "boolean") throw new Error(`${field} must be a boolean`);
-    for (const field of ["name", "role", "enabled", "apiEnabled", "mustChangePassword", "creditBalance", "defaultMonthlyCredits"] as const) if (updates[field] !== undefined) values[field] = field === "name" ? String(updates[field]).trim() : updates[field];
+    for (const field of ["enabled", "mustChangePassword"] as const) if (updates[field] !== undefined && typeof updates[field] !== "boolean") throw new Error(`${field} must be a boolean`);
+    for (const field of ["name", "role", "enabled", "mustChangePassword", "creditBalance", "defaultMonthlyCredits"] as const) if (updates[field] !== undefined) values[field] = field === "name" ? String(updates[field]).trim() : updates[field];
     for (const field of ["creditBalance", "defaultMonthlyCredits"] as const) {
       const value = values[field] as number | undefined;
       if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error("Credits cannot be negative or invalid");
@@ -113,14 +113,16 @@ export async function setUserGroups(id: string, groupIds: string[], principal: M
 
 export async function bulkUpdateUsersByGroups(
   groupIds: string[],
-  updates: { enabled?: boolean; apiEnabled?: boolean; defaultMonthlyCredits?: number },
+  updates: { enabled?: boolean; defaultMonthlyCredits?: number },
   principal: ManagementPrincipal,
   requestId: string,
 ) {
   const selectedGroups = [...new Set(groupIds)];
   if (!selectedGroups.length) throw new Error("Select at least one group");
-  const fields = Object.keys(updates).filter((key) => updates[key as keyof typeof updates] !== undefined);
+  const fields = (["enabled", "defaultMonthlyCredits"] as const).filter((key) => updates[key] !== undefined);
   if (!fields.length) throw new Error("At least one bulk update is required");
+  if (updates.enabled !== undefined && typeof updates.enabled !== "boolean") throw new Error("enabled must be a boolean");
+  const values = Object.fromEntries(fields.map((field) => [field, updates[field]]));
   if (updates.defaultMonthlyCredits !== undefined && (!Number.isFinite(updates.defaultMonthlyCredits) || updates.defaultMonthlyCredits < 0)) {
     throw new Error("Credits cannot be negative or invalid");
   }
@@ -141,7 +143,7 @@ export async function bulkUpdateUsersByGroups(
       }
     }
     const targetIds = targets.map((user) => user.id);
-    await tx.update(userTable).set({ ...updates, updatedAt: new Date() }).where(inArray(userTable.id, targetIds));
+    await tx.update(userTable).set({ ...values, updatedAt: new Date() }).where(inArray(userTable.id, targetIds));
     if (updates.enabled === false) await tx.delete(sessionTable).where(inArray(sessionTable.userId, targetIds));
     await audit(tx, principal, "group.users.bulk_updated", "bulk", requestId, { groupIds: selectedGroups, fields, usersUpdated: targetIds.length });
     return targetIds.length;

@@ -24,7 +24,6 @@ type Member = {
   role: "owner" | "admin" | "member";
   source: string;
   enabled: boolean;
-  apiEnabled: boolean;
   creditBalance: number;
   defaultMonthlyCredits: number;
   joinedAt: string;
@@ -131,9 +130,10 @@ function GroupPage() {
         </CardContent>
       </Card>
 
+      <p className="text-sm text-muted-foreground">Account enablement controls login and API access; API requests still require a valid key with the required scopes.</p>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[940px] text-sm">
-          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th className="p-3 text-left">Membership</th><th>Balance</th><th>Monthly</th><th>Enabled</th><th>API</th><th /></tr></thead>
+          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th className="p-3 text-left">Membership</th><th>Balance</th><th>Monthly</th><th>Account enabled</th><th /></tr></thead>
           <tbody>
             {group.members.map((member) => (
               <tr key={member.userId} className="border-t">
@@ -144,13 +144,12 @@ function GroupPage() {
                 <td className="text-center font-mono">${member.creditBalance.toFixed(2)}</td>
                 <td className="text-center font-mono">${member.defaultMonthlyCredits.toFixed(2)}</td>
                 <td className="text-center"><Switch checked={member.enabled} onCheckedChange={(enabled) => void run(async () => { await managementFetch(`/users/${member.userId}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }, "User access saved")} /></td>
-                <td className="text-center"><Switch checked={member.apiEnabled} onCheckedChange={(apiEnabled) => void run(async () => { await managementFetch(`/users/${member.userId}`, { method: "PATCH", body: JSON.stringify({ apiEnabled }) }); }, "API access saved")} /></td>
                 <td className="p-2"><Button variant="ghost" size="icon" disabled={member.source !== "manual"} title={member.source === "manual" ? "Remove member" : "Externally synchronized memberships cannot be removed here"} onClick={() => void run(async () => {
                   await managementFetch(`/groups/${groupId}/members/${member.userId}`, { method: "DELETE" });
                 }, "Member removed")}><IconTrash /></Button></td>
               </tr>
             ))}
-            {!group.members.length && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No members</td></tr>}
+            {!group.members.length && <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No members</td></tr>}
           </tbody>
         </table>
       </div>

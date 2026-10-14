@@ -25,7 +25,6 @@ export async function authenticateApiKeyPrincipal(request: Request): Promise<Pro
       userId: apiKeysTable.userId,
       scopes: apiKeysTable.scopes,
       userEnabled: userTable.enabled,
-      apiEnabled: userTable.apiEnabled,
     })
     .from(apiKeysTable)
     .innerJoin(userTable, eq(apiKeysTable.userId, userTable.id))
@@ -42,9 +41,6 @@ export async function authenticateApiKeyPrincipal(request: Request): Promise<Pro
   }
   if (!credential.userEnabled) {
     return { ok: false, status: 403, message: "Account disabled", code: "account_disabled" };
-  }
-  if (!credential.apiEnabled) {
-    return { ok: false, status: 403, message: "API access disabled", code: "api_access_disabled" };
   }
 
   // Authentication should not fail merely because this audit timestamp cannot be

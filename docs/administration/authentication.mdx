@@ -72,7 +72,7 @@ External identities are anchored by provider and immutable subject. By default, 
 | On | Off | A new email creates a user; an existing but unlinked email remains unlinked. |
 | On | On | An exact existing email match is linked; otherwise a new user is created. |
 
-When automatic provisioning creates a user, administrators still control system role, account state, API access, credits, quotas, and manual groups.
+When automatic provisioning creates a user, administrators still control system role, account enablement, credits, quotas, and manual groups. Account enablement controls both login and API access; API requests still require a valid inference key with the required scopes. Disabling an account blocks both, even when the identity provider successfully authenticates the user.
 
 For a controlled identity migration, **Link existing users by email** allows the sole enabled OIDC provider to attach an existing account on first sign-in when the normalized emails match exactly. Enable this only for a provider tenant that controls and verifies those addresses. The first successful match stores the immutable provider subject, and later sign-ins use that subject instead of email. The option fails closed when more than one OIDC provider is enabled.
 

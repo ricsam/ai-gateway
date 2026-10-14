@@ -32,7 +32,6 @@ function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>
       creditBalance: { type: "number", required: false, defaultValue: 0, input: false, returned: true },
       defaultMonthlyCredits: { type: "number", required: false, defaultValue: 0, input: false, returned: true },
       enabled: { type: "boolean", required: false, defaultValue: true, input: false, returned: true },
-      apiEnabled: { type: "boolean", required: false, defaultValue: true, input: false, returned: true },
       mustChangePassword: { type: "boolean", required: false, defaultValue: false, input: false, returned: true },
     } },
     plugins: [

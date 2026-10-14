@@ -13,15 +13,14 @@ Account controls have distinct effects:
 
 | Control | Effect |
 | --- | --- |
-| Enabled | Allows the user to sign in and retain active access |
-| API enabled | Allows the user's `aig_` keys to authenticate |
+| Account enabled | Allows login and API access with valid, appropriately scoped `aig_` keys |
 | Role | Grants user or administrator dashboard permissions |
 | Credit balance | Amount currently available for inference |
 | Monthly credits | Balance assigned on the first day of each UTC month |
 
-Disabling an account invalidates its access. The control plane prevents deleting, disabling, or demoting the final enabled administrator.
+Account enablement is the single control for login and API access. API requests still require a valid key with the required scopes, and inference requires sufficient credits. Disabling an account invalidates sessions and blocks all of its inference keys. The control plane prevents deleting, disabling, or demoting the final enabled administrator.
 
-OIDC-linked users use the same **Enabled**, **API enabled**, role, credit, and quota controls as local users. Disabling a user in AI Gateway blocks access even when the identity provider successfully authenticates them.
+OIDC-linked users use the same **Account enabled**, role, credit, and quota controls as local users. Disabling a user in AI Gateway blocks access even when the identity provider successfully authenticates them.
 
 ## Groups
 
@@ -34,8 +33,7 @@ OIDC authentication does not import identity-provider groups or create group mem
 Select one or more groups and apply a change to the union of their members:
 
 - Set a monthly allocation.
-- Enable or disable API access.
-- Enable or disable accounts.
+- Enable or disable accounts, controlling login and API access together.
 
 A user in multiple selected groups is updated once.
 

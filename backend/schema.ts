@@ -32,7 +32,6 @@ export const userTable = pgTable("user", {
   creditBalance: numeric("credit_balance", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   defaultMonthlyCredits: numeric("default_monthly_credits", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   enabled: boolean("enabled").notNull().default(true),
-  apiEnabled: boolean("api_enabled").notNull().default(true),
   mustChangePassword: boolean("must_change_password").notNull().default(false),
 }, (table) => [
   uniqueIndex("user_username_normalized_unique").on(sql`lower(${table.username})`),

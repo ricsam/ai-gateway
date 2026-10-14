@@ -3,7 +3,7 @@ title: "API keys"
 description: "Create, scope, store, and revoke inference credentials."
 ---
 
-Inference keys authenticate application requests. They begin with `aig_`, are displayed once, and are stored only as SHA-256 digests.
+Inference keys are required to authenticate application requests. The owning account must be enabled; there is no separate per-user API enablement switch. Key scopes and inference credit requirements still apply. They begin with `aig_`, are displayed once, and are stored only as SHA-256 digests.
 
 ## Create a key
 
@@ -48,8 +48,8 @@ Send the key as an HTTP bearer token:
 Authorization: Bearer aig_...
 ```
 
-A missing, invalid, expired, or revoked key returns `401`. A valid key returns `403` when the owning account is disabled, API access is disabled, or the key lacks the endpoint's scope.
+A missing, invalid, expired, or revoked key returns `401`. A valid key returns `403` when the owning account is disabled or the key lacks the endpoint's scope.
 
 ## Revoke a key
 
-In **Profile → API keys**, select the revoke action next to the key. Revocation takes effect on the next request. Disabling a user or disabling that user's API access also blocks all of their keys.
+In **Profile → API keys**, select the revoke action next to the key. Revocation takes effect on the next request. Disabling a user blocks login and all of their inference keys.

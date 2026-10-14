@@ -80,7 +80,7 @@ export const contract = defineContract({
     type: "standard", method: "GET", path: "/profile",
     responses: { [Status.OK]: z.object({
       id: z.string(), name: z.string(), email: z.string(), creditBalance: z.number(),
-      defaultMonthlyCredits: z.number(), role: z.enum(["user", "admin"]), apiEnabled: z.boolean(),
+      defaultMonthlyCredits: z.number(), role: z.enum(["user", "admin"]),
     }) },
     errorResponses: { [Status.Unauthorized]: z.object({ error: z.string() }) },
   },
@@ -200,7 +200,7 @@ export const contract = defineContract({
     type: "standard", method: "GET", path: "/admin/users",
     responses: { [Status.OK]: z.array(z.object({
       id: z.string(), name: z.string(), email: z.string(), role: z.enum(["user", "admin"]), creditBalance: z.number(),
-      defaultMonthlyCredits: z.number(), enabled: z.boolean(), apiEnabled: z.boolean(), createdAt: z.string(),
+      defaultMonthlyCredits: z.number(), enabled: z.boolean(), createdAt: z.string(),
       groups: z.array(groupSummarySchema),
     })) },
   },
@@ -260,7 +260,7 @@ export const contract = defineContract({
   },
   adminUpdateUser: {
     type: "standard", method: "PATCH", path: "/admin/users/:id", params: z.object({ id: z.string() }),
-    body: z.object({ enabled: z.boolean().optional(), apiEnabled: z.boolean().optional(), role: z.enum(["user", "admin"]).optional() }),
+    body: z.object({ enabled: z.boolean().optional(), role: z.enum(["user", "admin"]).optional() }),
     responses: { [Status.OK]: z.object({ success: z.boolean() }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }), [Status.NotFound]: z.object({ error: z.string() }) },
   },

@@ -26,7 +26,6 @@ type Notice = { kind: "success" | "error"; text: string };
 
 type BulkUpdates = {
   enabled?: boolean;
-  apiEnabled?: boolean;
   defaultMonthlyCredits?: number;
 };
 
@@ -199,7 +198,7 @@ function Groups() {
         <CardHeader className="gap-3 md:grid-cols-[1fr_minmax(16rem,22rem)]">
           <div>
             <CardTitle className="text-base">Bulk user controls</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">A user in more than one selected group is updated once.</p>
+            <p className="mt-1 text-sm text-muted-foreground">A user in more than one selected group is updated once. Account enablement controls login and API access; API requests still require a valid key with the required scopes.</p>
           </div>
           <div className="relative">
             <IconSearch className="absolute left-3 top-2.5 text-muted-foreground" size={16} />
@@ -216,8 +215,6 @@ function Groups() {
                 <Button variant="outline" onClick={applyQuota} disabled={!selected.size || !quota || saving}>Set quota</Button>
               </div>
             </div>
-            <Button variant="outline" onClick={() => void applyBulk({ apiEnabled: true })} disabled={!selected.size || saving}>Enable API</Button>
-            <Button variant="outline" onClick={() => void applyBulk({ apiEnabled: false })} disabled={!selected.size || saving}>Disable API</Button>
             <Button variant="outline" onClick={() => void applyBulk({ enabled: true })} disabled={!selected.size || saving}>Enable users</Button>
             <Button variant="destructive" onClick={() => void applyBulk({ enabled: false })} disabled={!selected.size || saving}>Disable users</Button>
             {saving && <IconLoader2 className="animate-spin" />}

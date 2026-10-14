@@ -109,7 +109,7 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     if (!user) return { status: Status.Unauthorized, body: { error: "User not found" } };
     return { status: Status.OK, body: {
       id: user.id, name: user.name, email: user.email, creditBalance: user.creditBalance,
-      defaultMonthlyCredits: user.defaultMonthlyCredits, role: user.role as "user" | "admin", apiEnabled: user.apiEnabled,
+      defaultMonthlyCredits: user.defaultMonthlyCredits, role: user.role as "user" | "admin",
     } };
   },
 
@@ -311,7 +311,7 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
     return { status: Status.OK, body: users.map((user) => ({
       id: user.id, name: user.name, email: user.email, role: user.role as "user" | "admin",
       creditBalance: user.creditBalance, defaultMonthlyCredits: user.defaultMonthlyCredits,
-      enabled: user.enabled, apiEnabled: user.apiEnabled, createdAt: user.createdAt.toISOString(),
+      enabled: user.enabled, createdAt: user.createdAt.toISOString(),
       groups: memberships.filter((entry) => entry.userId === user.id).map((entry) => ({
         id: entry.groupId, name: entry.groupName, role: entry.role as "owner" | "admin" | "member",
       })),
