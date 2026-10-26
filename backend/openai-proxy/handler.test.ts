@@ -127,6 +127,75 @@ beforeEach(() => {
   };
 });
 
+describe("conversation body alias", () => {
+  function body(stream: boolean, count: number, conversation?: unknown) {
+    return {
+      model: modelRow!.modelId, stream, conversation,
+      messages: [{ role: "system", content: "Stable instructions" }, {
+        role: "user", content: Array.from({ length: count }, (_, i) => ({ type: "text", text: `Block ${i}` })),
+      }],
+      tools: [{ type: "function", function: { name: "search", parameters: { type: "object", properties: {} } } }],
+    };
+  }
+  for (const stream of [false, true]) {
+    for (const direction of ["header-first", "body-first"] as const) {
+      test(`header and body forms share continuity (${direction}, stream=${stream})`, async () => {
+        modelRow = model({ managedCache: true });
+        for (let index = 0; index < 3; index++) {
+          const count = [24, 50, 75][index]!;
+          const forms = direction === "header-first" ? [undefined, "thread-alias", { id: "thread-alias" }] : [{ id: "thread-alias" }, "thread-alias", undefined];
+          const conversation = forms[index];
+          const headers: Record<string, string> = conversation === undefined ? { "X-Conversation-ID": "thread-alias" } : {};
+          const response = await call(body(stream, count, conversation), headers);
+          expect(response.status).toBe(200);
+          expect(response.headers.get("x-conversation-id")).toBe("thread-alias");
+          await response.text();
+          const input = sent.at(-1)!.input;
+          expect(input).not.toHaveProperty("conversation");
+          expect(JSON.stringify(input)).not.toContain("thread-alias");
+          const content = input.messages![0]!.content!;
+          expect(content.filter(block => block.cachePoint)).toHaveLength(index === 0 ? 1 : 2);
+          if (index > 0) expect(content[[24, 50][index - 1]!]!.cachePoint?.ttl).toBe("5m");
+        }
+        expect(receipts.size).toBe(1);
+        expect(cacheWrites).toBe(3);
+      });
+    }
+    test(`matching forms accepted; absent/null and disabled caching stay stateless (stream=${stream})`, async () => {
+      modelRow = model({ managedCache: false });
+      for (const conversation of ["thread-alias", { id: "thread-alias" }, null]) {
+        const response = await call(body(stream, 24, conversation), { "x-conversation-id": "thread-alias" });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-conversation-id")).toBe("thread-alias");
+        await response.text();
+      }
+      modelRow = model({ managedCache: true });
+      const response = await call(body(stream, 24, null));
+      expect(response.status).toBe(200);
+      expect(response.headers.has("x-conversation-id")).toBe(false);
+      await response.text();
+      expect(cacheReads).toBe(0);
+      expect(cacheWrites).toBe(0);
+    });
+    test(`rejects invalid/conflicting body identifiers before metadata/provider (stream=${stream})`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const conversation of ["", "bad id", "x".repeat(129), 42, true, [], {}, { id: null }, { id: "bad id" }, { id: "ok", messages: [] }]) {
+        const response = await call(body(stream, 24, conversation));
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toMatchObject({ code: "invalid_conversation_id", param: expect.stringContaining("conversation") });
+      }
+      for (const conversation of ["other", { id: "other" }]) {
+        const response = await call(body(stream, 24, conversation), { "x-conversation-id": "thread-alias" });
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toMatchObject({ code: "invalid_conversation_id", param: "conversation" });
+      }
+      expect(sent).toHaveLength(0);
+      expect(cacheReads).toBe(0);
+      expect(cacheWrites).toBe(0);
+    });
+  }
+});
+
 describe("conversation header request pipeline", () => {
   const routes = ["openai", "openai-stream", "converse", "converse-stream", "invoke", "invoke-stream", "invoke-json", "invoke-stream-json"] as const;
   type Route = typeof routes[number];

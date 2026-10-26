@@ -315,6 +315,14 @@
         "required": ["model", "messages"],
         "properties": {
           "model": { "type": "string" },
+          "conversation": {
+            "description": "Optional gateway cache-continuity alias for X-Conversation-ID, using the Responses API's string/id-object shape. This is a Chat Completions extension: full messages remain required; no server-side history is loaded. Null is treated as absent. If the header is also supplied, IDs must match or the request returns 400 invalid_conversation_id. The effective ID is echoed in X-Conversation-ID and never forwarded upstream.",
+            "oneOf": [
+              { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+              { "type": "object", "required": ["id"], "additionalProperties": false, "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" } } },
+              { "type": "null" }
+            ]
+          },
           "messages": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/Message" } },
           "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "Omitted when the gateway enables Claude reasoning" },
           "top_p": { "type": "number", "minimum": 0, "maximum": 1, "description": "Omitted when the gateway enables Claude reasoning" },

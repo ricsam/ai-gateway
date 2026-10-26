@@ -52,6 +52,24 @@ describe("conversation ID contract", () => {
       expect(readConversationId(new Headers({ "X-Conversation-ID": value }))).toBe(value);
     }
   });
+  test("accepts body string/object aliases and matching headers; null means absent", () => {
+    const headers = new Headers({ "X-Conversation-ID": "thread-1" });
+    for (const conversation of ["thread-1", { id: "thread-1" }]) {
+      expect(readConversationId(new Headers(), conversation)).toBe("thread-1");
+      expect(readConversationId(headers, conversation)).toBe("thread-1");
+    }
+    expect(readConversationId(new Headers(), null)).toBeUndefined();
+    expect(readConversationId(headers, null)).toBe("thread-1");
+  });
+  test("rejects conflicting and malformed body identifiers", () => {
+    for (const value of ["", "bad id", "x".repeat(129), 42, true, [], {}, { id: null }, { id: 42 }, { id: "" }, { id: "valid", messages: [] }]) {
+      expect(() => readConversationId(new Headers(), value)).toThrow();
+    }
+    for (const value of ["other", { id: "other" }]) {
+      expect(() => readConversationId(new Headers({ "X-Conversation-ID": "thread-1" }), value)).toThrow("must identify the same conversation");
+    }
+    expect(() => readConversationId(new Headers({ "X-Conversation-ID": "" }), "valid")).toThrow();
+  });
   test("rejects empty, multiple, overlong and unsafe IDs", () => {
     for (const value of ["", " ", "a".repeat(129), "a,b", "a b", "email@example.com", "path/to/thread"]) {
       expect(() => readConversationId(new Headers({ "x-conversation-id": value }))).toThrow("X-Conversation-ID");

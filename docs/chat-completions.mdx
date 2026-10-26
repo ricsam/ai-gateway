@@ -175,7 +175,19 @@ As a gateway extension, a `tool` message may carry an array of text and image pa
 
 ## Optional conversation ID
 
-Send `X-Conversation-ID` with the same opaque ID on successive calls to help **managed prompt caching** retain the previous input boundary when a turn adds more than Claude's approximately 20-block cache lookback window. This is a **gateway extension**, not a standardized OpenAI/Anthropic header. It also works on all four native Bedrock endpoints (Anthropic bodies for Invoke), in streaming and non-streaming mode.
+Use the same opaque conversation ID on successive calls to help **managed prompt caching** retain the previous input boundary when a turn adds more than Claude's approximately 20-block cache lookback window. For Chat Completions, either of these body forms works:
+
+```json
+{ "conversation": "thread-123" }
+```
+
+```json
+{ "conversation": { "id": "thread-123" } }
+```
+
+These examples show just the extra field; `model` and full `messages` are still required. This adopts the OpenAI Responses API's field shape, **not its server-side conversation-history semantics**, and remains a gateway extension to Chat Completions. It does not add a `/v1/responses` endpoint.
+
+Alternatively, send `X-Conversation-ID: thread-123`. The header also works on all four native Bedrock endpoints (Anthropic bodies for Invoke), in streaming and non-streaming mode. The body alias is only for Chat Completions/the playground, not native provider request bodies. If both are supplied, their IDs must match; conflicts return `400` / `invalid_conversation_id`. A null body field is treated as absent.
 
 ```python
 from uuid import uuid4
@@ -186,19 +198,20 @@ conversation_id = str(uuid4())  # Generate once per conversation, not once per c
 response = client.chat.completions.create(
     model="your-model-id",
     messages=history,  # Always include the complete history.
-    extra_headers={"X-Conversation-ID": conversation_id},
+    extra_body={"conversation": conversation_id},  # Chat Completions SDK extension
+    # Or: extra_headers={"X-Conversation-ID": conversation_id}
 )
 ```
 
-- IDs are case-sensitive, 1–128 characters, using only letters, digits, `.`, `_`, `:`, or `-`. A UUID is recommended. Empty/malformed headers return `400` / `invalid_conversation_id`. Successful responses echo the header.
+- IDs are case-sensitive, 1–128 characters, using only letters, digits, `.`, `_`, `:`, or `-`. A UUID is recommended. Empty/malformed IDs return `400` / `invalid_conversation_id`. Successful responses echo the effective ID in `X-Conversation-ID`, including when supplied only in the body.
 - Keep `X-Request-ID` separate: it identifies one logical request for retry/billing, while `X-Conversation-ID` stays constant across turns. Do not reuse one request ID for the entire conversation.
-- Clients still own and send all history. This header does **not** load messages, create a server-side conversation, or select a provider cache key. It is never included in the model prompt or forwarded upstream.
+- Clients still own and send all history. This identifier does **not** load messages, create a server-side conversation, or select a provider cache key. Neither form is included in the model prompt or forwarded upstream.
 - With managed caching enabled, a matching previous input endpoint gets an extra checkpoint before the current endpoint, within the four-checkpoint budget. This is the previous **input** boundary, not the generated assistant response. The prior TTL is retained; enabling the header does not switch to one-hour caching.
 - Tracking is isolated by authenticated user, credential, upstream model, region configuration, and provider format. Use the same credential for continuity; use a fresh conversation ID for a new independent branch. Shared system/tool prefix caching is not partitioned by this header.
 - Only hashes, block coordinates, TTLs, and ownership/version metadata are stored in PostgreSQL, shared across replicas. Hints expire with their 5-minute or 1-hour TTL (measured from request preparation); expired rows are removed opportunistically in bounded batches. No raw conversation ID or prompt text is stored by this feature.
 - Changed tools/system/history/options, context compaction, expiry, concurrent branches, or unavailable metadata storage can cause fallback to ordinary stateless checkpoints. Concurrent updates use compare-and-set; a late response cannot overwrite a newer stored version. Provider acceptance records a hint, not proof of a cache hit. Provider token thresholds and cache availability still apply.
 
-Omit the header for existing stateless behavior. With managed caching disabled, the header is validated and echoed but no boundary state is read or written. Existing TTL defaults are documented under [Managed prompt caching](/docs/administration/models-and-aws#managed-prompt-caching).
+Omit both forms for existing stateless behavior. With managed caching disabled, IDs are validated and echoed but no boundary state is read or written. Existing TTL defaults are documented under [Managed prompt caching](/docs/administration/models-and-aws#managed-prompt-caching).
 
 ## Safe retries
 

@@ -124,7 +124,7 @@ export async function handleOpenAIProxy(
   let conversationId: string | undefined;
   try { conversationId = readConversationId(request.headers); }
   catch (error) {
-    if (error instanceof ConversationIdError) return errorResponse(error.message, "invalid_request_error", 400, error.code, "X-Conversation-ID");
+    if (error instanceof ConversationIdError) return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
     throw error;
   }
 
@@ -139,7 +139,9 @@ export async function handleOpenAIProxy(
   let body: OpenAIChatCompletionRequest;
   try {
     body = validateChatCompletionRequest(rawBody);
+    conversationId = readConversationId(request.headers, body.conversation);
   } catch (error) {
+    if (error instanceof ConversationIdError) return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
     if (error instanceof RequestValidationError) {
       return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
     }
