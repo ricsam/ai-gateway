@@ -72,7 +72,7 @@ const OPENAPI = {
       TokenSummary: { type: "object", required: ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWrite5mTokens", "cacheWrite1hTokens", "total"], properties: { inputTokens: { type: "integer" }, outputTokens: { type: "integer" }, cacheReadTokens: { type: "integer" }, cacheWrite5mTokens: { type: "integer" }, cacheWrite1hTokens: { type: "integer" }, total: { type: "integer" } } },
     },
     parameters: {
-      TimeRange: { name: "timeRange", in: "query", schema: { type: "string", enum: ["hour", "day", "week", "month", "quarter", "year"], default: "month" } },
+      TimeRange: { name: "timeRange", in: "query", description: "Rolling window ending now: hour = 60 minutes, day = 24 hours, week = 7 days, month = 30 days, quarter = 90 days, year = 365 days. Days are exactly 24 hours, not calendar periods.", schema: { type: "string", enum: ["hour", "day", "week", "month", "quarter", "year"], default: "month" } },
       BucketSize: { name: "bucketSize", in: "query", schema: { type: "string", enum: ["15s", "1m", "5m", "30m", "1h", "1d", "1w", "1mo"] } },
       UserId: { name: "userId", in: "query", schema: { type: "string" }, description: "Optional user scope; mutually exclusive with groupId" },
       GroupId: { name: "groupId", in: "query", schema: { type: "string" }, description: "Optional current-membership group scope; mutually exclusive with userId" },

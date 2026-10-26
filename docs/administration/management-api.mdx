@@ -53,6 +53,21 @@ The operation is audited as `api_key.provisioned`. Disabled users can receive a 
 
 Use `enabled` in user creation, updates, and group bulk-user updates to control account access. The former `apiEnabled` field is no longer part of the API contract; historical client payloads containing it do not control access. Update those clients to use `enabled` instead.
 
+## Analytics time ranges
+
+Analytics use rolling windows ending at the time of the request, not the current calendar day, week, month, quarter, or year. The dashboard labels make these windows explicit; the API's `timeRange` values remain unchanged:
+
+| `timeRange` | Dashboard label |
+| --- | --- |
+| `hour` | Last 60 minutes |
+| `day` | Last 24 hours |
+| `week` | Last 7 days |
+| `month` | Last 30 days |
+| `quarter` | Last 90 days |
+| `year` | Last 365 days |
+
+Each day in a rolling window is exactly 24 elapsed hours, including across daylight-saving transitions and leap years. `month`, `quarter`, and `year` now use fixed day counts rather than subtracting calendar months or years. Existing saved selections still work, but their start dates can differ from earlier releases. The separate **Interval** control only changes chart aggregation, not the selected window.
+
 ## Pagination and errors
 
 Collection endpoints generally accept `limit` and `offset`. Limits are clamped to 1–100. Management errors have a stable envelope:
