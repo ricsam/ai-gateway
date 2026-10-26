@@ -10,31 +10,16 @@ export const CONVERSATION_ID_HEADER = "x-conversation-id";
 
 export class ConversationIdError extends Error {
   readonly code = "invalid_conversation_id";
-  constructor(
-    readonly param = "X-Conversation-ID",
-    message = `${param} must be 1–128 characters using letters, digits, '.', '_', ':', or '-'`,
-  ) { super(message); }
+  readonly param = "X-Conversation-ID";
+  constructor() { super("X-Conversation-ID must be 1–128 characters using letters, digits, '.', '_', ':', or '-'"); }
 }
 
-/** Resolve the header and optional Chat Completions body alias. Neither loads history. */
-export function readConversationId(headers: Headers, conversation?: unknown): string | undefined {
-  const headerId = headers.get(CONVERSATION_ID_HEADER) ?? undefined;
-  const valid = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
-  if (headerId !== undefined && !valid(headerId)) throw new ConversationIdError();
-  let bodyId: string | undefined;
-  if (conversation !== undefined && conversation !== null) {
-    const object = typeof conversation === "object" && !Array.isArray(conversation);
-    const value = object ? (conversation as Record<string, unknown>).id : conversation;
-    if (object && Object.keys(conversation).some(key => key !== "id")) {
-      throw new ConversationIdError("conversation", "conversation must be a string or an object containing only id");
-    }
-    if (!valid(value)) throw new ConversationIdError(object ? "conversation.id" : "conversation");
-    bodyId = value;
-  }
-  if (headerId !== undefined && bodyId !== undefined && headerId !== bodyId) {
-    throw new ConversationIdError("conversation", "conversation and X-Conversation-ID must identify the same conversation");
-  }
-  return bodyId ?? headerId;
+/** Missing is opt-out; conversation identity is carried only in the header. */
+export function readConversationId(headers: Headers): string | undefined {
+  const value = headers.get(CONVERSATION_ID_HEADER);
+  if (value === null) return undefined;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new ConversationIdError();
+  return value;
 }
 
 export interface ConversationCacheContext {

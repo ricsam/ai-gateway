@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { ConverseStreamCommand, InvokeModelWithResponseStreamCommand, type ConverseCommandInput } from "@aws-sdk/client-bedrock-runtime";
 
 // The handler's persistence, authentication, billing, settings, and AWS client
@@ -17,6 +17,7 @@ let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
 let sendError: Error | undefined;
+let invokeStreamUsage = false;
 let principalUserId = "user-1234567890";
 let principalCredentialId = "key-1";
 
@@ -69,7 +70,10 @@ mock.module("../bedrock", () => ({
       const streaming = command instanceof ConverseStreamCommand;
       sent.push({ streaming, input: command.input });
       if (sendError) throw sendError;
-      if (command instanceof InvokeModelWithResponseStreamCommand) return { body: (async function* () { yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_stop"}') } }; })() };
+      if (command instanceof InvokeModelWithResponseStreamCommand) return { body: (async function* () {
+        if (invokeStreamUsage) yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_start","message":{"usage":{"input_tokens":2,"output_tokens":0}}}') } };
+        yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_stop"}') } };
+      })() };
       if (!streaming) return converseOutput;
       return { stream: (async function* () { for (const event of streamEvents) yield event; })() };
     },
@@ -108,6 +112,7 @@ beforeEach(() => {
   modelRow = model();
   receipts.clear(); cacheReads = 0; cacheWrites = 0;
   sendError = undefined;
+  invokeStreamUsage = false;
   principalUserId = "user-1234567890"; principalCredentialId = "key-1";
   aliases = []; apps = [];
   remoteImagesEnabled = true;
@@ -127,7 +132,7 @@ beforeEach(() => {
   };
 });
 
-describe("conversation body alias", () => {
+describe("unsupported conversation body field", () => {
   function body(stream: boolean, count: number, conversation?: unknown) {
     return {
       model: modelRow!.modelId, stream, conversation,
@@ -138,60 +143,135 @@ describe("conversation body alias", () => {
     };
   }
   for (const stream of [false, true]) {
-    for (const direction of ["header-first", "body-first"] as const) {
-      test(`header and body forms share continuity (${direction}, stream=${stream})`, async () => {
-        modelRow = model({ managedCache: true });
-        for (let index = 0; index < 3; index++) {
-          const count = [24, 50, 75][index]!;
-          const forms = direction === "header-first" ? [undefined, "thread-alias", { id: "thread-alias" }] : [{ id: "thread-alias" }, "thread-alias", undefined];
-          const conversation = forms[index];
-          const headers: Record<string, string> = conversation === undefined ? { "X-Conversation-ID": "thread-alias" } : {};
-          const response = await call(body(stream, count, conversation), headers);
-          expect(response.status).toBe(200);
-          expect(response.headers.get("x-conversation-id")).toBe("thread-alias");
-          await response.text();
-          const input = sent.at(-1)!.input;
-          expect(input).not.toHaveProperty("conversation");
-          expect(JSON.stringify(input)).not.toContain("thread-alias");
-          const content = input.messages![0]!.content!;
-          expect(content.filter(block => block.cachePoint)).toHaveLength(index === 0 ? 1 : 2);
-          if (index > 0) expect(content[[24, 50][index - 1]!]!.cachePoint?.ttl).toBe("5m");
-        }
-        expect(receipts.size).toBe(1);
-        expect(cacheWrites).toBe(3);
-      });
-    }
-    test(`matching forms accepted; absent/null and disabled caching stay stateless (stream=${stream})`, async () => {
-      modelRow = model({ managedCache: false });
-      for (const conversation of ["thread-alias", { id: "thread-alias" }, null]) {
-        const response = await call(body(stream, 24, conversation), { "x-conversation-id": "thread-alias" });
-        expect(response.status).toBe(200);
-        expect(response.headers.get("x-conversation-id")).toBe("thread-alias");
-        await response.text();
+    test(`rejects non-null conversation before metadata/provider (stream=${stream})`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const conversation of ["thread", { id: "thread" }, "", 42, false, [], {}]) {
+        const response = await call(body(stream, 24, conversation), { "x-conversation-id": "thread" });
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toMatchObject({ code: "unsupported_parameter", param: "conversation" });
       }
+      expect(sent).toHaveLength(0);
+      expect(cacheReads).toBe(0);
+      expect(cacheWrites).toBe(0);
+    });
+    test(`null conversation is ignored (stream=${stream})`, async () => {
       modelRow = model({ managedCache: true });
       const response = await call(body(stream, 24, null));
       expect(response.status).toBe(200);
       expect(response.headers.has("x-conversation-id")).toBe(false);
       await response.text();
+      expect(sent[0]!.input).not.toHaveProperty("conversation");
       expect(cacheReads).toBe(0);
       expect(cacheWrites).toBe(0);
     });
-    test(`rejects invalid/conflicting body identifiers before metadata/provider (stream=${stream})`, async () => {
+  }
+});
+
+describe("client request attempt tracing", () => {
+  const routes = ["openai", "openai-stream", "session", "session-stream", "converse", "converse-stream", "invoke", "invoke-stream"] as const;
+  for (const route of routes) {
+    const openai = route.startsWith("openai") || route.startsWith("session");
+    const stream = route.endsWith("stream");
+    async function attempt(headers: Record<string, string> = {}, count = 24, malformed = false) {
+      streamEvents = [{ metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
+      invokeStreamUsage = true;
+      const texts = Array.from({ length: count }, (_, i) => `Block ${i}`);
+      let body: unknown;
+      if (openai) body = { model: modelRow!.modelId, stream,
+        messages: [{ role: "system", content: "Instructions" }, { role: "user", content: texts.map(text => ({ type: "text", text })) }],
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }],
+      };
+      else if (route.startsWith("invoke")) {
+        converseOutput = { body: new TextEncoder().encode('{"usage":{"input_tokens":2,"output_tokens":3}}') };
+        body = { modelId: modelRow!.modelId, body: { anthropic_version: "bedrock-2023-05-31", max_tokens: 200,
+          system: "Instructions", tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }],
+          messages: [{ role: "user", content: texts.map(text => ({ type: "text", text })) }],
+        } };
+      } else body = { modelId: modelRow!.modelId, system: [{ text: "Instructions" }],
+        toolConfig: { tools: [{ toolSpec: { name: "lookup", inputSchema: { json: { type: "object", properties: {} } } } }] },
+        messages: [{ role: "user", content: texts.map(text => ({ text })) }],
+      };
+      const req = new Request("https://gateway.test/trace-test", { method: "POST",
+        headers: { "content-type": "application/json", ...headers }, body: malformed ? "{oops" : JSON.stringify(body) });
+      return openai ? handleOpenAIProxy(req, route.startsWith("session") ? "session" : "api_key")
+        : handleBedrockProxy(req, route as "converse" | "converse-stream" | "invoke" | "invoke-stream");
+    }
+    test(`${route}: attempts echo separately but preserve explicit billing ID and cache scope`, async () => {
       modelRow = model({ managedCache: true });
-      for (const conversation of ["", "bad id", "x".repeat(129), 42, true, [], {}, { id: null }, { id: "bad id" }, { id: "ok", messages: [] }]) {
-        const response = await call(body(stream, 24, conversation));
-        expect(response.status).toBe(400);
-        expect((await response.json()).error).toMatchObject({ code: "invalid_conversation_id", param: expect.stringContaining("conversation") });
+      for (const [index, trace] of ["step/1", "step/2"].entries()) {
+        const response = await attempt({ "X-Client-Request-Id": trace, "X-Request-ID": "billing-stable", "X-Conversation-ID": "same-thread" }, index ? 50 : 24);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-client-request-id")).toBe(trace);
+        if (openai) expect(response.headers.get("x-request-id")).toBe("billing-stable");
+        await response.text();
+        expect(settlements.at(-1)!.requestId).toBe("billing-stable");
+        const raw = sent.at(-1)!.input;
+        const payload = route.startsWith("invoke") ? JSON.parse(new TextDecoder().decode((raw as unknown as { body: Uint8Array }).body)) : raw;
+        expect(JSON.stringify(payload)).not.toContain(trace);
+        expect(JSON.stringify(payload).match(/"(?:cachePoint|cache_control)":/g)).toHaveLength(index ? 4 : 3);
       }
-      for (const conversation of ["other", { id: "other" }]) {
-        const response = await call(body(stream, 24, conversation), { "x-conversation-id": "thread-alias" });
+      expect(settlements).toHaveLength(2);
+      expect(receipts.size).toBe(1);
+    });
+    test(`${route}: structured logs retain the attempt identifier`, async () => {
+      const info = spyOn(console, "info").mockImplementation(() => {});
+      try {
+        const response = await attempt({ "x-client-request-id": "logged / attempt:1" });
+        expect(response.status).toBe(200);
+        await response.text();
+        const logged = info.mock.calls.flat().flatMap(value => {
+          if (typeof value === "object" && value !== null) return [value];
+          if (typeof value !== "string") return [];
+          try { return [JSON.parse(value)]; } catch { return []; }
+        });
+        expect(logged).toContainEqual(expect.objectContaining({ clientRequestId: "logged / attempt:1" }));
+      } finally { info.mockRestore(); }
+    });
+    test(`${route}: trace alone never becomes a billing dedup key`, async () => {
+      for (const trace of ["step/1", "step/2", "step/1"]) {
+        const response = await attempt({ "x-client-request-id": trace });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-client-request-id")).toBe(trace);
+        await response.text();
+        const id = settlements.at(-1)!.requestId;
+        expect(id).not.toBe(trace);
+        expect(id).not.toBe("step");
+        if (openai) expect(response.headers.get("x-request-id")).toBe(id as string);
+      }
+      expect(new Set(settlements.map(value => value.requestId)).size).toBe(3);
+    });
+    test(`${route}: validates printable ASCII and length before provider/store`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const trace of ["", "x".repeat(513), "caf\u00e9", "bad\u007fid", "bad\u0001id", "bad\tid"]) {
+        const response = await attempt({ "x-client-request-id": trace, "x-conversation-id": "validation" });
         expect(response.status).toBe(400);
-        expect((await response.json()).error).toMatchObject({ code: "invalid_conversation_id", param: "conversation" });
+        const text = await response.text();
+        expect(text).toContain("invalid_client_request_id");
+        if (openai) expect(JSON.parse(text).error.param).toBe("X-Client-Request-Id");
       }
       expect(sent).toHaveLength(0);
       expect(cacheReads).toBe(0);
       expect(cacheWrites).toBe(0);
+      for (const trace of ["x".repeat(512), "attempt / 1: punctuation!? #[]"]) {
+        const response = await attempt({ "x-client-request-id": trace });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-client-request-id")).toBe(trace);
+        await response.text();
+      }
+      const absent = await attempt();
+      expect(absent.headers.has("x-client-request-id")).toBe(false);
+      await absent.text();
+    });
+    test(`${route}: echoes valid trace on malformed body and mapped provider failures`, async () => {
+      const malformed = await attempt({ "x-client-request-id": "parse/1" }, 24, true);
+      expect(malformed.status).toBe(400);
+      expect(malformed.headers.get("x-client-request-id")).toBe("parse/1");
+      await malformed.text();
+      sendError = Object.assign(new Error("provider rejected"), { name: "ValidationException" });
+      const failure = await attempt({ "x-client-request-id": "provider/1" });
+      expect(failure.status).toBeGreaterThanOrEqual(400);
+      expect(failure.headers.get("x-client-request-id")).toBe("provider/1");
+      await failure.text();
     });
   }
 });

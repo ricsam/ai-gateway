@@ -123,8 +123,6 @@ export type OpenAIMessage =
 export interface OpenAIChatCompletionRequest {
   model: string;
   messages: OpenAIMessage[];
-  /** Gateway cache-continuity ID; not OpenAI Responses server-side history. */
-  conversation?: string | { id: string } | null;
   temperature?: number;
   max_tokens?: number;
   /** Newer alias for max_tokens; takes precedence over other output-limit fields. */

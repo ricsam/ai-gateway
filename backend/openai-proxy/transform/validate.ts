@@ -128,6 +128,9 @@ function positiveInteger(body: Json, key: "max_tokens" | "max_completion_tokens"
 /** Validate a parsed JSON body and return a normalized chat completion request. */
 export function validateChatCompletionRequest(input: unknown): OpenAIChatCompletionRequest {
   if (!isObject(input)) throw new RequestValidationError("Request body must be a JSON object");
+  if (input.conversation !== undefined && input.conversation !== null) {
+    throw new RequestValidationError("conversation is not supported by Chat Completions; send full messages and use X-Conversation-ID for cache continuity", "conversation", "unsupported_parameter");
+  }
   if (!input.model || typeof input.model !== "string") throw new RequestValidationError("model is required", "model", "missing_model");
   if (!Array.isArray(input.messages) || input.messages.length === 0) {
     throw new RequestValidationError("messages is required and must be a non-empty array", "messages", "missing_messages");
@@ -149,7 +152,8 @@ export function validateChatCompletionRequest(input: unknown): OpenAIChatComplet
   const maxOutputTokens = positiveInteger(input, "max_output_tokens");
   const messages = input.messages.map(validateMessage);
 
-  const normalized = { ...input, messages } as OpenAIChatCompletionRequest;
+  const { conversation: _conversation, ...options } = input;
+  const normalized = { ...options, messages } as OpenAIChatCompletionRequest;
   delete normalized.reasoning_effort;
   delete normalized.max_completion_tokens;
   delete normalized.max_output_tokens;

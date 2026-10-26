@@ -24,6 +24,7 @@ import {
   mergeCacheUsage,
   type CacheUsage,
 } from "./openai-proxy/transform/cache-usage";
+import { withClientRequestTrace } from "./request-tracing";
 import { isControllerClosedError } from "./stream-utils";
 
 export type BedrockProxyEndpoint = "invoke" | "invoke-stream" | "converse" | "converse-stream";
@@ -116,7 +117,12 @@ async function settle(params: {
   });
 }
 
-export async function handleBedrockProxy(request: Request, endpoint: BedrockProxyEndpoint): Promise<Response> {
+export function handleBedrockProxy(request: Request, endpoint: BedrockProxyEndpoint): Promise<Response> {
+  return withClientRequestTrace(request, () => handleBedrockRequest(request, endpoint), error =>
+    failure(error.message, 400, error.code));
+}
+
+async function handleBedrockRequest(request: Request, endpoint: BedrockProxyEndpoint): Promise<Response> {
   const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "ai.invoke");
   if (!auth.ok) return failure(auth.message, auth.status, auth.code);
   let conversationId: string | undefined;
@@ -173,7 +179,9 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
     if (conversationId) response.headers.set("x-conversation-id", conversationId);
     return response;
   } catch (error) {
-    return mapError(error);
+    const response = mapError(error);
+    response.headers.set("x-request-id", requestId);
+    return response;
   }
 }
 

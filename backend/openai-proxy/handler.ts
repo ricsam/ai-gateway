@@ -33,6 +33,7 @@ import type { CacheUsage } from "./transform/cache-usage";
 import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError, OpenAIErrorType } from "./transform/types";
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./transform/utils";
 import { getBedrockClient } from "../bedrock";
+import { withClientRequestTrace } from "../request-tracing";
 import { isControllerClosedError } from "../stream-utils";
 
 interface ModelInfo {
@@ -99,9 +100,17 @@ function mapAwsError(error: Error): Response {
 /**
  * Handle OpenAI-compatible /v1/chat/completions requests
  */
-export async function handleOpenAIProxy(
+export function handleOpenAIProxy(
   request: Request,
   authMode: "api_key" | "session" = "api_key",
+): Promise<Response> {
+  return withClientRequestTrace(request, () => handleOpenAIRequest(request, authMode), error =>
+    errorResponse(error.message, "invalid_request_error", 400, error.code, error.param));
+}
+
+async function handleOpenAIRequest(
+  request: Request,
+  authMode: "api_key" | "session",
 ): Promise<Response> {
   // 1. Authenticate to the shared proxy-principal boundary and enforce endpoint scope.
   const authResult = requireProxyScope(
@@ -139,9 +148,7 @@ export async function handleOpenAIProxy(
   let body: OpenAIChatCompletionRequest;
   try {
     body = validateChatCompletionRequest(rawBody);
-    conversationId = readConversationId(request.headers, body.conversation);
   } catch (error) {
-    if (error instanceof ConversationIdError) return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
     if (error instanceof RequestValidationError) {
       return errorResponse(error.message, "invalid_request_error", 400, error.code, error.param);
     }
@@ -278,13 +285,14 @@ export async function handleOpenAIProxy(
       ? await handleStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, request.signal, cacheAccepted)
       : await handleNonStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, cacheAccepted);
     if (conversationId) response.headers.set("x-conversation-id", conversationId);
+    response.headers.set("x-request-id", requestId);
     return response;
   } catch (error) {
     console.error("OpenAI proxy error:", error);
-    if (error instanceof Error) {
-      return mapAwsError(error);
-    }
-    return errorResponse("Unknown error", "server_error", 500, "internal_error");
+    const response = error instanceof Error ? mapAwsError(error)
+      : errorResponse("Unknown error", "server_error", 500, "internal_error");
+    response.headers.set("x-request-id", requestId);
+    return response;
   }
 }
 
