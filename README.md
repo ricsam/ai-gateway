@@ -122,6 +122,7 @@ bun test
 bun run db:migrate
 TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run users:verify-access
+TIMESCALE_ADMIN_URL=postgres://... bun run ledger:verify
 
 docker compose config
 helm lint charts/ai-gateway

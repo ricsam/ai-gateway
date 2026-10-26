@@ -19,6 +19,7 @@ import {
   validateBucketSize, validateTimeRange, type AnalyticsScope,
 } from "./analytics-service";
 import { bulkUpdateUsersByGroups, createLocalUser, deleteUser, setUserGroups, setUserPassword, updateUser } from "./user-service";
+import { METERED_USAGE_EVENT_TYPES } from "./usage-contract";
 
 const jsonHeaders = { "content-type": "application/json" };
 
@@ -489,7 +490,10 @@ export async function handleManagementApi(request: Request): Promise<Response> {
       const since = new Date(Date.now() - days * 86_400_000);
       const userId = url.searchParams.get("userId")?.trim(); const groupId = url.searchParams.get("groupId")?.trim();
       const groupUserIds = groupId ? (await db.select({ userId: groupMembersTable.userId }).from(groupMembersTable).where(eq(groupMembersTable.groupId, groupId))).map((row) => row.userId) : null;
-      const filters = [sql`${creditEventsTable.time} >= ${since}`, ...(userId ? [eq(creditEventsTable.userId, userId)] : []), ...(groupUserIds ? [groupUserIds.length ? inArray(creditEventsTable.userId, groupUserIds) : sql`false`] : [])];
+      // Ledger debits also represent balance adjustments/resets, not just inference.
+      // Keep all events in /usage/events, but use the same metered types as /v1/usage
+      // for every summary, including zero-cost requests and legacy inference types.
+      const filters = [inArray(creditEventsTable.type, [...METERED_USAGE_EVENT_TYPES]), sql`${creditEventsTable.time} >= ${since}`, ...(userId ? [eq(creditEventsTable.userId, userId)] : []), ...(groupUserIds ? [groupUserIds.length ? inArray(creditEventsTable.userId, groupUserIds) : sql`false`] : [])];
       const where = and(...filters);
       const [summary] = await db.select({
         creditsConsumed: sql<number>`coalesce(sum(${creditEventsTable.creditsConsumed}), 0)::float8`,
