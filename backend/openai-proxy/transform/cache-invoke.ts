@@ -1,31 +1,23 @@
-/**
- * Add cache control to Anthropic InvokeModel API requests
- * 
- * This applies to the Anthropic native format used with InvokeModel.
- * Uses `cache_control: { type: "ephemeral" }` which maps to the default
- * caching behavior in Anthropic's API.
- */
+/** Managed caching for Anthropic's native InvokeModel request format. */
+import { planCachePoints, type CacheTtl } from "./cache-policy";
 
-/** Cache control marker for Anthropic's native format */
 interface CacheControl {
   type: "ephemeral";
+  ttl?: CacheTtl;
 }
 
-/** Anthropic content block with optional cache control */
 interface AnthropicContentBlock {
-  type: "text" | "image" | "tool_use" | "tool_result";
+  type: string;
   text?: string;
   cache_control?: CacheControl;
   [key: string]: unknown;
 }
 
-/** Anthropic message format */
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: string | AnthropicContentBlock[];
 }
 
-/** Anthropic tool definition */
 interface AnthropicTool {
   name: string;
   description?: string;
@@ -33,14 +25,11 @@ interface AnthropicTool {
   cache_control?: CacheControl;
 }
 
-/** System block for Anthropic's native format */
-interface AnthropicSystemBlock {
+interface AnthropicSystemBlock extends AnthropicContentBlock {
   type: "text";
   text: string;
-  cache_control?: CacheControl;
 }
 
-/** Anthropic InvokeModel request body */
 export interface AnthropicInvokeBody {
   model?: string;
   max_tokens?: number;
@@ -50,132 +39,72 @@ export interface AnthropicInvokeBody {
   [key: string]: unknown;
 }
 
-/**
- * Add cache_control to the last system block, last tool, and last message content
- */
-export function addInvokeCacheControl(body: AnthropicInvokeBody): AnthropicInvokeBody {
-  const result: AnthropicInvokeBody = { ...body };
-
-  // Add cache control to system
-  if (result.system) {
-    result.system = addCacheControlToSystem(result.system);
+/** Both native Invoke endpoints accept an object or a serialized JSON body. */
+export function addInvokeBodyCacheControl(value: unknown, modelId: string): unknown {
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { return value; }
   }
-
-  // Add cache control to tools
-  if (result.tools && result.tools.length > 0) {
-    result.tools = addCacheControlToTools(result.tools);
-  }
-
-  // Add cache control to last message's last content block
-  if (result.messages && result.messages.length > 0) {
-    result.messages = addCacheControlToMessages(result.messages);
-  }
-
-  return result;
+  // Leave malformed, non-object, and binary bodies to the provider unchanged.
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || ArrayBuffer.isView(parsed)) return value;
+  const body = parsed as AnthropicInvokeBody;
+  // Invoke is provider-specific. Opaque profile ARNs can identify Claude via
+  // its required anthropic_version field; other providers must pass through.
+  if (!modelId.includes("anthropic.") && typeof body.anthropic_version !== "string") return value;
+  return addInvokeCacheControl(body);
 }
 
-/**
- * Add cache_control to system content
- * If system is a string, convert it to array format with cache control
- * If system is an array, add cache control to the last block
- */
-function addCacheControlToSystem(
-  system: string | AnthropicSystemBlock[]
-): AnthropicSystemBlock[] {
-  // Convert string to array format
-  if (typeof system === "string") {
-    return [
-      {
-        type: "text",
-        text: system,
-        cache_control: { type: "ephemeral" },
-      },
-    ];
-  }
+type CacheBlock = AnthropicContentBlock | AnthropicSystemBlock | AnthropicTool;
 
-  // If already an array, add cache_control to last block
-  if (system.length === 0) {
-    return system;
-  }
-
-  const result = [...system];
-  const lastIndex = result.length - 1;
-  const lastBlock = result[lastIndex];
-  
-  if (lastBlock) {
-    result[lastIndex] = {
-      ...lastBlock,
-      cache_control: { type: "ephemeral" },
-    };
-  }
-
-  return result;
-}
-
-/**
- * Add cache_control to the last tool
- */
-function addCacheControlToTools(tools: AnthropicTool[]): AnthropicTool[] {
-  if (tools.length === 0) {
-    return tools;
-  }
-
-  const result = [...tools];
-  const lastIndex = result.length - 1;
-  const lastTool = result[lastIndex];
-
-  if (lastTool) {
-    result[lastIndex] = {
-      ...lastTool,
-      cache_control: { type: "ephemeral" },
-    };
-  }
-
-  return result;
-}
-
-/**
- * Add cache_control to the last content block of the last message
- */
-function addCacheControlToMessages(messages: AnthropicMessage[]): AnthropicMessage[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-
-  const result = [...messages];
-  const lastIndex = result.length - 1;
-  const lastMessage = result[lastIndex];
-
-  if (!lastMessage) {
-    return result;
-  }
-
-  // Convert string content to array format if needed
-  let content = lastMessage.content;
-  if (typeof content === "string") {
-    content = [{ type: "text", text: content }];
-  }
-
-  if (!Array.isArray(content) || content.length === 0) {
-    return result;
-  }
-
-  // Add cache_control to last content block
-  const newContent = [...content];
-  const lastContentIndex = newContent.length - 1;
-  const lastContentBlock = newContent[lastContentIndex];
-
-  if (lastContentBlock) {
-    newContent[lastContentIndex] = {
-      ...lastContentBlock,
-      cache_control: { type: "ephemeral" },
-    };
-  }
-
-  result[lastIndex] = {
-    ...lastMessage,
-    content: newContent,
+function section(blocks: CacheBlock[], eligible: boolean) {
+  return {
+    existing: blocks.flatMap((block) => block?.cache_control ? [block.cache_control.ttl] : []),
+    needsCheckpoint: eligible && !blocks.at(-1)?.cache_control,
+    preferredTtl: "5m" as const,
   };
+}
 
+function contentBlocks(content: AnthropicMessage["content"] | undefined): AnthropicContentBlock[] {
+  if (typeof content === "string") return content.trim() ? [{ type: "text", text: content }] : [];
+  return Array.isArray(content) ? content : [];
+}
+
+function cacheableContent(block: AnthropicContentBlock | undefined): boolean {
+  if (block?.type === "text") return typeof block.text === "string" && block.text.trim().length > 0;
+  return block != null && ["image", "tool_use", "tool_result"].includes(block.type);
+}
+
+function markLast<T extends { cache_control?: CacheControl }>(blocks: T[], ttl: CacheTtl): T[] {
+  const result = [...blocks];
+  // Keep the historical default-5m wire format; explicit 1h is needed only
+  // when filling a boundary before a caller's existing 1h checkpoint.
+  result[result.length - 1] = {
+    ...result[result.length - 1]!,
+    cache_control: { type: "ephemeral", ...(ttl === "1h" && { ttl }) },
+  };
+  return result;
+}
+
+/** Fill system/tool/message boundaries, retaining caller markers and TTLs. */
+export function addInvokeCacheControl(body: AnthropicInvokeBody): AnthropicInvokeBody {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const system = contentBlocks(body.system);
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const contents = messages.map((message) => contentBlocks(message?.content));
+  const lastIndex = messages.length - 1;
+  const [toolTtl, systemTtl, ...messageTtls] = planCachePoints([
+    section(tools, typeof tools.at(-1)?.name === "string"),
+    section(system, system.at(-1)?.type === "text" && cacheableContent(system.at(-1))),
+    ...contents.map((blocks, index) => section(blocks, index === lastIndex && cacheableContent(blocks.at(-1)))),
+  ]);
+  const result = { ...body };
+  if (toolTtl) result.tools = markLast(tools, toolTtl);
+  if (systemTtl) result.system = markLast(system, systemTtl) as AnthropicSystemBlock[];
+  const messageTtl = messageTtls[lastIndex];
+  const lastMessage = messages[lastIndex];
+  if (messageTtl && lastMessage) {
+    result.messages = [...messages];
+    result.messages[lastIndex] = { ...lastMessage, content: markLast(contents[lastIndex]!, messageTtl) };
+  }
   return result;
 }

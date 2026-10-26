@@ -15,7 +15,7 @@ import { calculateCostBreakdown, checkBalance, deductCredits, type CostBreakdown
 import { hasAvailableCredits } from "./credit-settlement";
 import { authenticateApiKeyPrincipal, requireProxyScope, type ProxyPrincipal } from "./proxy-auth";
 import { addConverseCachePoints } from "./openai-proxy/transform/cache-converse";
-import { addInvokeCacheControl, type AnthropicInvokeBody } from "./openai-proxy/transform/cache-invoke";
+import { addInvokeBodyCacheControl } from "./openai-proxy/transform/cache-invoke";
 import {
   emptyCacheUsage,
   extractConverseCacheUsage,
@@ -182,10 +182,7 @@ async function handleConverse(body: ProxyBody, model: ModelInfo, principal: Prox
 
 async function handleInvoke(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient): Promise<Response> {
   const { modelId, body: requestBody, ...rest } = body;
-  const transformed = model.managedCache && requestBody && typeof requestBody === "object"
-    ? addInvokeCacheControl(requestBody as AnthropicInvokeBody)
-    : requestBody;
-  const requestBytes = bodyBytes(transformed);
+  const requestBytes = bodyBytes(model.managedCache ? addInvokeBodyCacheControl(requestBody, modelId) : requestBody);
   const output = await client.send(new InvokeModelCommand({ modelId, body: requestBytes, ...rest }));
   const responseBytes = output.body ?? new Uint8Array();
   const responseText = new TextDecoder().decode(responseBytes);
@@ -309,10 +306,7 @@ async function handleConverseStream(body: ProxyBody, model: ModelInfo, principal
 
 async function handleInvokeStream(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, signal: AbortSignal): Promise<Response> {
   const { modelId, body: requestBody, ...rest } = body;
-  const transformed = model.managedCache && requestBody && typeof requestBody === "object"
-    ? addInvokeCacheControl(requestBody as AnthropicInvokeBody)
-    : requestBody;
-  const requestBytes = bodyBytes(transformed);
+  const requestBytes = bodyBytes(model.managedCache ? addInvokeBodyCacheControl(requestBody, modelId) : requestBody);
   const abort = new AbortController();
   const output = await client.send(new InvokeModelWithResponseStreamCommand({ modelId, body: requestBytes, ...rest }), { abortSignal: abort.signal });
   if (!output.body) return failure("No stream in response", 500, "no_stream");

@@ -56,6 +56,12 @@ mock.module("../bedrock", () => ({
 const { handleOpenAIProxy } = await import("./handler");
 const { handleBedrockProxy } = await import("../bedrock-proxy");
 
+function nativeCall(endpoint: "converse" | "converse-stream" | "invoke" | "invoke-stream", body: unknown) {
+  return handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/" + endpoint, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }), endpoint);
+}
+
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 function model(overrides: ModelRow = {}): ModelRow {
@@ -93,6 +99,126 @@ beforeEach(() => {
     stopReason: "end_turn",
     usage: { inputTokens: 20, outputTokens: 30, totalTokens: 50 },
   };
+});
+
+describe("managed prompt cache request pipeline", () => {
+  const longCachePoint = { cachePoint: { type: "default", ttl: "1h" } } as const;
+  const shortCachePoint = { cachePoint: { type: "default", ttl: "5m" } } as const;
+  const cacheControl = { cache_control: { type: "ephemeral" } };
+  const schema = { type: "object", properties: { query: { type: "string" } }, required: ["query"] };
+  const functions = ["search", "lookup"].map(name => ({ name, description: `${name} records`, parameters: schema }));
+  const tools = functions.map(({ parameters, ...spec }) => ({ toolSpec: { ...spec, inputSchema: { json: parameters } } }));
+  const system = [{ text: "System instructions" }, { text: "Developer instructions" }];
+  const messages = [
+    { role: "user" as const, content: [{ text: "Earlier question" }] },
+    { role: "assistant" as const, content: [{ text: "Earlier answer" }] },
+    { role: "user" as const, content: [{ text: "Context" }, { text: "Final question" }] },
+  ];
+
+  for (const stream of [false, true]) for (const managedCache of [false, true]) {
+    test(`OpenAI system, developer and tools caching (stream=${stream}, managedCache=${managedCache})`, async () => {
+      modelRow = model({ managedCache, thinking: false });
+      const response = await call({
+        model: modelRow.modelId, stream, max_tokens: 200, temperature: 0.3,
+        messages: [
+          { role: "system", content: "System instructions" },
+          { role: "developer", content: "Developer instructions" },
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer" },
+          { role: "user", content: [{ type: "text", text: "Context" }, { type: "text", text: "Final question" }] },
+        ],
+        tools: functions.map(fn => ({ type: "function", function: fn })), tool_choice: "required",
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.streaming).toBe(stream);
+      const input = sent[0]!.input;
+      expect(input.system).toEqual([...system, ...(managedCache ? [longCachePoint] : [])]);
+      expect(input.toolConfig).toEqual({ tools: [...tools, ...(managedCache ? [longCachePoint] : [])], toolChoice: { any: {} } });
+      expect(input.messages).toEqual([
+        ...messages.slice(0, -1),
+        { ...messages[2]!, content: [...messages[2]!.content, ...(managedCache ? [shortCachePoint] : [])] },
+      ]);
+      expect(input.inferenceConfig).toEqual({ maxTokens: 200, temperature: 0.3 });
+    });
+  }
+
+  for (const endpoint of ["converse", "converse-stream"] as const) for (const managedCache of [false, true]) {
+    test(`native ${endpoint} caches only final boundaries (managedCache=${managedCache})`, async () => {
+      modelRow = model({ managedCache });
+      const original = {
+        modelId: modelRow.modelId as string, system, messages,
+        toolConfig: { tools, toolChoice: { auto: {} } },
+        inferenceConfig: { maxTokens: 200, temperature: 0.3, stopSequences: ["STOP"] },
+        additionalModelRequestFields: { custom_option: "keep" },
+      };
+      const response = await nativeCall(endpoint, original);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.streaming).toBe(endpoint === "converse-stream");
+      expect(sent[0]!.input).toEqual({
+        ...original,
+        system: [...system, ...(managedCache ? [longCachePoint] : [])],
+        toolConfig: { ...original.toolConfig, tools: [...tools, ...(managedCache ? [longCachePoint] : [])] },
+        messages: [...messages.slice(0, -1), {
+          ...messages[2]!, content: [...messages[2]!.content, ...(managedCache ? [shortCachePoint] : [])],
+        }],
+      });
+    });
+  }
+
+  for (const endpoint of ["invoke", "invoke-stream"] as const) for (const managedCache of [false, true]) {
+    for (const serialized of [false, true]) {
+      test(`native ${endpoint} caches system/tools/messages (managedCache=${managedCache}, serialized=${serialized})`, async () => {
+        modelRow = model({ managedCache });
+        converseOutput = { body: new TextEncoder().encode('{"usage":{"input_tokens":2,"output_tokens":3}}') };
+        const original = {
+          anthropic_version: "bedrock-2023-05-31", max_tokens: 200, temperature: 0.3,
+          system: system.map(block => ({ type: "text", text: block.text })),
+          tools: functions.map(({ parameters, ...spec }) => ({ ...spec, input_schema: parameters })),
+          tool_choice: { type: "auto" }, stop_sequences: ["STOP"],
+          messages: messages.map(message => ({ ...message, content: message.content.map(block => ({ type: "text", text: block.text })) })),
+          metadata: { user_id: "cache-test" },
+        };
+        // Whitespace makes disabled caching's byte-for-byte preservation observable.
+        const serializedBody = JSON.stringify(original, null, 2);
+        const response = await nativeCall(endpoint, {
+          modelId: modelRow.modelId, body: serialized ? serializedBody : original,
+          contentType: "application/json", accept: "application/json", trace: "ENABLED",
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(sent).toHaveLength(1);
+        const input = sent[0]!.input as unknown as { body: Uint8Array };
+        expect(input).toMatchObject({ modelId: modelRow.modelId, contentType: "application/json", accept: "application/json", trace: "ENABLED" });
+        const outbound = new TextDecoder().decode(input.body);
+        expect(JSON.parse(outbound)).toEqual(managedCache ? {
+          ...original,
+          system: [original.system[0], { ...original.system[1], ...cacheControl }],
+          tools: [original.tools[0], { ...original.tools[1], ...cacheControl }],
+          messages: [...original.messages.slice(0, -1), {
+            ...original.messages[2], content: [original.messages[2]!.content[0], { ...original.messages[2]!.content[1], ...cacheControl }],
+          }],
+        } : original);
+        if (serialized && !managedCache) expect(outbound).toBe(serializedBody);
+      });
+    }
+
+    test(`native ${endpoint} preserves malformed and non-object serialized bodies (managedCache=${managedCache})`, async () => {
+      modelRow = model({ managedCache });
+      converseOutput = { body: new TextEncoder().encode("{}") };
+      for (const body of ["{invalid JSON", " null ", " [1, 2] ", ' "text" ', " 42 ", " true "]) {
+        sent = [];
+        const response = await nativeCall(endpoint, { modelId: modelRow.modelId, body, contentType: "application/json" });
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(sent).toHaveLength(1);
+        expect(new TextDecoder().decode((sent[0]!.input as unknown as { body: Uint8Array }).body)).toBe(body);
+      }
+    });
+  }
 });
 
 describe("OpenAI-compatible handler", () => {

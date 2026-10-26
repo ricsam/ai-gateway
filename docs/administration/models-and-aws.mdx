@@ -41,6 +41,16 @@ Open **Admin → Models** and configure:
 
 Use **Test model before saving** to verify that the identifier, region, credentials, and Bedrock access are correct.
 
+## Managed prompt caching
+
+Enable **Managed cache** on a model to place checkpoints after the complete tool list, the complete system prompt, and the final message content. OpenAI system and developer messages both contribute to the system checkpoint. This applies to streaming and non-streaming Chat Completions (including the playground), native Converse, and Anthropic Invoke requests. Invoke bodies may be JSON objects or serialized JSON strings.
+
+- Converse defaults to **1 hour** for tools/system and **5 minutes** for the last message. Anthropic Invoke defaults to **5 minutes** for all three.
+- Existing caller checkpoints and their TTLs are preserved; already-marked boundaries are not duplicated. Existing checkpoints count toward the four-checkpoint budget, with missing tool/system boundaries taking priority over the final message. Injected TTLs respect the required longer-before-shorter ordering (`tools → system → messages`).
+- Missing or empty sections are not synthesized. Turning managed caching off leaves caller caching settings alone. Non-Anthropic Invoke bodies are not rewritten.
+
+Enable this only for models that support the checkpoint locations and TTLs above. Bedrock's model-specific minimum prefix length still applies: adding a checkpoint does not guarantee a cache hit. Invalid caller checkpoint configurations remain subject to provider validation.
+
 ## Reasoning effort
 
 With **Reasoning / effort** enabled, API clients and the playground can send `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The **Reasoning control** decides the Bedrock request shape:
