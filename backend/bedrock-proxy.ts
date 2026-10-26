@@ -14,8 +14,7 @@ import { getBedrockClient, ProviderNotConfiguredError } from "./bedrock";
 import { calculateCostBreakdown, checkBalance, deductCredits, type CostBreakdown } from "./credit-service";
 import { hasAvailableCredits } from "./credit-settlement";
 import { authenticateApiKeyPrincipal, requireProxyScope, type ProxyPrincipal } from "./proxy-auth";
-import { addConverseCachePoints } from "./openai-proxy/transform/cache-converse";
-import { addInvokeBodyCacheControl } from "./openai-proxy/transform/cache-invoke";
+import { conversationCache, ConversationIdError, readConversationId, type ConversationCacheContext } from "./conversation-cache";
 import {
   emptyCacheUsage,
   extractConverseCacheUsage,
@@ -120,6 +119,12 @@ async function settle(params: {
 export async function handleBedrockProxy(request: Request, endpoint: BedrockProxyEndpoint): Promise<Response> {
   const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "ai.invoke");
   if (!auth.ok) return failure(auth.message, auth.status, auth.code);
+  let conversationId: string | undefined;
+  try { conversationId = readConversationId(request.headers); }
+  catch (error) {
+    if (error instanceof ConversationIdError) return failure(error.message, 400, error.code);
+    throw error;
+  }
 
   let body: ProxyBody;
   try {
@@ -154,23 +159,30 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
         ? applyAliasConverse(body as ConverseCommandInput, model, resolved.alias) as ProxyBody
         : { ...body, body: applyAliasInvoke(body.body, model, resolved.alias) };
     }
+    const cacheContext: ConversationCacheContext = {
+      conversationId, principal: auth.principal, modelKey: model.id, modelId: model.modelId, region: model.region,
+    };
     const client = await getBedrockClient(model.region);
+    let response: Response;
     switch (endpoint) {
-      case "converse": return await handleConverse(body, modelInfo, auth.principal, requestId, client);
-      case "converse-stream": return await handleConverseStream(body, modelInfo, auth.principal, requestId, client, request.signal);
-      case "invoke": return await handleInvoke(body, modelInfo, auth.principal, requestId, client);
-      case "invoke-stream": return await handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal);
+      case "converse": response = await handleConverse(body, modelInfo, auth.principal, requestId, client, cacheContext); break;
+      case "converse-stream": response = await handleConverseStream(body, modelInfo, auth.principal, requestId, client, request.signal, cacheContext); break;
+      case "invoke": response = await handleInvoke(body, modelInfo, auth.principal, requestId, client, cacheContext); break;
+      case "invoke-stream": response = await handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal, cacheContext); break;
     }
+    if (conversationId) response.headers.set("x-conversation-id", conversationId);
+    return response;
   } catch (error) {
     return mapError(error);
   }
 }
 
-async function handleConverse(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient): Promise<Response> {
+async function handleConverse(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, context: ConversationCacheContext): Promise<Response> {
   const { modelId, ...rest } = body;
-  let input = { modelId, ...rest } as ConverseCommandInput;
-  if (model.managedCache) input = addConverseCachePoints(input);
-  const output = await client.send(new ConverseCommand(input));
+  const input = { modelId, ...rest } as ConverseCommandInput;
+  const prepared = model.managedCache ? await conversationCache.converse(input, context) : undefined;
+  const output = await client.send(new ConverseCommand(prepared?.input ?? input));
+  await prepared?.accepted();
   const cache = extractConverseCacheUsage(output.usage);
   await settle({
     principal, endpoint: "converse", requestId, model, cache,
@@ -180,10 +192,12 @@ async function handleConverse(body: ProxyBody, model: ModelInfo, principal: Prox
   return Response.json(output, { headers: { "x-request-id": requestId } });
 }
 
-async function handleInvoke(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient): Promise<Response> {
+async function handleInvoke(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, context: ConversationCacheContext): Promise<Response> {
   const { modelId, body: requestBody, ...rest } = body;
-  const requestBytes = bodyBytes(model.managedCache ? addInvokeBodyCacheControl(requestBody, modelId) : requestBody);
+  const prepared = model.managedCache ? await conversationCache.invoke(requestBody, modelId, context) : undefined;
+  const requestBytes = bodyBytes(prepared ? prepared.input : requestBody);
   const output = await client.send(new InvokeModelCommand({ modelId, body: requestBytes, ...rest }));
+  await prepared?.accepted();
   const responseBytes = output.body ?? new Uint8Array();
   const responseText = new TextDecoder().decode(responseBytes);
   let inputTokens = Math.ceil(requestBytes.length / 4);
@@ -275,13 +289,14 @@ function streamResponse(params: {
   });
 }
 
-async function handleConverseStream(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, signal: AbortSignal): Promise<Response> {
+async function handleConverseStream(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, signal: AbortSignal, context: ConversationCacheContext): Promise<Response> {
   const { modelId, ...rest } = body;
-  let input = { modelId, ...rest } as ConverseCommandInput;
-  if (model.managedCache) input = addConverseCachePoints(input);
+  const input = { modelId, ...rest } as ConverseCommandInput;
+  const prepared = model.managedCache ? await conversationCache.converse(input, context) : undefined;
   const abort = new AbortController();
-  const output = await client.send(new ConverseStreamCommand(input), { abortSignal: abort.signal });
+  const output = await client.send(new ConverseStreamCommand(prepared?.input ?? input), { abortSignal: abort.signal });
   if (!output.stream) return failure("No stream in response", 500, "no_stream");
+  await prepared?.accepted();
   const encoder = new TextEncoder();
   return streamResponse({
     source: output.stream as AsyncIterable<ConverseStreamOutput>, signal, abort, requestId,
@@ -304,12 +319,14 @@ async function handleConverseStream(body: ProxyBody, model: ModelInfo, principal
   });
 }
 
-async function handleInvokeStream(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, signal: AbortSignal): Promise<Response> {
+async function handleInvokeStream(body: ProxyBody, model: ModelInfo, principal: ProxyPrincipal, requestId: string, client: BedrockRuntimeClient, signal: AbortSignal, context: ConversationCacheContext): Promise<Response> {
   const { modelId, body: requestBody, ...rest } = body;
-  const requestBytes = bodyBytes(model.managedCache ? addInvokeBodyCacheControl(requestBody, modelId) : requestBody);
+  const prepared = model.managedCache ? await conversationCache.invoke(requestBody, modelId, context) : undefined;
+  const requestBytes = bodyBytes(prepared ? prepared.input : requestBody);
   const abort = new AbortController();
   const output = await client.send(new InvokeModelWithResponseStreamCommand({ modelId, body: requestBytes, ...rest }), { abortSignal: abort.signal });
   if (!output.body) return failure("No stream in response", 500, "no_stream");
+  await prepared?.accepted();
   let streamedBytes = 0;
   return streamResponse({
     source: output.body as AsyncIterable<unknown>, signal, abort, requestId,

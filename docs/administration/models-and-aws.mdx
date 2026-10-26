@@ -51,6 +51,8 @@ Enable **Managed cache** on a model to place checkpoints after the complete tool
 
 Enable this only for models that support the checkpoint locations and TTLs above. Bedrock's model-specific minimum prefix length still applies: adding a checkpoint does not guarantee a cache hit. Invalid caller checkpoint configurations remain subject to provider validation.
 
+Clients may send [X-Conversation-ID](/docs/chat-completions#optional-conversation-id) to restore a matching previous input checkpoint as well, avoiding reliance on the approximately 20-block lookback for long turns. This remains within the four-point budget and does not change TTL defaults. Apply migration `0006_conversation_cache_boundaries` through the usual deployment migration process to enable cross-replica boundary storage. Missing/unavailable storage falls back to stateless caching. Metadata uses a separate two-connection pool with short connection/query/lock limits and a one-second deadline per read or write; it does not share the billing/authentication pool.
+
 ## Reasoning effort
 
 With **Reasoning / effort** enabled, API clients and the playground can send `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The **Reasoning control** decides the Bedrock request shape:

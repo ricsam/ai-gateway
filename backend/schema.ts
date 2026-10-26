@@ -40,6 +40,23 @@ export const userTable = pgTable("user", {
   check("user_credit_balance_check", sql`${table.creditBalance} >= 0`),
 ]);
 
+/** Hashes and checkpoint coordinates only; never conversation IDs or prompt text. */
+export const conversationCacheBoundariesTable = pgTable("conversation_cache_boundaries", {
+  key: text("key").primaryKey(),
+  userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "cascade" }),
+  version: text("version").notNull(),
+  messageIndex: integer("message_index").notNull(),
+  contentIndex: integer("content_index").notNull(),
+  prefixHash: text("prefix_hash").notNull(),
+  ttl: text("ttl", { enum: ["5m", "1h"] }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("conversation_cache_boundaries_expiry_idx").on(table.expiresAt),
+  index("conversation_cache_boundaries_user_idx").on(table.userId),
+  check("conversation_cache_boundaries_indices_check", sql`${table.messageIndex} >= 0 and ${table.contentIndex} >= 0`),
+  check("conversation_cache_boundaries_ttl_check", sql`${table.ttl} in ('5m', '1h')`),
+]);
+
 export const sessionTable = pgTable("session", {
   id: text("id").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

@@ -16,6 +16,28 @@ let settlementGate: Promise<void> | undefined;
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
+let sendError: Error | undefined;
+let principalUserId = "user-1234567890";
+let principalCredentialId = "key-1";
+
+// Preserve the real class/validation exports for other suites; replace only the
+// handler singleton. The database store module is neither imported nor mocked.
+const cacheModule = await import("../conversation-cache");
+const receipts = new Map<string, import("../conversation-cache-types").StoredConversationBoundary>();
+let cacheReads = 0;
+let cacheWrites = 0;
+mock.module("../conversation-cache", () => ({
+  ...cacheModule,
+  conversationCache: new cacheModule.ConversationCache(async () => ({
+    async get(key) { cacheReads++; return receipts.get(key); },
+    async put(input) {
+      cacheWrites++;
+      const current = receipts.get(input.key);
+      if (input.expectedVersion === null ? current && current.expiresAt > Date.now() : current?.version !== input.expectedVersion) return;
+      receipts.set(input.key, { version: crypto.randomUUID(), boundary: input.boundary, expiresAt: input.expiresAt });
+    },
+  })),
+}));
 
 mock.module("../model-catalog", () => ({
   listAvailableModels: async () => resolveModelCatalog({ models: modelRow ? [modelRow] : [], aliases, apps } as ModelCatalog),
@@ -24,8 +46,8 @@ mock.module("../model-catalog", () => ({
 mock.module("../proxy-auth", () => {
   const principal = { userId: "user-1234567890", credentialType: "api_key", credentialId: "key-1", scopes: new Set(["ai.invoke"]) };
   return {
-    authenticateApiKeyPrincipal: async () => ({ ok: true, principal }),
-    authenticateSessionPrincipal: async () => ({ ok: true, principal: { ...principal, credentialType: "session" } }),
+    authenticateApiKeyPrincipal: async () => ({ ok: true, principal: { ...principal, userId: principalUserId, credentialId: principalCredentialId } }),
+    authenticateSessionPrincipal: async () => ({ ok: true, principal: { ...principal, userId: principalUserId, credentialId: principalCredentialId, credentialType: "session" } }),
     requireProxyScope: (result: unknown) => result,
   };
 });
@@ -46,6 +68,7 @@ mock.module("../bedrock", () => ({
     send: async (command: { input: ConverseCommandInput }) => {
       const streaming = command instanceof ConverseStreamCommand;
       sent.push({ streaming, input: command.input });
+      if (sendError) throw sendError;
       if (command instanceof InvokeModelWithResponseStreamCommand) return { body: (async function* () { yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_stop"}') } }; })() };
       if (!streaming) return converseOutput;
       return { stream: (async function* () { for (const event of streamEvents) yield event; })() };
@@ -56,9 +79,9 @@ mock.module("../bedrock", () => ({
 const { handleOpenAIProxy } = await import("./handler");
 const { handleBedrockProxy } = await import("../bedrock-proxy");
 
-function nativeCall(endpoint: "converse" | "converse-stream" | "invoke" | "invoke-stream", body: unknown) {
+function nativeCall(endpoint: "converse" | "converse-stream" | "invoke" | "invoke-stream", body: unknown, headers: Record<string, string> = {}) {
   return handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/" + endpoint, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
   }), endpoint);
 }
 
@@ -73,16 +96,19 @@ function model(overrides: ModelRow = {}): ModelRow {
   };
 }
 
-function call(body: unknown) {
+function call(body: unknown, headers: Record<string, string> = {}) {
   return handleOpenAIProxy(new Request("https://gateway.test/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer aig_test" },
+    headers: { "content-type": "application/json", authorization: "Bearer aig_test", ...headers },
     body: JSON.stringify(body),
   }));
 }
 
 beforeEach(() => {
   modelRow = model();
+  receipts.clear(); cacheReads = 0; cacheWrites = 0;
+  sendError = undefined;
+  principalUserId = "user-1234567890"; principalCredentialId = "key-1";
   aliases = []; apps = [];
   remoteImagesEnabled = true;
   sent = [];
@@ -99,6 +125,133 @@ beforeEach(() => {
     stopReason: "end_turn",
     usage: { inputTokens: 20, outputTokens: 30, totalTokens: 50 },
   };
+});
+
+describe("conversation header request pipeline", () => {
+  const routes = ["openai", "openai-stream", "converse", "converse-stream", "invoke", "invoke-stream", "invoke-json", "invoke-stream-json"] as const;
+  type Route = typeof routes[number];
+  function request(route: Route, count: number, id?: string) {
+    const headers: Record<string, string> = id === undefined ? {} : { "x-conversation-id": id };
+    const texts = Array.from({ length: count }, (_, i) => `Block ${i}`);
+    const schema = { type: "object", properties: {} };
+    if (route.startsWith("openai")) return call({
+      model: modelRow!.modelId, stream: route.endsWith("stream"),
+      messages: [{ role: "system", content: "Stable instructions" },
+        { role: "user", content: texts.map(text => ({ type: "text", text })) }],
+      tools: [{ type: "function", function: { name: "search", parameters: schema } }],
+    }, headers);
+    if (route.startsWith("converse")) return nativeCall(route as "converse" | "converse-stream", {
+      modelId: modelRow!.modelId, system: [{ text: "Stable instructions" }],
+      messages: [{ role: "user", content: texts.map(text => ({ text })) }],
+      toolConfig: { tools: [{ toolSpec: { name: "search", inputSchema: { json: schema } } }] },
+    }, headers);
+    converseOutput = { body: new TextEncoder().encode('{"usage":{"input_tokens":2,"output_tokens":3}}') };
+    const body = { anthropic_version: "bedrock-2023-05-31", max_tokens: 200,
+      system: "Stable instructions", tools: [{ name: "search", input_schema: schema }],
+      messages: [{ role: "user", content: texts.map(text => ({ type: "text", text })) }],
+    };
+    return nativeCall(route.includes("stream") ? "invoke-stream" : "invoke", {
+      modelId: modelRow!.modelId, body: route.endsWith("json") ? JSON.stringify(body) : body,
+    }, headers);
+  }
+  function outbound(route: Route): Record<string, any> {
+    const input = sent.at(-1)!.input;
+    return route.startsWith("invoke")
+      ? JSON.parse(new TextDecoder().decode((input as unknown as { body: Uint8Array }).body)) : input;
+  }
+  function messageMarkers(route: Route): number[] {
+    const content = outbound(route).messages[0].content as Array<Record<string, unknown>>;
+    let textIndex = -1;
+    return content.flatMap(block => {
+      if (block.text !== undefined) textIndex++;
+      return block.cachePoint || block.cache_control ? [textIndex] : [];
+    });
+  }
+  for (const route of routes) {
+    test(`${route}: restores previous boundary beyond 20 blocks and echoes header`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const count of [24, 50]) {
+        const response = await request(route, count, "chat:stable-1");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-conversation-id")).toBe("chat:stable-1");
+        await response.text();
+        expect(messageMarkers(route)).toEqual(count === 24 ? [23] : [23, 49]);
+        const payload = outbound(route);
+        const allMarkers = JSON.stringify(payload).match(/"(?:cachePoint|cache_control)":/g) ?? [];
+        expect(allMarkers).toHaveLength(count === 24 ? 3 : 4);
+      }
+      expect(cacheReads).toBe(2);
+      expect(cacheWrites).toBe(2);
+      expect(receipts.size).toBe(1);
+    });
+
+    test(`${route}: rejects invalid IDs before provider or store access`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const id of ["", "bad id", "bad/id", "x".repeat(129)]) {
+        const response = await request(route, 24, id);
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain("invalid_conversation_id");
+      }
+      expect(sent).toHaveLength(0);
+      expect(cacheReads).toBe(0);
+      expect(cacheWrites).toBe(0);
+    });
+
+    test(`${route}: missing header remains stateless and disabled cache does not track`, async () => {
+      modelRow = model({ managedCache: true });
+      for (const count of [24, 50]) {
+        const response = await request(route, count);
+        expect(response.status).toBe(200);
+        expect(response.headers.has("x-conversation-id")).toBe(false);
+        await response.text();
+        expect(messageMarkers(route)).toEqual([count - 1]);
+      }
+      modelRow = model({ managedCache: false });
+      const response = await request(route, 50, "disabled");
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-conversation-id")).toBe("disabled");
+      await response.text();
+      expect(messageMarkers(route)).toEqual([]);
+      expect(cacheReads).toBe(0);
+      expect(cacheWrites).toBe(0);
+    });
+
+    test(`${route}: provider rejection never commits a boundary`, async () => {
+      modelRow = model({ managedCache: true });
+      sendError = new Error("test provider rejection");
+      const failed = await request(route, 24, "provider-failure");
+      expect(failed.status).toBeGreaterThanOrEqual(400);
+      await failed.text();
+      expect(cacheWrites).toBe(0);
+      expect(receipts.size).toBe(0);
+      sendError = undefined;
+      const success = await request(route, 50, "provider-failure");
+      expect(success.status).toBe(200);
+      await success.text();
+      expect(messageMarkers(route)).toEqual([49]);
+      expect(cacheWrites).toBe(1);
+    });
+  }
+
+  for (const scope of ["conversation", "user", "credential", "model", "region", "format"] as const) {
+    test(`does not reuse a boundary across ${scope} scope`, async () => {
+      modelRow = model({ managedCache: true });
+      await (await request("openai", 24, "scope-a")).text();
+      let route: Route = "openai";
+      let id = "scope-a";
+      if (scope === "conversation") id = "scope-b";
+      if (scope === "user") principalUserId = "another-user";
+      if (scope === "credential") principalCredentialId = "another-key";
+      if (scope === "model") modelRow.id = "another-model-row";
+      if (scope === "region") modelRow.region = "eu-west-1";
+      if (scope === "format") route = "invoke-json";
+      const response = await request(route, 50, id);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(messageMarkers(route)).toEqual([49]);
+      expect(receipts.size).toBe(2);
+    });
+  }
 });
 
 describe("managed prompt cache request pipeline", () => {

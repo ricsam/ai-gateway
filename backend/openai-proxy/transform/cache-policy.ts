@@ -7,6 +7,8 @@ interface CacheSection {
   /** Whether this section needs a checkpoint at its end. */
   needsCheckpoint: boolean;
   preferredTtl: CacheTtl;
+  /** A restored checkpoint must keep its original TTL to read that entry. */
+  requiredTtl?: CacheTtl;
 }
 
 /**
@@ -17,13 +19,16 @@ interface CacheSection {
  */
 export function planCachePoints(sections: CacheSection[]): Array<CacheTtl | undefined> {
   let available = 4 - sections.reduce((count, section) => count + section.existing.length, 0);
-  let remainingLongSections = sections.filter((section) => section.existing.includes("1h")).length;
+  const hasLongTtl = (section: CacheSection) => section.existing.includes("1h") || (section.needsCheckpoint && section.requiredTtl === "1h");
+  let remainingLongSections = sections.filter(hasLongTtl).length;
   let seenShortTtl = false;
   return sections.map((section) => {
-    if (section.existing.includes("1h")) remainingLongSections--;
+    if (hasLongTtl(section)) remainingLongSections--;
     seenShortTtl ||= section.existing.some((ttl) => ttl !== "1h");
     const laterLongTtl = remainingLongSections > 0;
     if (!section.needsCheckpoint || available <= 0 || (seenShortTtl && laterLongTtl)) return undefined;
+    if (section.requiredTtl === "1h" && seenShortTtl) return undefined;
+    if (section.requiredTtl === "5m" && laterLongTtl) return undefined;
 
     const ttl = seenShortTtl ? "5m" : laterLongTtl ? "1h" : section.preferredTtl;
     available--;

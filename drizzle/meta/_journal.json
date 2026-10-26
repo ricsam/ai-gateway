@@ -43,6 +43,13 @@
       "when": 1791979952379,
       "tag": "0005_remove_user_api_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793011298134,
+      "tag": "0006_conversation_cache_boundaries",
+      "breakpoints": true
     }
   ]
 }

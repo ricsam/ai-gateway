@@ -24,7 +24,7 @@
         "summary": "Create a chat completion",
         "description": "Translates an OpenAI Chat Completions request to AWS Bedrock Converse. Requires `ai.invoke`.",
         "operationId": "createChatCompletion",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/ConversationId" }],
         "requestBody": {
           "required": true,
           "content": {
@@ -130,7 +130,7 @@
         "summary": "Call Bedrock Converse",
         "description": "Passes a Bedrock Converse-shaped request through the configured catalog and settlement boundary. Requires `ai.invoke`.",
         "operationId": "bedrockConverse",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/ConversationId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
         "responses": {
           "200": { "description": "AWS Bedrock Converse response", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
@@ -146,7 +146,7 @@
         "summary": "Stream Bedrock Converse",
         "description": "Returns Bedrock Converse stream events as newline-delimited JSON. Requires `ai.invoke`.",
         "operationId": "bedrockConverseStream",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/ConversationId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockRequest" },
         "responses": {
           "200": { "description": "Newline-delimited Bedrock events", "content": { "application/x-ndjson": { "schema": { "type": "string" } } } },
@@ -162,7 +162,7 @@
         "summary": "Call Bedrock InvokeModel",
         "description": "Passes a native model body to Bedrock InvokeModel. Requires `ai.invoke`.",
         "operationId": "bedrockInvoke",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/ConversationId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
         "responses": {
           "200": { "description": "Provider response body", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
@@ -178,7 +178,7 @@
         "summary": "Stream Bedrock InvokeModel",
         "description": "Passes native provider event bytes through as an octet stream. Requires `ai.invoke`.",
         "operationId": "bedrockInvokeStream",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/ConversationId" }],
         "requestBody": { "$ref": "#/components/requestBodies/BedrockInvokeRequest" },
         "responses": {
           "200": { "description": "Provider binary event stream", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
@@ -199,6 +199,13 @@
       }
     },
     "parameters": {
+      "ConversationId": {
+        "name": "X-Conversation-ID",
+        "in": "header",
+        "required": false,
+        "description": "Optional gateway extension, echoed on success. Reuse an opaque ID across turns to restore a matching previous input cache boundary when managed caching is enabled. Full history remains required. Scoped to caller credential, upstream and format; no prompt text is stored. Distinct from the per-request X-Request-ID. Does not change cache TTLs.",
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" }
+      },
       "RequestId": {
         "name": "X-Request-ID",
         "in": "header",

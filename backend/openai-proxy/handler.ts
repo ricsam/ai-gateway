@@ -27,7 +27,7 @@ import { applyReasoning, ReasoningConfigError } from "./transform/reasoning";
 import { collectRemoteImageUrls, RequestValidationError, validateChatCompletionRequest } from "./transform/validate";
 import { ImageInputError, type ResolvedImage } from "./images";
 import { fetchRemoteImages } from "./remote-image";
-import { addConverseCachePoints } from "./transform/cache-converse";
+import { conversationCache, ConversationIdError, readConversationId } from "../conversation-cache";
 import { extractConverseCacheUsage, extractStreamingCacheUsage, emptyCacheUsage } from "./transform/cache-usage";
 import type { CacheUsage } from "./transform/cache-usage";
 import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError, OpenAIErrorType } from "./transform/types";
@@ -121,6 +121,12 @@ export async function handleOpenAIProxy(
 
   const principal: ProxyPrincipal = authResult.principal;
   const { userId } = principal;
+  let conversationId: string | undefined;
+  try { conversationId = readConversationId(request.headers); }
+  catch (error) {
+    if (error instanceof ConversationIdError) return errorResponse(error.message, "invalid_request_error", 400, error.code, "X-Conversation-ID");
+    throw error;
+  }
 
   // 2. Credential and user state are enforced by the principal authenticator.
   // Parse, validate, and normalize the OpenAI request body.
@@ -253,21 +259,24 @@ export async function handleOpenAIProxy(
     }
   }
 
-  // 6. Apply managed cache points if enabled
+  // 6. Apply managed cache points and, optionally, a verified previous boundary.
+  let cacheAccepted: (() => Promise<void>) | undefined;
   if (modelInfo.managedCache) {
-    bedrockRequest = addConverseCachePoints(bedrockRequest);
+    const prepared = await conversationCache.converse(bedrockRequest, {
+      conversationId, principal, modelKey: model.id, modelId: model.modelId, region: model.region,
+    });
+    bedrockRequest = prepared.input;
+    cacheAccepted = prepared.accepted;
   }
 
   try {
     // Create region-specific Bedrock client lazily inside the mapped error boundary.
     const bedrockClient = await getBedrockClient(modelInfo.region);
-    if (body.stream === true) {
-      // 7. Streaming request
-      return await handleStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, request.signal);
-    } else {
-      // 8. Non-streaming request
-      return await handleNonStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient);
-    }
+    const response = body.stream === true
+      ? await handleStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, request.signal, cacheAccepted)
+      : await handleNonStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, cacheAccepted);
+    if (conversationId) response.headers.set("x-conversation-id", conversationId);
+    return response;
   } catch (error) {
     console.error("OpenAI proxy error:", error);
     if (error instanceof Error) {
@@ -300,11 +309,13 @@ async function handleNonStreamingRequest(
   principal: ProxyPrincipal,
   requestedModel: string,
   requestId: string,
-  bedrockClient: BedrockRuntimeClient
+  bedrockClient: BedrockRuntimeClient,
+  cacheAccepted?: () => Promise<void>,
 ): Promise<Response> {
   const userId = principal.userId;
   const command = new ConverseCommand(bedrockRequest);
   const response = await bedrockClient.send(command);
+  await cacheAccepted?.();
 
   // Log abnormal stop reasons
   if (response.stopReason && response.stopReason !== "end_turn") {
@@ -401,7 +412,8 @@ async function handleStreamingRequest(
   requestedModel: string,
   requestId: string,
   bedrockClient: BedrockRuntimeClient,
-  requestSignal: AbortSignal
+  requestSignal: AbortSignal,
+  cacheAccepted?: () => Promise<void>,
 ): Promise<Response> {
   const userId = principal.userId;
   const command = new ConverseStreamCommand(bedrockRequest);
@@ -432,6 +444,7 @@ async function handleStreamingRequest(
     return errorResponse("No stream in response", "server_error", 500, "no_stream");
   }
 
+  await cacheAccepted?.();
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheUsage = emptyCacheUsage();
