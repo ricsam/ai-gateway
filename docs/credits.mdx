@@ -26,7 +26,7 @@ The key requires `credits.read`.
 
 ## Current-month usage summary
 
-Use the native summary when a downstream application needs one request to render USD used, remaining credits, allocation percentage, request count, and token usage:
+Use the native summary when a downstream application needs one request to render USD used, remaining credits, an authoritative top-up-inclusive budget percentage, request count, and token usage:
 
 ```bash
 curl https://gateway.example.com/v1/usage \
@@ -44,10 +44,26 @@ curl https://gateway.example.com/v1/usage \
     "timezone": "UTC"
   },
   "credits": {
-    "used": 6.58,
-    "balance": 18.42,
-    "monthly_allocation": 25,
-    "percent_used": 26.32
+    "used": 163.22,
+    "balance": 86.78,
+    "monthly_allocation": 150,
+    "percent_used": 108.81333333333333
+  },
+  "observed_at": "2025-03-27T12:00:00.000Z",
+  "budget": {
+    "version": 1,
+    "status": "available",
+    "reason": null,
+    "opening_balance": 150,
+    "top_ups": 100,
+    "adjustment_removals": 0,
+    "reset_additions": 0,
+    "reset_removals": 0,
+    "net_funding": 100,
+    "effective_budget": 250,
+    "metered_spend": 163.22,
+    "remaining": 86.78,
+    "percent_used": 65.288
   },
   "requests": 42,
   "tokens": {
@@ -63,6 +79,38 @@ curl https://gateway.example.com/v1/usage \
 ```
 
 The period is the current UTC calendar month. `period.end` is exclusive. `credits.used` is the metered USD value charged during that period, while `credits.balance` is the current balance. `percent_used` is `used / monthly_allocation × 100`, is not capped at 100, and is `null` when the monthly allocation is zero. The token `total` includes input, output, cache-read, and cache-write tokens.
+
+### Authoritative period budget
+
+The additive `budget` object has `version: 1`, `status: "available" | "unavailable"`, and a nullable `reason`. Use `budget.percent_used` for a top-up-inclusive meter; the legacy `credits` fields above are unchanged and their percentage still uses the configured recurring allocation.
+
+| Budget field | Meaning (USD, except percentage) |
+| --- | --- |
+| `opening_balance` | Sum of all ledger additions minus consumption before the UTC month starts: carry-in funds, not a fresh recurring grant. |
+| `top_ups` | Current-month administrator additions, including initial administrator funding created within this month. |
+| `adjustment_removals` | Current-month administrator removals, expressed positively. |
+| `reset_additions` | Sum of positive current-month monthly-reset deltas. |
+| `reset_removals` | Sum of negative current-month monthly-reset deltas, expressed positively. |
+| `net_funding` | `top_ups - adjustment_removals + reset_additions - reset_removals`; can be negative. |
+| `effective_budget` | `opening_balance + net_funding`. |
+| `metered_spend` | Current-month charged inference usage (`usage`, `chat`, `api`, `embedding`), excluding funding events. |
+| `remaining` | Current account balance; when available, exactly reconciles with `effective_budget - metered_spend` in database arithmetic. |
+| `percent_used` | `metered_spend / effective_budget × 100`; uncapped, and `null` for a zero denominator or unavailable budget. Exhaustion of a positive budget is 100%. |
+
+For example, $150 opening funds plus a $100 top-up gives a $250 budget. Spending $163.22 leaves $86.78 and uses **65.288%**, regardless of the current recurring allocation setting. Editing that setting mid-month changes the legacy allocation fields but grants no new funds. A reset **replaces** balance with the allocation rather than adding it: it can add or remove funds. All reset deltas, including repeated manual resets, are summed.
+
+The top-level `observed_at` is the database `statement_timestamp()` labeling the single MVCC snapshot used to read both account and ledger. It is not a historical replay cutoff or a promise that later calls reproduce that state. A visible committed event timestamp later than this observation makes the budget unavailable; such events are not silently omitted.
+
+Availability requires supported, valid events throughout the owner's complete ledger and exact numeric reconciliation of both all-time ledger balance and period funding less spend with the current account balance. There is no rounding tolerance. Missing ledger history or existing writer rounding drift fails closed; this endpoint neither repairs historical data nor changes settlement writers.
+
+When unavailable, **all seven funding fields** (`opening_balance` through `effective_budget`) and `percent_used` are `null`. `metered_spend` and `remaining` still report independently known finite values, otherwise `null`. `reason` is one of:
+
+- `unsupported_ledger_event`: an unsupported type or malformed credit amounts/directions anywhere in the ledger;
+- `future_ledger_event`: a visible event timestamp is later than `observed_at`;
+- `ledger_balance_mismatch`: exact reconciliation fails, opening balance is negative, or current balance is nonfinite;
+- `invalid_amount`: an otherwise accepted amount cannot be represented as a finite response number.
+
+Clients should show an unknown/unavailable budget, not zero or a fabricated percentage, when status is unavailable. An older API without `budget`, or an unsupported budget version, is also unknown. Do not reconstruct the denominator as spend plus balance or substitute the recurring allocation. See the strict `PeriodBudget` schema in the [OpenAPI specification](/api/openapi.json).
 
 ## Full report link
 
@@ -93,7 +141,7 @@ Both dates are required `YYYY-MM-DD` UTC dates, are inclusive, and may span at m
 
 This is a deliberately focused compatibility subset: LiteLLM-specific teams, model groups, endpoints, compression savings, success/failure counts, filters, and pagination are not exposed. The endpoint never accepts a target user ID and always reports only the owner of the presented inference key.
 
-Both usage endpoints require `credits.read`, return `Cache-Control: no-store`, and count only inference ledger events. Monthly resets and administrator adjustments are excluded. Zero-priced model calls are still recorded with their request and token counts even though spend is zero.
+Both usage endpoints require `credits.read` and return `Cache-Control: no-store`. Spend, request counts, and token metrics count only inference ledger events; monthly resets and administrator adjustments are excluded from those metrics but included in the native summary's budget funding. Zero-priced model calls are still recorded with their request and token counts even though spend is zero.
 
 ## Request admission and settlement
 

@@ -423,12 +423,71 @@
           "monthly_allocation": { "type": "number" }
         }
       },
+      "PeriodBudget": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Version 1 authoritative owner-wide current-UTC-month budget. Available only after exact complete-ledger reconciliation in one database snapshot, without tolerance for missing history or rounding drift. Amounts are USD. Older APIs may omit this object; clients must treat absence or unsupported versions as unknown, not zero.",
+        "required": ["version", "status", "reason", "opening_balance", "top_ups", "adjustment_removals", "reset_additions", "reset_removals", "net_funding", "effective_budget", "metered_spend", "remaining", "percent_used"],
+        "properties": {
+          "version": { "type": "integer", "const": 1 },
+          "status": { "type": "string", "enum": ["available", "unavailable"] },
+          "reason": { "type": ["string", "null"], "enum": [null, "unsupported_ledger_event", "future_ledger_event", "ledger_balance_mismatch", "invalid_amount"], "description": "Null when available. Otherwise unsupported/malformed ledger events, committed event timestamps later than observed_at, exact balance mismatch (including negative opening), or nonfinite response amounts." },
+          "opening_balance": { "type": ["number", "null"], "minimum": 0, "description": "All pre-month ledger additions less consumption: carry-in, not a new recurring grant." },
+          "top_ups": { "type": ["number", "null"], "minimum": 0, "description": "Current-month administrator additions, including initial funding within this month." },
+          "adjustment_removals": { "type": ["number", "null"], "minimum": 0, "description": "Current-month administrator removals, expressed positively." },
+          "reset_additions": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month positive replacement-reset deltas, including repeated resets." },
+          "reset_removals": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month negative replacement-reset deltas, expressed positively." },
+          "net_funding": { "type": ["number", "null"], "description": "top_ups - adjustment_removals + reset_additions - reset_removals; may be negative. Allocation edits alone grant nothing." },
+          "effective_budget": { "type": ["number", "null"], "minimum": 0, "description": "opening_balance + net_funding; authoritative percentage denominator." },
+          "metered_spend": { "type": ["number", "null"], "description": "Current-month charged usage/chat/api/embedding consumption. Still reported when unavailable if finite, otherwise null." },
+          "remaining": { "type": ["number", "null"], "description": "Observed current account balance, equal in exact database arithmetic to effective_budget - metered_spend when available. Still reported when unavailable if finite, otherwise null." },
+          "percent_used": { "type": ["number", "null"], "description": "metered_spend / effective_budget * 100, uncapped. Null for zero denominator or unavailable budget. Positive-budget exhaustion is 100%." }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "status": { "const": "available" } }, "required": ["status"] },
+            "then": {
+              "properties": {
+                "reason": { "type": "null" },
+                "opening_balance": { "type": "number" },
+                "top_ups": { "type": "number" },
+                "adjustment_removals": { "type": "number" },
+                "reset_additions": { "type": "number" },
+                "reset_removals": { "type": "number" },
+                "net_funding": { "type": "number" },
+                "effective_budget": { "type": "number" },
+                "metered_spend": { "type": "number" },
+                "remaining": { "type": "number" }
+              },
+              "if": { "properties": { "effective_budget": { "const": 0 } } },
+              "then": { "properties": { "percent_used": { "type": "null" } } },
+              "else": { "properties": { "percent_used": { "type": "number" } } }
+            },
+            "else": {
+              "properties": {
+                "reason": { "type": "string" },
+                "opening_balance": { "type": "null" },
+                "top_ups": { "type": "null" },
+                "adjustment_removals": { "type": "null" },
+                "reset_additions": { "type": "null" },
+                "reset_removals": { "type": "null" },
+                "net_funding": { "type": "null" },
+                "effective_budget": { "type": "null" },
+                "percent_used": { "type": "null" }
+              }
+            }
+          }
+        ],
+        "examples": [{ "version": 1, "status": "available", "reason": null, "opening_balance": 150, "top_ups": 100, "adjustment_removals": 0, "reset_additions": 0, "reset_removals": 0, "net_funding": 100, "effective_budget": 250, "metered_spend": 163.22, "remaining": 86.78, "percent_used": 65.288 }]
+      },
       "UsageSummary": {
         "type": "object",
-        "required": ["object", "currency", "period", "credits", "requests", "tokens"],
+        "required": ["object", "currency", "period", "credits", "requests", "tokens", "observed_at", "budget"],
         "properties": {
           "object": { "const": "usage_summary" },
           "currency": { "const": "USD" },
+          "observed_at": { "type": "string", "format": "date-time", "description": "Database statement_timestamp labeling the single MVCC observation of account and ledger, not a historical replay cutoff. Visible committed events timestamped later than this make budget unavailable rather than being silently omitted." },
+          "budget": { "$ref": "#/components/schemas/PeriodBudget" },
           "period": {
             "type": "object",
             "required": ["start", "end", "timezone"],
@@ -445,7 +504,7 @@
               "used": { "type": "number", "description": "Metered USD charged in this period" },
               "balance": { "type": "number", "description": "Current balance, not a historical period-end balance" },
               "monthly_allocation": { "type": "number" },
-              "percent_used": { "type": ["number", "null"], "description": "Used divided by allocation times 100; null when allocation is zero" }
+              "percent_used": { "type": ["number", "null"], "description": "Legacy used divided by recurring allocation times 100, uncapped; null when allocation is zero. Unchanged and not top-up-inclusive; use available budget.percent_used for the authoritative period budget." }
             }
           },
           "requests": { "type": "integer" },

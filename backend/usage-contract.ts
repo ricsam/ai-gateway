@@ -172,6 +172,40 @@ function breakdownObject(values: Map<string, BreakdownEntry>) {
   }]));
 }
 
+export type BudgetUnavailableReason = "unsupported_ledger_event" | "future_ledger_event" | "ledger_balance_mismatch" | "invalid_amount";
+
+/** Funding amounts are calculated/reconciled with exact NUMERIC arithmetic in SQL. */
+export interface PeriodBudgetAmounts {
+  opening_balance: number;
+  top_ups: number;
+  adjustment_removals: number;
+  reset_additions: number;
+  reset_removals: number;
+  net_funding: number;
+  effective_budget: number;
+}
+
+export function buildPeriodBudget(amounts: PeriodBudgetAmounts, meteredSpend: number, remaining: number, reason: BudgetUnavailableReason | null) {
+  const unavailableReason = reason ?? (Object.values(amounts).every(Number.isFinite)
+    && Number.isFinite(meteredSpend) && Number.isFinite(remaining) ? null : "invalid_amount");
+  const available = unavailableReason === null;
+  return {
+    version: 1,
+    status: available ? "available" as const : "unavailable" as const,
+    reason: unavailableReason,
+    opening_balance: available ? amounts.opening_balance : null,
+    top_ups: available ? amounts.top_ups : null,
+    adjustment_removals: available ? amounts.adjustment_removals : null,
+    reset_additions: available ? amounts.reset_additions : null,
+    reset_removals: available ? amounts.reset_removals : null,
+    net_funding: available ? amounts.net_funding : null,
+    effective_budget: available ? amounts.effective_budget : null,
+    metered_spend: Number.isFinite(meteredSpend) ? meteredSpend : null,
+    remaining: Number.isFinite(remaining) ? remaining : null,
+    percent_used: available && amounts.effective_budget > 0 ? meteredSpend / amounts.effective_budget * 100 : null,
+  };
+}
+
 export function buildNativeMonthlyUsage(params: {
   range: UtcDateRange;
   balance: number;
