@@ -1,0 +1,36 @@
+name: Profile refresh regression
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "shared/**"
+      - "scripts/*route*.ts"
+      - "tests/browser/**"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
+      - "bunfig.toml"
+      - "patches/**"
+      - ".github/workflows/profile-refresh.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-refresh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:browser

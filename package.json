@@ -7,6 +7,7 @@
     "start": "bun run routes:generate && NODE_ENV=production bun scripts/serve.ts --production",
     "serve": "bun scripts/serve.ts",
     "test": "bun test",
+    "test:browser": "bun run routes:generate && tsgo --noEmit --project tests/browser/tsconfig.json && bun tests/browser/profile-refresh.ts",
     "routes:generate": "bun scripts/generate-routes.ts",
     "typecheck": "bun run routes:generate && tsgo --noEmit --project frontend/tsconfig.json --composite false && tsgo --noEmit --project backend/tsconfig.json --composite false",
     "db:generate": "drizzle-kit generate",
@@ -63,7 +64,8 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260305.1",
-    "drizzle-kit": "0.31.5"
+    "drizzle-kit": "0.31.5",
+    "playwright": "1.64.1"
   },
   "patchedDependencies": {
     "recharts@2.15.4": "patches/recharts@2.15.4.patch"

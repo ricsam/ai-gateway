@@ -119,6 +119,8 @@ bun install --frozen-lockfile
 bun run routes:generate
 bun run typecheck
 bun test
+bunx playwright install chromium
+bun run test:browser
 bun run db:migrate
 TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run users:verify-access
@@ -127,5 +129,7 @@ docker compose config
 helm lint charts/ai-gateway
 helm template ai-gateway charts/ai-gateway --set secrets.values.authSecret=test --set secrets.values.settingsEncryptionKey=v1:test --set secrets.values.databaseUrl=postgres://example
 ```
+
+`bun run test:browser` builds the real frontend and runs the profile refresh regression in headless Chromium with mocked HTTP responses. It verifies that Refresh updates current balance, monthly allocation, analytics, and usage without reloading or losing an unsaved API-key name. No database, AWS credentials, or running application server is required. On Linux, use `bunx playwright install --with-deps chromium` if browser system dependencies are missing.
 
 This is a greenfield pre-release baseline. The product intentionally excludes RAG/documents/embeddings and persistent full-chat features. Current group analytics use current-membership attribution, so a user in multiple groups contributes to every applicable group summary.
