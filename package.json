@@ -15,6 +15,7 @@
     "db:reset": "bun scripts/reset-database.ts",
     "timescale:verify": "bun scripts/verify-timescale.ts",
     "users:verify-access": "bun scripts/verify-user-access.ts",
+    "usage:verify-budget": "bun scripts/verify-usage-budget.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts"
   },
   "dependencies": {

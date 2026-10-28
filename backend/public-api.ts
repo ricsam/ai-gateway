@@ -92,13 +92,11 @@ export async function handleCredits(request: Request): Promise<Response> {
 }
 
 export async function handleUsage(request: Request): Promise<Response> {
-  const result = await authenticatedCreditUser(request);
-  if (!result.ok) return result.response;
-  return Response.json(await getNativeMonthlyUsage({
-    userId: result.principal.userId,
-    balance: result.user.balance,
-    monthlyAllocation: result.user.monthlyAllocation,
-  }), { headers: { "cache-control": "no-store" } });
+  const auth = requireProxyScope(await authenticateApiKeyPrincipal(request), "credits.read");
+  if (!auth.ok) return openAIError(auth);
+  const usage = await getNativeMonthlyUsage({ userId: auth.principal.userId });
+  if (!usage) return openAIError({ ok: false, status: 401, message: "User not found", code: "invalid_api_key" });
+  return Response.json(usage, { headers: { "cache-control": "no-store" } });
 }
 
 export async function handleLiteLLMDailyActivity(request: Request): Promise<Response> {
