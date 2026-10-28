@@ -176,3 +176,5 @@ Request IDs may contain letters, numbers, `.`, `_`, `:`, and `-`, up to 128 char
 Administrators can set `defaultMonthlyCredits` per user or apply the value to the union of selected groups. On the first day of each UTC month, the built-in scheduler resets users with a nonzero allocation to that amount. An administrator can also trigger a reset manually.
 
 Users can review balance history, consumption, model mix, token details, and ledger events in **Profile, API & usage**.
+
+In **Admin → Ledger**, consumption and request totals (including the user and model breakdowns) count only inference events. Administrator balance changes and monthly resets remain in the credit ledger and affect balances, but are not consumption or inference requests. The ledger’s **Deducted** column includes all balance reductions, including adjustments.
