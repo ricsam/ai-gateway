@@ -6,6 +6,9 @@ export default async function resetCredits() {
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:credit-reset'))`);
     // Query all users with their individual monthly quotas (skip users with quota = 0)
+    // Lock before reading the balance used for the ledger delta. Otherwise a
+    // concurrent settlement/adjustment can commit between this read and reset.
+    // The replacement policy (including skipping zero quotas) is unchanged.
     const users = await tx
       .select({
         id: userTable.id,
@@ -13,7 +16,9 @@ export default async function resetCredits() {
         creditBalance: userTable.creditBalance,
       })
       .from(userTable)
-      .where(gt(userTable.defaultMonthlyCredits, 0));
+      .where(gt(userTable.defaultMonthlyCredits, 0))
+      .orderBy(userTable.id)
+      .for("update");
 
     for (const user of users) {
       // Calculate the actual net change (can be negative if user is over quota)

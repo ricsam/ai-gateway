@@ -54,6 +54,20 @@ Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logi
 - Native `invoke-stream` passes provider binary event bytes through as `application/octet-stream`.
 - `/v1/usage` and `/user/daily/activity` return `Cache-Control: no-store` and are always scoped to the owner of the presented inference key.
 
+## Account-wide period budget
+
+`GET /v1/usage` adds top-level `observed_at` and a versioned `budget` object alongside the unchanged legacy `credits` fields. It requires `credits.read` and covers the presented key owner's entire account, not just that key.
+
+For `budget.version: 1`, render a top-up-inclusive percentage only when `status` is `available` (`reason: null`). The seven funding fields are `opening_balance`, `top_ups`, `adjustment_removals`, `reset_additions`, `reset_removals`, `net_funding`, and `effective_budget`. Opening funds are all pre-month net ledger funds, not a recurring allocation grant. Initial funding within the month is a top-up. Reset deltas retain replacement semantics and repeated resets are summed. Allocation-setting edits alone add no funding.
+
+`net_funding = top_ups - adjustment_removals + reset_additions - reset_removals`; `effective_budget = opening_balance + net_funding`. `remaining` reconciles exactly with `effective_budget - metered_spend`. `percent_used` uses that effective budget as denominator, is uncapped, and is null when the denominator is zero. For example, 150 opening + 100 top-up − 163.22 spend = 86.78 remaining, with 65.288% used.
+
+A single database statement observes both account and complete ledger. `observed_at` labels its MVCC snapshot using `statement_timestamp()`; it is not a historical replay cutoff. A committed event timestamp later than it is not silently excluded: the budget becomes unavailable. Unsupported/malformed events, missing history or rounding drift that prevents exact reconciliation also fail closed, without a tolerance or automatic repair.
+
+When `status` is `unavailable`, all seven funding fields and `percent_used` are null; `metered_spend` and `remaining` still report finite values when known, otherwise null. `reason` is `unsupported_ledger_event`, `future_ledger_event`, `ledger_balance_mismatch`, or `invalid_amount`. Show unknown budget rather than inventing a denominator from spend plus balance or the recurring allocation. Missing `budget` on an older API, or an unsupported version, likewise means unknown—not zero. Legacy `credits.percent_used` remains allocation-based and is not the authoritative budget percentage.
+
+See [Credits and usage](/docs/credits#authoritative-period-budget) for field definitions and the strict `PeriodBudget` schema referenced by `UsageSummary` in the [OpenAPI specification](/api/openapi.json).
+
 ## Per-request Chat Completions accounting
 
 Both API-key `/v1/chat/completions` and session-authenticated playground completions expose optional, non-standard accounting fields inside `usage`. No pricing lookup or client-side estimate is needed.
