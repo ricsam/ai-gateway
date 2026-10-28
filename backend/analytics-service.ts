@@ -2,8 +2,9 @@ import { sql } from "drizzle-orm";
 import db from "./db";
 import { groupMembersTable, userTable } from "./schema";
 import { eq, sum } from "drizzle-orm";
+import { getTimeRangeBounds, type TimeRange } from "../shared/analytics-time-ranges";
 
-export type TimeRange = "hour" | "day" | "week" | "month" | "quarter" | "year";
+export { getTimeRangeBounds, type TimeRange } from "../shared/analytics-time-ranges";
 export type BucketSize = "15s" | "1m" | "5m" | "30m" | "1h" | "1d" | "1w" | "1mo";
 export type AnalyticsScope = { userId?: string; groupId?: string };
 type SourceTable = "credit_events" | "credit_events_5m" | "credit_events_1h" | "credit_events_1d";
@@ -28,20 +29,6 @@ export function validateBucketSize(timeRange: TimeRange, bucketSize?: string | n
   if (!bucketSize) return config.default;
   if (config.allowed.includes(bucketSize as BucketSize)) return bucketSize as BucketSize;
   throw new Error(`Invalid bucket size "${bucketSize}" for time range "${timeRange}". Allowed: ${config.allowed.join(", ")}`);
-}
-
-export function getTimeRangeBounds(timeRange: TimeRange, now = new Date()): { start: Date; end: Date } {
-  const end = new Date(now);
-  const start = new Date(now);
-  switch (timeRange) {
-    case "hour": start.setHours(start.getHours() - 1); break;
-    case "day": start.setDate(start.getDate() - 1); break;
-    case "week": start.setDate(start.getDate() - 7); break;
-    case "month": start.setMonth(start.getMonth() - 1); break;
-    case "quarter": start.setMonth(start.getMonth() - 3); break;
-    case "year": start.setFullYear(start.getFullYear() - 1); break;
-  }
-  return { start, end };
 }
 
 export function getBucketInterval(bucketSize: BucketSize): string {
