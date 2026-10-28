@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-9139818fe3e47eeb82548a0fadc955837e1c004c
+ghcr.io/ricsam/ai-gateway:sha-26d822e9879331a7ac51e593466a23a3323c9ac1
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -32,6 +32,14 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 ```
 
 See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, image pinning, bundled TimescaleDB, storage, and publication details.
+
+## Upgrading to 0.1.11
+
+This release adds no database migration; upgrading from 0.1.10 needs no special steps. Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- `/v1/usage` adds a versioned, top-up-inclusive `budget` object and `observed_at`; the existing `credits` fields are unchanged.
+- Analytics `timeRange` values, in the dashboards and the management API, are rolling windows ending now. The values are unchanged, but `month`, `quarter`, and `year` now mean exactly 30, 90, and 365 days instead of calendar months or years.
+- Admin ledger usage summaries count only inference events. Administrator balance changes and monthly resets still change balances and stay in the ledger, but no longer count as consumption or requests.
 
 ## Upgrading to 0.1.10
 
