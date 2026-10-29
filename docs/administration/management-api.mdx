@@ -68,6 +68,8 @@ Analytics use rolling windows ending at the time of the request, not the current
 
 Each day in a rolling window is exactly 24 elapsed hours, including across daylight-saving transitions and leap years. `month`, `quarter`, and `year` now use fixed day counts rather than subtracting calendar months or years. Existing saved selections still work, but their start dates can differ from earlier releases. The separate **Interval** control only changes chart aggregation, not the selected window.
 
+Analytics include usage up to the time of the request, including the current day and hour. Interval buckets are aligned to UTC, for example 1-day buckets start at 00:00 UTC, so a window's first and last buckets are usually partial: with **Last 7 days** and a 1-day interval, the first day counts only usage after the window starts and the last day only usage until the request. Earlier releases omitted usage that a background refresh had not yet processed, such as the current day's, and usually showed the window's first bucket as empty.
+
 ## Pagination and errors
 
 Collection endpoints generally accept `limit` and `offset`. Limits are clamped to 1–100. Management errors have a stable envelope:

@@ -36,7 +36,7 @@ Test restore procedures regularly.
     Apply schema changes from the application version you are deploying.
   </Step>
   <Step title="Verify Timescale objects">
-    Check `timescaledb_information.hypertables`, all three credit-event continuous aggregates, aggregate refresh jobs, and the compression policy.
+    Check `timescaledb_information.hypertables`, all three credit-event continuous aggregates (with `materialized_only` false, so analytics include recent usage), aggregate refresh jobs, and the compression policy.
   </Step>
   <Step title="Test the application">
     Verify readiness, administrator login, model discovery, a low-cost completion, credit settlement, and analytics.
