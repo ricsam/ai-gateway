@@ -40,6 +40,8 @@ async function verifyFresh() {
   try {
     await migrate(drizzle(pool), { migrationsFolder: "drizzle" });
     await assertFoundation(pool);
+    const materializedOnly = await pool.query("SELECT view_name FROM timescaledb_information.continuous_aggregates WHERE view_name LIKE 'credit_events_%' AND materialized_only");
+    if (materializedOnly.rowCount) throw new Error(`Continuous aggregates must use real-time aggregation: ${materializedOnly.rows.map((row) => row.view_name).join(", ")}`);
     await pool.query(`
       INSERT INTO "user" (id, username, name, email, email_verified, created_at, updated_at, credit_balance, default_monthly_credits)
       VALUES ('verify-user', 'verify', 'Verify', 'verify@example.test', true, now(), now(), 9.5, 10);
@@ -63,6 +65,33 @@ async function verifyFresh() {
       analytics.getGroupSummary("hour"),
     ]);
     if (!results[0].some((point: { consumed: number }) => point.consumed === 0.5)) throw new Error("Gap-filled credit query missed fixture usage");
+
+    // Day buckets come from credit_events_1d, whose policy materializes whole days
+    // once a day. Materialize the days before today as a running install would
+    // have: today's usage stays unmaterialized, and the window's first day holds
+    // usage from both before and after the start of "Last 7 days".
+    await pool.query(`
+      INSERT INTO credit_events (id, time, request_id, user_id, model, source, type, credits_consumed) VALUES
+        ('verify-before-week', now() - interval '7 days' - interval '1 minute', 'verify-before-week', 'verify-user', 'verify-model', 'api', 'usage', .25),
+        ('verify-week-start', now() - interval '7 days' + interval '1 minute', 'verify-week-start', 'verify-user', 'verify-model', 'api', 'usage', .125);
+      UPDATE "user" SET credit_balance = credit_balance - .375 WHERE id = 'verify-user';
+    `);
+    await pool.query("CALL refresh_continuous_aggregate('credit_events_1d', NULL, time_bucket(INTERVAL '1 day', now()))");
+    const scope = { userId: "verify-user" };
+    const [week, weekModels, weekUsers, weekBurndown, day] = await Promise.all([
+      analytics.getCreditsConsumed("week", "1d", scope),
+      analytics.getModelSummary("week", "1d", scope),
+      analytics.getUserSummary("week"),
+      analytics.getBalanceBurndown("week", "1d", scope),
+      analytics.getCreditsConsumed("day", "1h", scope),
+    ]);
+    const consumed = (points: { consumed: number }[]) => points.reduce((total, point) => total + point.consumed, 0);
+    // Today's 0.5 and the in-window 0.125 count; the 0.25 before the window does not.
+    if (consumed(week) !== 0.625) throw new Error(`Week credits consumed ${consumed(week)}, expected 0.625`);
+    if (weekModels.models[0]?.totalCredits !== 0.625) throw new Error("Week model summary missed unmaterialized or partial-day usage");
+    if (weekUsers.users[0]?.creditsUsed !== 0.625) throw new Error("Week user summary missed unmaterialized or partial-day usage");
+    if (weekBurndown.data.at(-1)?.balance !== weekBurndown.currentBalance) throw new Error("Week burndown does not end at the current balance");
+    if (consumed(day) !== 0.5) throw new Error(`Day credits consumed ${consumed(day)}, expected 0.5 from the unmaterialized hour`);
     const analyticsDb = await import("../backend/db.ts");
     await analyticsDb.pool.end();
   } finally {
