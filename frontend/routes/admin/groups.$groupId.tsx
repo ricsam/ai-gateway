@@ -6,6 +6,7 @@ import { AnalyticsControls } from "../../ui/analytics-controls";
 import { useAnalyticsPreferences } from "../../ui/use-analytics-preferences";
 import { GroupUserBurndownChart } from "../../ui/analytics-charts";
 import { UserSummaryTable } from "../../ui/analytics-summary-tables";
+import { ThroughputCard } from "../../ui/throughput-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,10 @@ function GroupPage() {
   const summary = api.adminGetAnalyticsUserSummary.useQuery({
     queryKey: ["admin-group-user-summary", groupId, timeRange],
     queryData: { query: { groupId, timeRange } },
+  });
+  const throughput = api.adminGetAnalyticsThroughput.useQuery({
+    queryKey: ["admin-group-throughput", groupId, timeRange],
+    queryData: { query: { timeRange, scope: "group", scopeId: groupId } },
   });
 
   const load = async () => {
@@ -111,6 +116,7 @@ function GroupPage() {
 
       <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-5"><div><h2 className="text-xl font-semibold">Group analytics</h2><p className="text-sm text-muted-foreground">Current-membership user balances and usage attribution.</p></div><AnalyticsControls timeRange={timeRange} onTimeRangeChange={setTimeRange} bucketSize={bucketSize} onBucketSizeChange={setBucketSize} onRefresh={() => void queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith("admin-group") })} /></div>
       <div className="grid gap-5 xl:grid-cols-2"><Card><CardHeader><CardTitle className="text-base">Per-user balance</CardTitle></CardHeader><CardContent><GroupUserBurndownChart users={burndowns.data?.payload.users ?? []} timeRange={timeRange} isLoading={burndowns.isLoading} /></CardContent></Card><Card><CardHeader><CardTitle className="text-base">Per-user usage summary</CardTitle></CardHeader><CardContent><UserSummaryTable users={summary.data?.payload.users ?? []} isLoading={summary.isLoading} /></CardContent></Card></div>
+      <ThroughputCard data={throughput.data?.payload} isLoading={throughput.isLoading} isError={throughput.isError} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Add member</CardTitle></CardHeader>
