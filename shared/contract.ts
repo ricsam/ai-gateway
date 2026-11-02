@@ -51,6 +51,17 @@ const userAnalyticsSummarySchema = z.object({
   userId: z.string(), username: z.string(), creditsUsed: z.number(), activeDays: z.number(),
   avgCreditsPerDay: z.number(), lastActivity: z.string().nullable(), percentOfTotal: z.number(),
 });
+// See backend/throughput-stats.ts for the definitions.
+const throughputStatsSchema = z.object({
+  requests: z.number(), tokens: z.number(), activeHours: z.number(),
+  steadyStateTpm: z.number(), steadyStateRpm: z.number(),
+  peakTpm: z.number(), peakTpmAt: z.string().nullable(), peakRpm: z.number(), peakRpmAt: z.string().nullable(),
+  avgInputTokensPerRequest: z.number(), avgOutputTokensPerRequest: z.number(), avgCacheReadTokensPerRequest: z.number(),
+});
+const throughputSchema = z.object({
+  start: z.string(), end: z.string(), summary: throughputStatsSchema,
+  models: z.array(throughputStatsSchema.extend({ model: z.string().nullable() })),
+});
 
 const usageLogSchema = z.object({
   id: z.string(),
@@ -125,6 +136,11 @@ export const contract = defineContract({
   getAnalyticsTokensConsumed: {
     type: "standard", method: "GET", path: "/analytics/tokens-consumed", query: analyticsQuerySchema,
     responses: { [Status.OK]: z.object({ data: z.array(tokensConsumedSchema.extend({ time: z.string() })), summary: tokensConsumedSchema }) },
+    errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
+  },
+  getAnalyticsThroughput: {
+    type: "standard", method: "GET", path: "/analytics/throughput", query: z.object({ timeRange: timeRangeSchema }),
+    responses: { [Status.OK]: throughputSchema },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   listApiKeys: {
@@ -233,6 +249,11 @@ export const contract = defineContract({
   adminGetAnalyticsTokensConsumed: {
     type: "standard", method: "GET", path: "/admin/analytics/tokens-consumed", query: adminAnalyticsQuerySchema,
     responses: { [Status.OK]: z.object({ data: z.array(tokensConsumedSchema.extend({ time: z.string() })), summary: tokensConsumedSchema }) },
+    errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
+  },
+  adminGetAnalyticsThroughput: {
+    type: "standard", method: "GET", path: "/admin/analytics/throughput", query: adminAnalyticsQuerySchema.omit({ bucketSize: true }),
+    responses: { [Status.OK]: throughputSchema },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   adminGetAnalyticsUserSummary: {

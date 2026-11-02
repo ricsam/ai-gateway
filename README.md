@@ -28,6 +28,8 @@ curl https://gateway.example.com/management/v1/users \
 
 Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, inference settings, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
 
+The analytics dashboards and `GET /management/v1/analytics/throughput` report the values a Bedrock quota increase request asks for: steady-state and peak tokens and requests per minute, and average input and output tokens per request, overall and per upstream model. Tokens follow Bedrock's quota accounting (input, cache writes and output; no cache reads or output burndown). See [Throughput and Bedrock quotas](docs/administration/models-and-aws.mdx#throughput-and-bedrock-quotas).
+
 ## Inference API
 
 | Method | Endpoint | Inference-key scope |
@@ -123,6 +125,7 @@ bun run db:migrate
 TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run users:verify-access
 TIMESCALE_ADMIN_URL=postgres://... bun run ledger:verify
+TIMESCALE_ADMIN_URL=postgres://... bun run throughput:verify
 
 docker compose config
 helm lint charts/ai-gateway

@@ -18,6 +18,7 @@ import {
   getModelSummary, getTokensConsumed, getUsageByModel, getUserSummary,
   validateBucketSize, validateTimeRange, type AnalyticsScope,
 } from "./analytics-service";
+import { getThroughput } from "./throughput-service";
 import { bulkUpdateUsersByGroups, createLocalUser, deleteUser, setUserGroups, setUserPassword, updateUser } from "./user-service";
 import { METERED_USAGE_EVENT_TYPES } from "./usage-contract";
 
@@ -71,6 +72,25 @@ const OPENAPI = {
       Error: { type: "object", required: ["error"], properties: { error: { type: "object", required: ["code", "message", "requestId"], properties: { code: { type: "string" }, message: { type: "string" }, requestId: { type: "string" } } } } },
       TimePoint: { type: "object", required: ["time"], properties: { time: { type: "string", format: "date-time" } } },
       TokenSummary: { type: "object", required: ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWrite5mTokens", "cacheWrite1hTokens", "total"], properties: { inputTokens: { type: "integer" }, outputTokens: { type: "integer" }, cacheReadTokens: { type: "integer" }, cacheWrite5mTokens: { type: "integer" }, cacheWrite1hTokens: { type: "integer" }, total: { type: "integer" } } },
+      ThroughputStats: {
+        type: "object",
+        description: "Metered inference in the window. Tokens are input + cache writes + output, as Bedrock counts them toward tokens-per-minute quotas: cache reads are excluded and model-specific output burndown multipliers are not applied.",
+        required: ["requests", "tokens", "activeHours", "steadyStateTpm", "steadyStateRpm", "peakTpm", "peakTpmAt", "peakRpm", "peakRpmAt", "avgInputTokensPerRequest", "avgOutputTokensPerRequest", "avgCacheReadTokensPerRequest"],
+        properties: {
+          requests: { type: "integer", description: "Metered inference requests" },
+          tokens: { type: "integer", description: "Input, cache-write and output tokens" },
+          activeHours: { type: "integer", description: "One-hour periods of the window, counted from its start, with at least one request" },
+          steadyStateTpm: { type: "number", description: "tokens / (60 × activeHours): average tokens per minute across the hours with traffic" },
+          steadyStateRpm: { type: "number", description: "requests / (60 × activeHours): average requests per minute across the hours with traffic" },
+          peakTpm: { type: "integer", description: "Tokens in the busiest UTC calendar minute" },
+          peakTpmAt: { type: ["string", "null"], format: "date-time", description: "Start of that minute" },
+          peakRpm: { type: "integer", description: "Requests in the busiest UTC calendar minute" },
+          peakRpmAt: { type: ["string", "null"], format: "date-time", description: "Start of that minute" },
+          avgInputTokensPerRequest: { type: "number", description: "(Input + cache-write tokens) / requests" },
+          avgOutputTokensPerRequest: { type: "number", description: "Output tokens / requests" },
+          avgCacheReadTokensPerRequest: { type: "number", description: "Cache-read tokens / requests; not part of the TPM values or average input" },
+        },
+      },
     },
     parameters: {
       TimeRange: { name: "timeRange", in: "query", description: "Rolling window ending now: hour = 60 minutes, day = 24 hours, week = 7 days, month = 30 days, quarter = 90 days, year = 365 days. Days are exactly 24 hours, not calendar periods.", schema: { type: "string", enum: ["hour", "day", "week", "month", "quarter", "year"], default: "month" } },
@@ -111,6 +131,17 @@ const OPENAPI = {
     "/analytics/by-model": { get: { summary: "Top-N model time series with Other", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }, { name: "topN", in: "query", schema: { type: "integer", minimum: 1, maximum: 20, default: 5 } }], responses: { "200": { description: "Model time series" } } } },
     "/analytics/model-summary": { get: { summary: "Model token and credit summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Per-model summary" } } } },
     "/analytics/tokens": { get: { summary: "Stacked token time series and totals", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Token points and summary" } } } },
+    "/analytics/throughput": { get: {
+      summary: "Steady-state and peak tokens and requests per minute, and average tokens per request, overall and per model",
+      parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/GroupId" }],
+      responses: { "200": { description: "Throughput of all models together (`summary`; its peaks are the busiest minutes across models) and per upstream model, ordered by tokens", content: { "application/json": { schema: {
+        type: "object", required: ["data"], properties: { data: { type: "object", required: ["start", "end", "summary", "models"], properties: {
+          start: { type: "string", format: "date-time" }, end: { type: "string", format: "date-time" },
+          summary: { $ref: "#/components/schemas/ThroughputStats" },
+          models: { type: "array", items: { allOf: [{ $ref: "#/components/schemas/ThroughputStats" }, { type: "object", required: ["model"], properties: { model: { type: ["string", "null"] } } }] } },
+        } } },
+      } } } } },
+    } },
     "/analytics/users": { get: { summary: "Per-user usage summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/GroupId" }], responses: { "200": { description: "User summaries" } } } },
     "/analytics/groups": { get: { summary: "Current-membership group summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }], responses: { "200": { description: "Group summaries" } } } },
     "/analytics/groups/{groupId}/user-burndowns": { get: { summary: "Per-user balance trajectories for a group", parameters: [{ name: "groupId", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Per-user balance series" } } } },
@@ -478,6 +509,7 @@ export async function handleManagementApi(request: Request): Promise<Response> {
       }
       if (path === "/analytics/model-summary") return response(requestId, { data: await getModelSummary(input.timeRange, input.bucketSize, input.scope) });
       if (path === "/analytics/tokens") return response(requestId, { data: await getTokensConsumed(input.timeRange, input.bucketSize, input.scope) });
+      if (path === "/analytics/throughput") return response(requestId, { data: await getThroughput(input.timeRange, input.scope) });
       if (path === "/analytics/users") return response(requestId, { data: await getUserSummary(input.timeRange, input.groupId) });
       if (path === "/analytics/groups") return response(requestId, { data: await getGroupSummary(input.timeRange) });
       const groupBurndown = path.match(/^\/analytics\/groups\/([^/]+)\/user-burndowns$/);

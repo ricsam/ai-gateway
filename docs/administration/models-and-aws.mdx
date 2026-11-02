@@ -77,6 +77,41 @@ The OpenAI-compatible API accepts images as base64 data URLs or `http(s)` URLs. 
 
 A model's region override wins over the default region. The runtime caches Bedrock clients by configuration revision and region. Saving AWS settings invalidates the client cache so new requests use the current credentials.
 
+## Throughput and Bedrock quotas
+
+Amazon Bedrock limits the tokens and requests per minute of each model in each Region. A quota increase request asks for steady-state and peak tokens per minute (TPM) and requests per minute (RPM), and for the average input and output tokens per request. The **Throughput** card shows these values for the gateway's metered requests:
+
+- **Admin → Analytics** for all users, and the user and group pages for one user or the current members of a group.
+- **Profile, API & usage** for the signed-in user's own requests.
+
+The card summarizes all models together and lists each upstream model separately. Quotas apply per model, so use the model's row in a request. Requests to aliases and app tiers count toward their upstream model. The selected **Range** sets the window; the **Interval** control doesn't change these values.
+
+| Value | Definition |
+| --- | --- |
+| Steady state TPM / RPM | Tokens or requests divided by the minutes of the window's active hours. The window is split into one-hour periods counted from its start, and a period is active if it had at least one request. Idle nights and weekends don't lower the value, and **Last 60 minutes** is a single period. |
+| Peak TPM / RPM | Tokens or requests in the busiest calendar minute, with the time it started. For all models together, it's the busiest minute of their combined traffic. |
+| Avg input tokens / request | Uncached input plus cache-write tokens, divided by requests. The card also shows the cache-read tokens per request, which aren't included. |
+| Avg output tokens / request | Output tokens, including reasoning tokens, divided by requests. |
+
+Tokens follow Bedrock's quota accounting: input, cache writes and output count toward TPM quotas, and cache reads don't. Bedrock also multiplies output tokens by a model-specific burndown rate, for example 5× for many Claude models (see [How tokens are counted in Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/quotas-token-burndown.html)). These values don't include it. To estimate steady-state quota usage, multiply the average output by the model's rate: steady-state RPM × (average input + burndown rate × average output).
+
+When you size a request, keep in mind that:
+
+- Only requests completed through this gateway are counted. Other Bedrock clients in the same AWS account and Region share its quotas.
+- Throttled requests aren't recorded, so traffic that already reaches a quota shows that quota as its peak. Ask for headroom above the observed peak.
+- Usage is recorded per upstream model ID, not per Region. A model with a region override uses that Region's quotas.
+
+Automation can read the same values from the management API with the `usage.read` scope. Add `userId` or `groupId` to limit the scope:
+
+```bash
+curl "https://gateway.example.com/management/v1/analytics/throughput?timeRange=month" \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY"
+```
+
+The response's `data.summary` covers all models and `data.models` lists each upstream model, most tokens first. Each entry has `requests`, `tokens`, `activeHours`, `steadyStateTpm`, `steadyStateRpm`, `peakTpm`, `peakTpmAt`, `peakRpm`, `peakRpmAt`, `avgInputTokensPerRequest`, `avgOutputTokensPerRequest` and `avgCacheReadTokensPerRequest`. Rates aren't rounded.
+
+The values are computed from every metered request in the range when they're requested, so they include the current minute. Peaks need one-minute detail, which the hourly and daily aggregates behind the charts don't have, so long ranges take longer on busy installations. With 40,000 requests a day, the all-users card took about 1.5 seconds for **Last 30 days** and 12 seconds for **Last 365 days**; one user's took 0.1 and 1 second.
+
 ## Credential rotation
 
 <Steps>

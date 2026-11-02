@@ -12,6 +12,7 @@ describe("profile data refresh", () => {
       ["analytics-model"],
       ["analytics-model-summary"],
       ["analytics-tokens"],
+      ["analytics-throughput", "month"],
       ["usage", 25],
     ];
     const previous = { creditBalance: 56.08, defaultMonthlyCredits: 150 };

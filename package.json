@@ -17,6 +17,7 @@
     "users:verify-access": "bun scripts/verify-user-access.ts",
     "usage:verify-budget": "bun scripts/verify-usage-budget.ts",
     "ledger:verify": "bun scripts/verify-ledger-usage.ts",
+    "throughput:verify": "bun scripts/verify-throughput.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts"
   },
   "dependencies": {

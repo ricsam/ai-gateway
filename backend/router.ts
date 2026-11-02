@@ -26,6 +26,7 @@ import {
   getUserSummary,
   type AnalyticsScope,
 } from "./analytics-service";
+import { getThroughput } from "./throughput-service";
 import {
   apiKeysTable,
   auditEventsTable,
@@ -152,6 +153,10 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
   getAnalyticsTokensConsumed: async ({ query, context }) => {
     try { return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  getAnalyticsThroughput: async ({ query, context }) => {
+    try { return { status: Status.OK, body: await getThroughput(query.timeRange, { userId: context.getUserId() }) }; }
     catch (error) { return analyticsFailure(error); }
   },
 
@@ -343,6 +348,10 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
   adminGetAnalyticsTokensConsumed: async ({ query, request }) => {
     try { await requireAdmin(request); return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    catch (error) { return analyticsFailure(error); }
+  },
+  adminGetAnalyticsThroughput: async ({ query, request }) => {
+    try { await requireAdmin(request); return { status: Status.OK, body: await getThroughput(query.timeRange, analyticsScope(query.scope, query.scopeId)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsUserSummary: async ({ query, request }) => {
