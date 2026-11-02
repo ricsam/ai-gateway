@@ -100,7 +100,7 @@ The default image is pinned for reproducible deployments; set `image.tag=sha-<fu
 
 ### Backups and recovery
 
-Back up TimescaleDB and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Use Timescale-aware logical backups (`pg_dump`/`pg_restore` with the extension installed at the same compatible version) or a storage/database snapshot that includes extension catalogs. Restore into an empty database, install TimescaleDB first, restore, then run migrations and verify `timescaledb_information.hypertables`, all three `credit_events_*` continuous aggregates, refresh jobs, and the compression policy. Test restores regularly; do not reset by dropping extension-owned views individually.
+Back up TimescaleDB and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Use Timescale-aware logical backups (`pg_dump`/`pg_restore` with the extension installed at the same compatible version) or a storage/database snapshot that includes extension catalogs. Restore into an empty database, install TimescaleDB first, restore, then run migrations and verify `timescaledb_information.hypertables`, all three `credit_events_*` continuous aggregates (real-time, with `materialized_only` false), refresh jobs, and the compression policy. Test restores regularly; do not reset by dropping extension-owned views individually.
 
 With database access, recover a local administrator offline:
 

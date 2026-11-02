@@ -1,13 +1,14 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import db from "./db";
 import { groupMembersTable, userTable } from "./schema";
 import { eq, sum } from "drizzle-orm";
 import { getTimeRangeBounds, type TimeRange } from "../shared/analytics-time-ranges";
+import { wholeBucketStart, type AggregateTable } from "./analytics-window";
 
 export { getTimeRangeBounds, type TimeRange } from "../shared/analytics-time-ranges";
 export type BucketSize = "15s" | "1m" | "5m" | "30m" | "1h" | "1d" | "1w" | "1mo";
 export type AnalyticsScope = { userId?: string; groupId?: string };
-type SourceTable = "credit_events" | "credit_events_5m" | "credit_events_1h" | "credit_events_1d";
+type SourceTable = "credit_events" | AggregateTable;
 
 export const ALLOWED_BUCKETS: Record<TimeRange, { allowed: BucketSize[]; default: BucketSize }> = {
   hour: { allowed: ["15s", "1m", "5m"], default: "5m" },
@@ -46,18 +47,15 @@ export function getTimeColumn(source: SourceTable): "time" | "bucket" {
   return source === "credit_events" ? "time" : "bucket";
 }
 
-function scopeSql(scope: AnalyticsScope | undefined, alias = ""): ReturnType<typeof sql> {
-  const prefix = alias ? `${alias}.` : "";
-  const userColumn = sql.raw(`${prefix}user_id`);
-  if (scope?.userId) return sql`AND ${userColumn} = ${scope.userId}`;
-  if (scope?.groupId) return sql`AND ${userColumn} IN (SELECT user_id FROM group_members WHERE group_id = ${scope.groupId})`;
+function scopeSql(scope: AnalyticsScope | undefined): SQL {
+  if (scope?.userId) return sql`AND user_id = ${scope.userId}`;
+  if (scope?.groupId) return sql`AND user_id IN (SELECT user_id FROM group_members WHERE group_id = ${scope.groupId})`;
   return sql``;
 }
 
-function usageOnlySql(source: SourceTable, alias = ""): ReturnType<typeof sql> {
-  const prefix = alias ? `${alias}.` : "";
-  if (source === "credit_events") return sql`AND ${sql.raw(`${prefix}type`)} IN ('usage', 'chat', 'api', 'embedding')`;
-  return sql`AND ${sql.raw(`${prefix}model`)} IS NOT NULL`;
+function usageOnlySql(source: SourceTable): SQL {
+  if (source === "credit_events") return sql`AND type IN ('usage', 'chat', 'api', 'embedding')`;
+  return sql`AND model IS NOT NULL`;
 }
 
 function sourceParts(bucket: BucketSize) {
@@ -71,19 +69,45 @@ function iso(value: Date): string {
   return value.toISOString().replace(/'/g, "''");
 }
 
+function gapfill(bucket: BucketSize, start: Date, end: Date): SQL {
+  return sql.raw(`time_bucket_gapfill(INTERVAL '${getBucketInterval(bucket)}', "time", '${iso(start)}'::timestamptz, '${iso(end)}'::timestamptz)`);
+}
+
+// Columns that the queries below read; credit_events and its continuous aggregates share them.
+const LEDGER_COLUMNS = sql.raw("user_id, model, credits_consumed, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens");
+
+/**
+ * The ledger in [start, end) as a FROM-clause subquery named "ledger" with a
+ * "time" column. Aggregate-backed intervals read the window's partial first
+ * aggregate bucket from credit_events, because that bucket also holds events
+ * from before the window: filtering on its bucket start would drop its
+ * in-window events, such as the first day of "Last 7 days". Whole buckets come
+ * from the continuous aggregate, which answers buckets that its refresh policy
+ * has not materialized yet in real time (drizzle/0006_realtime_credit_aggregates.sql).
+ */
+function ledgerRows(bucket: BucketSize, start: Date, end: Date, filter: { scope?: AnalyticsScope; usageOnly?: boolean } = {}): SQL {
+  const source = getSourceTable(bucket);
+  const where = (table: SourceTable, from: Date, to: Date) => {
+    const column = sql.raw(`"${getTimeColumn(table)}"`);
+    return sql`WHERE ${column} >= '${sql.raw(iso(from))}'::timestamptz AND ${column} < '${sql.raw(iso(to))}'::timestamptz
+      ${scopeSql(filter.scope)} ${filter.usageOnly ? usageOnlySql(table) : sql``}`;
+  };
+  const raw = (from: Date, to: Date) => sql`SELECT "time", ${LEDGER_COLUMNS} FROM credit_events ${where("credit_events", from, to)}`;
+  if (source === "credit_events") return sql`(${raw(start, end)}) AS ledger`;
+  const aggregateStart = wholeBucketStart(source, start, end);
+  return sql`(
+    ${raw(start, aggregateStart)}
+    UNION ALL
+    SELECT bucket AS "time", ${LEDGER_COLUMNS} FROM ${sql.raw(source)} ${where(source, aggregateStart, end)}
+  ) AS ledger`;
+}
+
 export async function getCreditsConsumed(timeRange: TimeRange, bucketSize?: BucketSize, scope?: AnalyticsScope) {
   const bucket = validateBucketSize(timeRange, bucketSize);
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn, interval } = sourceParts(bucket);
   const result = await db.execute(sql`
-    SELECT time_bucket_gapfill(
-      INTERVAL '${sql.raw(interval)}', "${sql.raw(timeColumn)}",
-      '${sql.raw(iso(start))}'::timestamptz, '${sql.raw(iso(end))}'::timestamptz
-    ) AS bucket, COALESCE(SUM(credits_consumed), 0) AS consumed
-    FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= '${sql.raw(iso(start))}'::timestamptz
-      AND "${sql.raw(timeColumn)}" < '${sql.raw(iso(end))}'::timestamptz
-      ${scopeSql(scope)} ${usageOnlySql(source)}
+    SELECT ${gapfill(bucket, start, end)} AS bucket, COALESCE(SUM(credits_consumed), 0) AS consumed
+    FROM ${ledgerRows(bucket, start, end, { scope, usageOnly: true })}
     GROUP BY 1 ORDER BY 1
   `);
   return (result.rows as any[]).map((row) => ({ time: new Date(row.bucket).toISOString(), consumed: Number(row.consumed ?? 0) }));
@@ -103,6 +127,9 @@ async function currentBalance(scope?: AnalyticsScope): Promise<number> {
   return Number(result?.value ?? 0);
 }
 
+// Burn-down points are balances at the end of each bucket, so whole aggregate
+// buckets suffice here and in getGroupUserBurndowns: the window's partial first
+// bucket is counted in the opening balance, which gives the same points.
 export async function getBalanceBurndown(timeRange: TimeRange, bucketSize?: BucketSize, scope?: AnalyticsScope) {
   const bucket = validateBucketSize(timeRange, bucketSize);
   const { start, end } = getTimeRangeBounds(timeRange);
@@ -129,39 +156,27 @@ export async function getBalanceBurndown(timeRange: TimeRange, bucketSize?: Buck
 export async function getUsageByModel(timeRange: TimeRange, bucketSize?: BucketSize, scope?: AnalyticsScope, topN = 5) {
   const bucket = validateBucketSize(timeRange, bucketSize);
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn, interval } = sourceParts(bucket);
+  const ledger = ledgerRows(bucket, start, end, { scope });
   const limit = Math.min(Math.max(topN, 1), 20);
   const top = await db.execute(sql`
-    SELECT model, SUM(credits_consumed) AS total FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= ${start.toISOString()}::timestamptz
-      AND "${sql.raw(timeColumn)}" < ${end.toISOString()}::timestamptz
-      AND model IS NOT NULL ${scopeSql(scope)}
+    SELECT model, SUM(credits_consumed) AS total FROM ${ledger}
+    WHERE model IS NOT NULL
     GROUP BY model ORDER BY total DESC LIMIT ${limit}
   `);
   const models = (top.rows as any[]).map((row) => String(row.model));
   if (!models.length) return { data: [] as { time: string; model: string; consumed: number }[], models };
   const inList = sql.join(models.map((model) => sql`${model}`), sql`, `);
   const selected = await db.execute(sql`
-    SELECT time_bucket_gapfill(
-      INTERVAL '${sql.raw(interval)}', "${sql.raw(timeColumn)}",
-      '${sql.raw(iso(start))}'::timestamptz, '${sql.raw(iso(end))}'::timestamptz
-    ) AS bucket, model, COALESCE(SUM(credits_consumed), 0) AS consumed
-    FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= '${sql.raw(iso(start))}'::timestamptz
-      AND "${sql.raw(timeColumn)}" < '${sql.raw(iso(end))}'::timestamptz
-      AND model IN (${inList}) ${scopeSql(scope)}
+    SELECT ${gapfill(bucket, start, end)} AS bucket, model, COALESCE(SUM(credits_consumed), 0) AS consumed
+    FROM ${ledger}
+    WHERE model IN (${inList})
     GROUP BY 1, 2 ORDER BY 1, 2
   `);
   const data = (selected.rows as any[]).map((row) => ({ time: new Date(row.bucket).toISOString(), model: String(row.model), consumed: Number(row.consumed ?? 0) }));
   const other = await db.execute(sql`
-    SELECT time_bucket_gapfill(
-      INTERVAL '${sql.raw(interval)}', "${sql.raw(timeColumn)}",
-      '${sql.raw(iso(start))}'::timestamptz, '${sql.raw(iso(end))}'::timestamptz
-    ) AS bucket, COALESCE(SUM(credits_consumed), 0) AS consumed
-    FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= '${sql.raw(iso(start))}'::timestamptz
-      AND "${sql.raw(timeColumn)}" < '${sql.raw(iso(end))}'::timestamptz
-      AND model IS NOT NULL AND model NOT IN (${inList}) ${scopeSql(scope)}
+    SELECT ${gapfill(bucket, start, end)} AS bucket, COALESCE(SUM(credits_consumed), 0) AS consumed
+    FROM ${ledger}
+    WHERE model IS NOT NULL AND model NOT IN (${inList})
     GROUP BY 1 ORDER BY 1
   `);
   if ((other.rows as any[]).some((row) => Number(row.consumed ?? 0) > 0)) {
@@ -179,21 +194,14 @@ export interface TokensConsumedRow {
 export async function getTokensConsumed(timeRange: TimeRange, bucketSize?: BucketSize, scope?: AnalyticsScope) {
   const bucket = validateBucketSize(timeRange, bucketSize);
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn, interval } = sourceParts(bucket);
   const result = await db.execute(sql`
-    SELECT time_bucket_gapfill(
-      INTERVAL '${sql.raw(interval)}', "${sql.raw(timeColumn)}",
-      '${sql.raw(iso(start))}'::timestamptz, '${sql.raw(iso(end))}'::timestamptz
-    ) AS bucket,
+    SELECT ${gapfill(bucket, start, end)} AS bucket,
       COALESCE(SUM(input_tokens), 0) AS input_tokens,
       COALESCE(SUM(output_tokens), 0) AS output_tokens,
       COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
       COALESCE(SUM(cache_write_5m_tokens), 0) AS cache_write_5m_tokens,
       COALESCE(SUM(cache_write_1h_tokens), 0) AS cache_write_1h_tokens
-    FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= '${sql.raw(iso(start))}'::timestamptz
-      AND "${sql.raw(timeColumn)}" < '${sql.raw(iso(end))}'::timestamptz
-      ${scopeSql(scope)} ${usageOnlySql(source)}
+    FROM ${ledgerRows(bucket, start, end, { scope, usageOnly: true })}
     GROUP BY 1 ORDER BY 1
   `);
   const summary = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, total: 0 };
@@ -213,15 +221,12 @@ export async function getTokensConsumed(timeRange: TimeRange, bucketSize?: Bucke
 export async function getModelSummary(timeRange: TimeRange, bucketSize?: BucketSize, scope?: AnalyticsScope) {
   const bucket = validateBucketSize(timeRange, bucketSize);
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn } = sourceParts(bucket);
   const result = await db.execute(sql`
     SELECT model, SUM(credits_consumed) AS total_credits, SUM(input_tokens) AS input_tokens,
       SUM(output_tokens) AS output_tokens, SUM(cache_read_tokens) AS cache_read_tokens,
       SUM(cache_write_5m_tokens) AS cache_write_5m_tokens, SUM(cache_write_1h_tokens) AS cache_write_1h_tokens
-    FROM ${sql.raw(source)}
-    WHERE "${sql.raw(timeColumn)}" >= ${start.toISOString()}::timestamptz
-      AND "${sql.raw(timeColumn)}" < ${end.toISOString()}::timestamptz
-      AND model IS NOT NULL ${scopeSql(scope)}
+    FROM ${ledgerRows(bucket, start, end, { scope })}
+    WHERE model IS NOT NULL
     GROUP BY model ORDER BY total_credits DESC
   `);
   const models = (result.rows as any[]).map((row) => ({
@@ -236,16 +241,13 @@ export async function getModelSummary(timeRange: TimeRange, bucketSize?: BucketS
 export async function getUserSummary(timeRange: TimeRange, groupId?: string) {
   const bucket = ALLOWED_BUCKETS[timeRange].default;
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn } = sourceParts(bucket);
-  const groupFilter = groupId ? sql`AND ce.user_id IN (SELECT user_id FROM group_members WHERE group_id = ${groupId})` : sql``;
   const result = await db.execute(sql`
-    SELECT ce.user_id, u.username, SUM(ce.credits_consumed) AS credits_used,
-      COUNT(DISTINCT DATE(${sql.raw(`ce.${timeColumn}`)})) AS active_days, MAX(${sql.raw(`ce.${timeColumn}`)}) AS last_activity
-    FROM ${sql.raw(source)} ce JOIN "user" u ON u.id = ce.user_id
-    WHERE ${sql.raw(`ce.${timeColumn}`)} >= ${start.toISOString()}::timestamptz
-      AND ${sql.raw(`ce.${timeColumn}`)} < ${end.toISOString()}::timestamptz
-      AND ce.credits_consumed > 0 ${groupFilter} ${usageOnlySql(source, "ce")}
-    GROUP BY ce.user_id, u.username ORDER BY credits_used DESC
+    SELECT ledger.user_id, u.username, SUM(ledger.credits_consumed) AS credits_used,
+      COUNT(DISTINCT DATE(ledger."time")) AS active_days, MAX(ledger."time") AS last_activity
+    FROM ${ledgerRows(bucket, start, end, { scope: groupId ? { groupId } : undefined, usageOnly: true })}
+      JOIN "user" u ON u.id = ledger.user_id
+    WHERE ledger.credits_consumed > 0
+    GROUP BY ledger.user_id, u.username ORDER BY credits_used DESC
   `);
   const users = (result.rows as any[]).map((row) => {
     const creditsUsed = Number(row.credits_used ?? 0); const activeDays = Number(row.active_days ?? 0);
@@ -259,15 +261,12 @@ export async function getUserSummary(timeRange: TimeRange, groupId?: string) {
 export async function getGroupSummary(timeRange: TimeRange) {
   const bucket = ALLOWED_BUCKETS[timeRange].default;
   const { start, end } = getTimeRangeBounds(timeRange);
-  const { source, timeColumn } = sourceParts(bucket);
   const result = await db.execute(sql`
-    SELECT gm.group_id, g.name AS group_name, SUM(ce.credits_consumed) AS credits_used,
-      COUNT(DISTINCT ce.user_id) AS active_users
+    SELECT gm.group_id, g.name AS group_name, SUM(ledger.credits_consumed) AS credits_used,
+      COUNT(DISTINCT ledger.user_id) AS active_users
     FROM group_members gm JOIN groups g ON g.id = gm.group_id
-      JOIN ${sql.raw(source)} ce ON ce.user_id = gm.user_id
-    WHERE ${sql.raw(`ce.${timeColumn}`)} >= ${start.toISOString()}::timestamptz
-      AND ${sql.raw(`ce.${timeColumn}`)} < ${end.toISOString()}::timestamptz
-      AND ce.credits_consumed > 0 ${usageOnlySql(source, "ce")}
+      JOIN ${ledgerRows(bucket, start, end, { usageOnly: true })} ON ledger.user_id = gm.user_id
+    WHERE ledger.credits_consumed > 0
     GROUP BY gm.group_id, g.name ORDER BY credits_used DESC
   `);
   return { groups: (result.rows as any[]).map((row) => {
