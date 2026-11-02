@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/ricsam/ai-gateway
-  tag: sha-26d822e9879331a7ac51e593466a23a3323c9ac1
+  tag: sha-224e18c9b97ae468b46c3b36a6cfbac97468e789
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 nameOverride: ""

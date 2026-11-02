@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-26d822e9879331a7ac51e593466a23a3323c9ac1
+ghcr.io/ricsam/ai-gateway:sha-224e18c9b97ae468b46c3b36a6cfbac97468e789
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -32,6 +32,13 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 ```
 
 See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, image pinning, bundled TimescaleDB, storage, and publication details.
+
+## Upgrading to 0.1.12
+
+This release adds migration `0006_realtime_credit_aggregates`, which the pre-upgrade migration Job applies before the new application starts. It only switches the `credit_events_5m`, `credit_events_1h`, and `credit_events_1d` continuous aggregates to real-time aggregation (`timescaledb.materialized_only = false`): it is fast, keeps all data, needs no backfill, and leaves the refresh policies unchanged. Upgrading from 0.1.10 or 0.1.11 needs no special steps. Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- Analytics charts include usage up to the time of the request, including the current day and hour, and count the in-window part of the window's first bucket. Earlier releases left out usage that the refresh policies had not yet materialized, such as the whole current day in day-bucketed charts, and usually showed the first bucket, such as the first day of **Last 7 days**, as empty. Charts with intervals of 5 minutes or longer now also aggregate ledger rows newer than each aggregate's last refresh, so they can take slightly longer.
+- A new **Throughput** card on **Admin → Analytics**, the admin user and group pages, and **Profile** shows steady-state and peak tokens and requests per minute and the average input and output tokens per request, overall and per upstream model: the values a Bedrock quota increase request asks for. The management API serves them at `GET /management/v1/analytics/throughput` with the `usage.read` scope. They are computed from the raw ledger without a new migration; on large ledgers, system-wide values over long ranges can take several seconds.
 
 ## Upgrading to 0.1.11
 
