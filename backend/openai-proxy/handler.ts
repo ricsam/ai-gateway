@@ -68,6 +68,15 @@ function errorResponse(
 }
 
 /**
+ * Warn when a response ended for a reason other than finishing its turn or
+ * calling a tool, such as a content filter, guardrail or output limit.
+ */
+function logAbnormalStopReason(reason: string | undefined, modelId: string, requestId: string, streaming: boolean): void {
+  if (!reason || reason === "end_turn" || reason === "tool_use" || reason === "stop_sequence") return;
+  console.warn(`[OpenAI Proxy] Stop reason: request=${requestId} model=${modelId} stream=${streaming} stop=${reason}`);
+}
+
+/**
  * Map AWS SDK errors to OpenAI error format
  */
 function mapAwsError(error: Error): Response {
@@ -306,10 +315,7 @@ async function handleNonStreamingRequest(
   const command = new ConverseCommand(bedrockRequest);
   const response = await bedrockClient.send(command);
 
-  // Log abnormal stop reasons
-  if (response.stopReason && response.stopReason !== "end_turn") {
-    console.warn(`[OpenAI Proxy] Non-streaming stop reason: ${response.stopReason} model=${model.modelId}`);
-  }
+  logAbnormalStopReason(response.stopReason, model.modelId, requestId, false);
 
   // Extract token usage
   const inputTokens = response.usage?.inputTokens ?? 0;
@@ -361,7 +367,7 @@ async function handleNonStreamingRequest(
     });
 
     console.log(
-      `[OpenAI Proxy] Complete: model=${model.modelId} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${settlement.creditsCharged.toFixed(6)} balanceAfter=${settlement.balanceAfter.toFixed(6)} partial=${settlement.partiallyCharged}`,
+      `[OpenAI Proxy] Complete: request=${requestId} model=${model.modelId} stop=${response.stopReason ?? "none"} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${settlement.creditsCharged.toFixed(6)} balanceAfter=${settlement.balanceAfter.toFixed(6)} partial=${settlement.partiallyCharged}`,
     );
     openaiResponse.usage = settledUsage(openaiResponse.usage, costBreakdown, settlement);
     if (principal.credentialType === "session") {
@@ -437,6 +443,7 @@ async function handleStreamingRequest(
   let cacheUsage = emptyCacheUsage();
   let hasUsageMetadata = false;
   let finalUsage = transformUsage(undefined);
+  let stopReason: string | undefined;
   let sawUnexpectedError = false;
   let streamCompleted = false;
   let isCanceled = false;
@@ -460,7 +467,7 @@ async function handleStreamingRequest(
       return;
     }
     cancellationLogged = true;
-    console.info(`[OpenAI Proxy] Stream canceled: ${reason}`);
+    console.info(`[OpenAI Proxy] Stream canceled: request=${requestId} model=${model.modelId} ${reason}`);
   };
 
   const cancelStream = (reason: unknown): void => {
@@ -693,6 +700,8 @@ async function handleStreamingRequest(
 
           // Handle messageStop event
           if (event.messageStop) {
+            stopReason = event.messageStop.stopReason;
+            logAbnormalStopReason(stopReason, model.modelId, requestId, true);
             const finishReason = mapStopReason(event.messageStop.stopReason);
             
             const enqueued = sendChunk({
@@ -806,7 +815,7 @@ async function handleStreamingRequest(
 
             // Log completion/cost for billed streams
             console.log(
-              `[OpenAI Proxy] Complete: model=${model.modelId} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
+              `[OpenAI Proxy] Complete: request=${requestId} model=${model.modelId} stop=${stopReason ?? (streamCanceled ? "canceled" : "none")} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
             );
           } catch (billingError) {
             console.error(
