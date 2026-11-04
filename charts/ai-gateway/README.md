@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-224e18c9b97ae468b46c3b36a6cfbac97468e789
+ghcr.io/ricsam/ai-gateway:sha-bf70783d923b2af6b2caae9a387eabe17c56a43a
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -32,6 +32,13 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 ```
 
 See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, image pinning, bundled TimescaleDB, storage, and publication details.
+
+## Upgrading to 0.1.13
+
+This release adds no database migration; upgrading from 0.1.10, 0.1.11 or 0.1.12 needs no special steps (from 0.1.10 or 0.1.11, the pre-upgrade migration Job still applies the 0.1.12 migration described below). Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- Streamed Chat Completions now log why Bedrock ended each response, as non-streamed ones already did. A warning `[OpenAI Proxy] Stop reason: request=… model=… stream=… stop=…` is logged when a response ends for a reason other than finishing its turn, calling a tool or reaching a stop sequence, such as a content filter, guardrail, output limit or malformed output, and every `Complete:` line includes `stop=<reason>`.
+- `Complete:` and `Stream canceled:` lines also include `request=<id>`, the request ID of the request's first log line (the client's `X-Request-ID` when it supplies a valid one), so a stopped or cancelled response can be traced to its client request. The non-streaming warning no longer fires for `tool_use` or `stop_sequence`, and its old `Non-streaming stop reason:` wording is replaced by the line above; update log searches or alerts that match the old text.
 
 ## Upgrading to 0.1.12
 
