@@ -7,7 +7,13 @@ import {
   ConverseCommand,
   ConverseStreamCommand,
 } from "@aws-sdk/client-bedrock-runtime";
-import type { BedrockRuntimeClient, ConverseStreamOutput } from "@aws-sdk/client-bedrock-runtime";
+import type {
+  BedrockRuntimeClient,
+  ConverseCommandInput,
+  ConverseCommandOutput,
+  ConverseStreamCommandOutput,
+  ConverseStreamOutput,
+} from "@aws-sdk/client-bedrock-runtime";
 import { resolveModel } from "../model-catalog";
 import { applyAliasConverse } from "../alias-reasoning";
 import {
@@ -24,6 +30,14 @@ import { transformRequest } from "./transform/request";
 import { transformResponse } from "./transform/response";
 import { transformUsage, settledUsage } from "./transform/usage";
 import { applyReasoning, ReasoningConfigError } from "./transform/reasoning";
+import { captureConverseReasoning, isReplayRejection, StreamingReasoningCapture } from "./transform/reasoning-replay";
+import {
+  noteReplayRejection,
+  prepareReasoningReplay,
+  reportInputTransformations,
+  storeReasoning,
+  type ReasoningReplay,
+} from "./reasoning-replay";
 import { collectRemoteImageUrls, RequestValidationError, validateChatCompletionRequest } from "./transform/validate";
 import { ImageInputError, type ResolvedImage } from "./images";
 import { fetchRemoteImages } from "./remote-image";
@@ -44,6 +58,28 @@ interface ModelInfo {
   cacheWrite1hPricePerMTok: number | null;
   managedCache: boolean;
   region: string | null;
+}
+
+/** The Bedrock request to send, and what to send instead if Bedrock rejects replayed reasoning. */
+interface BedrockAttempt {
+  request: ConverseCommandInput;
+  /** The request without replayed reasoning or binding controls; null when it is the same. */
+  fallback: ConverseCommandInput | null;
+  replay: ReasoningReplay | null;
+}
+
+/**
+ * Send a request, and send its fallback once if Bedrock rejects what reasoning
+ * replay added. Returns whether the replayed request was the one that succeeded.
+ */
+async function sendWithReplayFallback<T>(attempt: BedrockAttempt, send: (input: ConverseCommandInput) => Promise<T>): Promise<{ response: T; replayUsed: boolean }> {
+  try {
+    return { response: await send(attempt.request), replayUsed: true };
+  } catch (error) {
+    if (!attempt.fallback || !attempt.replay || !isReplayRejection(error)) throw error;
+    noteReplayRejection(attempt.replay, error);
+    return { response: await send(attempt.fallback), replayUsed: false };
+  }
 }
 
 /**
@@ -262,20 +298,28 @@ export async function handleOpenAIProxy(
     }
   }
 
-  // 6. Apply managed cache points if enabled
+  // 6. Send Claude's earlier reasoning back in the turns that produced it.
+  const replay = await prepareReasoningReplay({ request: bedrockRequest, model, userId, requestId });
+  let attempt: BedrockAttempt = { request: replay?.request ?? bedrockRequest, fallback: replay?.fallback ?? null, replay };
+
+  // 7. Apply managed cache points if enabled
   if (modelInfo.managedCache) {
-    bedrockRequest = addConverseCachePoints(bedrockRequest);
+    attempt = {
+      ...attempt,
+      request: addConverseCachePoints(attempt.request),
+      fallback: attempt.fallback && addConverseCachePoints(attempt.fallback),
+    };
   }
 
   try {
     // Create region-specific Bedrock client lazily inside the mapped error boundary.
     const bedrockClient = await getBedrockClient(modelInfo.region);
     if (body.stream === true) {
-      // 7. Streaming request
-      return await handleStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient, request.signal);
+      // 8. Streaming request
+      return await handleStreamingRequest(attempt, modelInfo, principal, body.model, requestId, bedrockClient, request.signal);
     } else {
-      // 8. Non-streaming request
-      return await handleNonStreamingRequest(bedrockRequest, modelInfo, principal, body.model, requestId, bedrockClient);
+      // 9. Non-streaming request
+      return await handleNonStreamingRequest(attempt, modelInfo, principal, body.model, requestId, bedrockClient);
     }
   } catch (error) {
     console.error("OpenAI proxy error:", error);
@@ -304,7 +348,7 @@ function playgroundCreditUsage(settlement: {
  * Handle non-streaming chat completion request
  */
 async function handleNonStreamingRequest(
-  bedrockRequest: ReturnType<typeof transformRequest>,
+  attempt: BedrockAttempt,
   model: ModelInfo,
   principal: ProxyPrincipal,
   requestedModel: string,
@@ -312,8 +356,10 @@ async function handleNonStreamingRequest(
   bedrockClient: BedrockRuntimeClient
 ): Promise<Response> {
   const userId = principal.userId;
-  const command = new ConverseCommand(bedrockRequest);
-  const response = await bedrockClient.send(command);
+  const { response, replayUsed } = await sendWithReplayFallback<ConverseCommandOutput>(
+    attempt,
+    (input) => bedrockClient.send(new ConverseCommand(input)),
+  );
 
   logAbnormalStopReason(response.stopReason, model.modelId, requestId, false);
 
@@ -325,8 +371,19 @@ async function handleNonStreamingRequest(
   const cacheUsage = extractConverseCacheUsage(response.usage);
 
   const openaiResponse = transformResponse(response, requestedModel, requestId);
+
+  // Store the reasoning before responding, so the client's next request finds it.
+  const storedReasoning = attempt.replay
+    ? storeReasoning(
+      attempt.replay,
+      () => captureConverseReasoning(response.output?.message?.content ?? [], openaiResponse.choices[0]!.message),
+      { replayUsed, startsNewChain: reportInputTransformations(attempt.replay, response.additionalModelResponseFields) },
+    )
+    : Promise.resolve();
+
   if (!response.usage) {
     openaiResponse.usage.cost_details = { currency: "USD", status: "unavailable" };
+    await storedReasoning;
     return Response.json(openaiResponse);
   }
 
@@ -379,6 +436,7 @@ async function handleNonStreamingRequest(
     console.error("[OpenAI Proxy] Billing settlement failed", error instanceof Error ? error.message : "unknown error");
     openaiResponse.usage.cost_details = { currency: "USD", status: "failed" };
   }
+  await storedReasoning;
   return Response.json(openaiResponse);
 }
 
@@ -401,7 +459,7 @@ async function handleNonStreamingRequest(
  *     errors and infinite retry loops.
  */
 async function handleStreamingRequest(
-  bedrockRequest: ReturnType<typeof transformRequest>,
+  attempt: BedrockAttempt,
   model: ModelInfo,
   principal: ProxyPrincipal,
   requestedModel: string,
@@ -410,7 +468,6 @@ async function handleStreamingRequest(
   requestSignal: AbortSignal
 ): Promise<Response> {
   const userId = principal.userId;
-  const command = new ConverseStreamCommand(bedrockRequest);
   const upstreamAbortController = new AbortController();
   const abortUpstream = (reason: unknown): void => {
     if (!upstreamAbortController.signal.aborted) {
@@ -428,10 +485,14 @@ async function handleStreamingRequest(
     requestSignal.addEventListener("abort", onRequestAbort);
   }
 
-  const response = await bedrockClient.send(command, { abortSignal: upstreamAbortController.signal }).catch((error) => {
+  const sendStream = (input: ConverseCommandInput): Promise<ConverseStreamCommandOutput> =>
+    bedrockClient.send(new ConverseStreamCommand(input), { abortSignal: upstreamAbortController.signal });
+  const sent = await sendWithReplayFallback(attempt, sendStream).catch((error) => {
     requestSignal.removeEventListener("abort", onRequestAbort);
     throw error;
   });
+  const response = sent.response;
+  let replayUsed = sent.replayUsed;
 
   if (!response.stream) {
     requestSignal.removeEventListener("abort", onRequestAbort);
@@ -450,6 +511,10 @@ async function handleStreamingRequest(
   let isControllerClosed = false;
   let cancellationLogged = false;
   let streamIterator: AsyncIterator<ConverseStreamOutput> | null = null;
+  // Whether any data chunk reached the client; until then a rejected replay can be retried.
+  let dataSent = false;
+  let reasoningCapture = attempt.replay ? new StreamingReasoningCapture() : null;
+  let storedReasoning: Promise<void> = Promise.resolve();
 
   // SSE formatting
   const id = requestId;
@@ -537,8 +602,11 @@ async function handleStreamingRequest(
         }
       };
 
-      const sendChunk = (chunk: OpenAIChatCompletionChunk): boolean =>
-        safeEnqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      const sendChunk = (chunk: OpenAIChatCompletionChunk): boolean => {
+        const enqueued = safeEnqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        if (enqueued) dataSent = true;
+        return enqueued;
+      };
 
       // Send an immediate SSE comment to keep the connection alive while Bedrock
       // processes the prompt. SSE comments (lines starting with ':') are ignored
@@ -566,7 +634,22 @@ async function handleStreamingRequest(
             break;
           }
 
-          const { value: event, done } = await streamIterator.next();
+          let next: IteratorResult<ConverseStreamOutput>;
+          try {
+            next = await streamIterator.next();
+          } catch (error) {
+            // A rejection of replayed reasoning can also arrive as the stream's
+            // first event. Before any data reached the client, retry without it.
+            if (dataSent || !replayUsed || !attempt.fallback || !attempt.replay || !isReplayRejection(error) || isStreamCanceled()) throw error;
+            noteReplayRejection(attempt.replay, error);
+            replayUsed = false;
+            reasoningCapture = new StreamingReasoningCapture();
+            const retry = await sendStream(attempt.fallback);
+            if (!retry.stream) throw error;
+            streamIterator = retry.stream[Symbol.asyncIterator]();
+            continue;
+          }
+          const { value: event, done } = next;
           if (done) {
             streamCompleted = true;
             break;
@@ -611,6 +694,7 @@ async function handleStreamingRequest(
                   arguments: "",
                 },
               };
+              reasoningCapture?.toolUseStart(blockIndex, toolCallDelta.id!, toolUse.name ?? "");
               
               const enqueued = sendChunk({
                 id,
@@ -634,6 +718,7 @@ async function handleStreamingRequest(
           if (event.contentBlockDelta) {
             const delta = event.contentBlockDelta.delta;
             const blockIndex = event.contentBlockDelta.contentBlockIndex ?? 0;
+            reasoningCapture?.delta(blockIndex, delta);
             
             // Bedrock thinking-capable models can emit reasoning blocks. Keep
             // them separate from visible answer text for the model playground.
@@ -703,6 +788,16 @@ async function handleStreamingRequest(
             stopReason = event.messageStop.stopReason;
             logAbnormalStopReason(stopReason, model.modelId, requestId, true);
             const finishReason = mapStopReason(event.messageStop.stopReason);
+            // Every content block is complete: store the reasoning while the stream
+            // finishes, so it is saved before the client can send its next request.
+            if (attempt.replay && reasoningCapture) {
+              const capture = reasoningCapture;
+              storedReasoning = storeReasoning(attempt.replay, () => capture.finish(), {
+                replayUsed,
+                startsNewChain: reportInputTransformations(attempt.replay, event.messageStop.additionalModelResponseFields),
+              });
+              reasoningCapture = null;
+            }
             
             const enqueued = sendChunk({
               id,
@@ -833,6 +928,9 @@ async function handleStreamingRequest(
             }
           }
         }
+
+        // Stored reasoning must be findable when the client sends its next request.
+        await storedReasoning;
 
         if (!sawUnexpectedError) {
           // Final accounting always precedes DONE; missing metadata is not a zero charge.

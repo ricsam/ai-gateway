@@ -452,7 +452,9 @@ async function main() {
   globalThis.serve = serveWrapper;
   const { startMonthlyCreditResetScheduler } = await import("../backend/monthly-credit-reset-scheduler");
   const monthlyCreditResetScheduler = startMonthlyCreditResetScheduler();
-  const shutdown = () => { monthlyCreditResetScheduler.stop(); process.exit(0); };
+  const { startReasoningReplayCleanup } = await import("../backend/reasoning-replay-store");
+  const reasoningReplayCleanup = startReasoningReplayCleanup();
+  const shutdown = () => { monthlyCreditResetScheduler.stop(); reasoningReplayCleanup.stop(); process.exit(0); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 

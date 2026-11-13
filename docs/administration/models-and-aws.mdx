@@ -73,6 +73,24 @@ The alias saves this choice as `reasoningSource: "alias"` or `"client"`. App tie
 
 The OpenAI-compatible API accepts images as base64 data URLs or `http(s)` URLs. **Admin → Brand & AWS → Inference → Download image URLs** controls whether the gateway downloads image URLs (enabled by default). Downloads only reach public addresses on default ports, follow at most three re-validated redirects, and are limited to 10 seconds and 3.75 MB per image. Turn downloads off if the deployment must not make outbound requests on behalf of API clients; data URLs keep working. The same setting is available through the management API at `/management/v1/settings`.
 
+## Reasoning replay
+
+Claude builds on its earlier thinking only if its thinking blocks are sent back with later turns, and OpenAI-format clients cannot do that themselves. **Admin → Brand & AWS → Inference → Send Claude's earlier reasoning back** (enabled by default) makes the gateway store the reasoning blocks of every Claude response with thinking on and put them back into the matching assistant turns of later requests. See [Reasoning across turns](/docs/chat-completions#reasoning-across-turns) for what clients need to do.
+
+- Stored reasoning is the model's thinking about the conversation, so treat it like conversation content. It belongs to one user and one upstream model, is kept in the `reasoning_replay_entries` table for 7 days after it was last used, and is deleted with its user. Expired rows are removed hourly.
+- Turning the setting off stops storing and replaying reasoning and deletes everything stored; the audit event `settings.updated` records how many entries were deleted. The setting is also available as `reasoningReplayEnabled` at `/management/v1/settings`.
+- Replayed reasoning is billed as input, mostly as cache reads, and shows up in usage like other input tokens.
+- On Claude Opus, Sonnet and Haiku 5.5 and later, the gateway sends `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the `thinking-binding-controls-2026-08-01` beta, so Bedrock drops instead of rejecting reasoning whose conversation changed. If a model rejects these controls, the gateway leaves them out for that model for an hour.
+- If Bedrock rejects a request that carries replayed reasoning, the gateway sends it once more without it, so replay never fails a request.
+
+Each request with thinking logs one line, for example:
+
+```text
+[OpenAI Proxy] Reasoning replay: request=… model=eu.anthropic.claude-opus-5-5 assistant_turns=12 matched=12 replayed_entries=12 replayed_blocks=14 missing=0 stale=0 unchained=0 binding=drop_block
+```
+
+`missing` counts assistant turns without stored reasoning (turns without thinking, or reasoning that expired), `stale` counts stored reasoning left out because the conversation before it changed, and `unchained` counts reasoning left out because a turn before it is missing. Retries without replay log `Reasoning replay rejected, retrying without it`, and blocks Bedrock reports as dropped log `Bedrock dropped replayed reasoning` (non-streaming requests only; ConverseStream does not report them).
+
 ## Region selection
 
 A model's region override wins over the default region. The runtime caches Bedrock clients by configuration revision and region. Saving AWS settings invalidates the client cache so new requests use the current credentials.

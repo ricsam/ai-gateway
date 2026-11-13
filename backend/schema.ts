@@ -138,6 +138,8 @@ export const applicationSettingsTable = pgTable("application_settings", {
   primaryForegroundColor: text("primary_foreground_color").notNull().default("#ffffff"),
   /** Whether the OpenAI-compatible API downloads http(s) image_url inputs. */
   remoteImageUrlsEnabled: boolean("remote_image_urls_enabled").notNull().default(true),
+  /** Whether the OpenAI-compatible API stores Claude's reasoning blocks and sends them back in later turns. */
+  reasoningReplayEnabled: boolean("reasoning_replay_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
 }, (table) => [check("application_settings_singleton_check", sql`${table.id} = 'main'`)]);
 
@@ -295,3 +297,30 @@ export const auditEventsTable = pgTable("audit_events", {
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
 }, (table) => [index("audit_events_created_at_idx").on(table.createdAt), index("audit_events_target_idx").on(table.targetType, table.targetId)]);
+
+// Claude reasoning blocks of OpenAI-compatible responses, replayed into later
+// turns of the same conversation (backend/openai-proxy/transform/reasoning-replay.ts).
+// One row per response, found again by its first tool call ID or a hash of its
+// text, for the same user and upstream model only. Rows expire after days of
+// disuse. The payload is JSON text because jsonb cannot hold every string.
+export const reasoningReplayEntriesTable = pgTable("reasoning_replay_entries", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "cascade" }),
+  /** Upstream Bedrock model ID; reasoning is only sent back to the model that produced it. */
+  modelId: text("model_id").notNull(),
+  /** `tool:<first tool call ID>` or `text:<sha256 of the response text>`. */
+  lookupKey: text("lookup_key").notNull(),
+  /** Hash of the system prompt, tools and messages before the response, without reasoning. */
+  prefixHash: text("prefix_hash").notNull(),
+  /** Entry whose reasoning was the last one replayed when this response was produced. */
+  predecessorId: text("predecessor_id"),
+  requestId: text("request_id").notNull(),
+  /** JSON: { v: 1, blocks: [{ position, block }], visible: [hash] }. */
+  payload: text("payload").notNull(),
+  byteSize: integer("byte_size").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().$defaultFn(() => new Date()),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex("reasoning_replay_entries_lookup_unique").on(table.userId, table.modelId, table.lookupKey),
+  index("reasoning_replay_entries_expires_idx").on(table.expiresAt),
+]);

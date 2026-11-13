@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { ConverseStreamCommand, InvokeModelWithResponseStreamCommand, type ConverseCommandInput } from "@aws-sdk/client-bedrock-runtime";
+import type { CapturedReasoning, ReplayEntry } from "./transform/reasoning-replay";
 
 // The handler's persistence, authentication, billing, settings, and AWS client
 // dependencies are replaced so the full request pipeline runs in memory.
@@ -16,16 +17,27 @@ let settlementGate: Promise<void> | undefined;
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
+let userId = "user-1234567890";
+/** Bedrock rejects a request (when sent, or as the stream's first event) if this returns an error. */
+let rejectRequest: ((input: ConverseCommandInput) => Error | undefined) | undefined;
+let rejectInStream = false;
+
+// In-memory reasoning replay store with the same user/model scoping as the database.
+type ReplayRow = ReplayEntry & { userId: string; modelId: string; requestId: string };
+let replayEnabled = true;
+let replayRows: ReplayRow[] = [];
+let replayStoreFails = false;
+let replaySaveGate: Promise<void> | undefined;
 
 mock.module("../model-catalog", () => ({
   listAvailableModels: async () => resolveModelCatalog({ models: modelRow ? [modelRow] : [], aliases, apps } as ModelCatalog),
   resolveModel: async (id: string) => resolveModelCatalog({ models: modelRow ? [modelRow] : [], aliases, apps } as ModelCatalog).find((entry) => entry.modelId === id),
 }));
 mock.module("../proxy-auth", () => {
-  const principal = { userId: "user-1234567890", credentialType: "api_key", credentialId: "key-1", scopes: new Set(["ai.invoke"]) };
+  const principal = () => ({ userId, credentialType: "api_key", credentialId: "key-1", scopes: new Set(["ai.invoke"]) });
   return {
-    authenticateApiKeyPrincipal: async () => ({ ok: true, principal }),
-    authenticateSessionPrincipal: async () => ({ ok: true, principal: { ...principal, credentialType: "session" } }),
+    authenticateApiKeyPrincipal: async () => ({ ok: true, principal: principal() }),
+    authenticateSessionPrincipal: async () => ({ ok: true, principal: { ...principal(), credentialType: "session" } }),
     requireProxyScope: (result: unknown) => result,
   };
 });
@@ -39,7 +51,25 @@ mock.module("../credit-service", () => ({
     return { actualCost: 0.01, creditsCharged: charged, balanceAfter: 100 - charged, partiallyCharged: charged < 0.01 };
   },
 }));
-mock.module("../config-service", () => ({ getRemoteImageUrlsEnabled: async () => remoteImagesEnabled }));
+mock.module("../config-service", () => ({
+  getRemoteImageUrlsEnabled: async () => remoteImagesEnabled,
+  getReasoningReplayEnabled: async () => replayEnabled,
+}));
+mock.module("../reasoning-replay-store", () => ({
+  loadReplayEntries: async (params: { userId: string; modelId: string; keys: readonly string[] }) => {
+    if (replayStoreFails) throw new Error("database unavailable");
+    return replayRows.filter((row) => row.userId === params.userId && row.modelId === params.modelId && params.keys.includes(row.lookupKey));
+  },
+  saveReplayEntry: async (entry: { userId: string; modelId: string; requestId: string; prefixHash: string; predecessorId: string | null; reasoning: CapturedReasoning }) => {
+    await replaySaveGate;
+    if (replayStoreFails) throw new Error("database unavailable");
+    const id = crypto.randomUUID();
+    replayRows = replayRows.filter((row) => !(row.userId === entry.userId && row.modelId === entry.modelId && row.lookupKey === entry.reasoning.lookupKey));
+    replayRows.push({ id, userId: entry.userId, modelId: entry.modelId, requestId: entry.requestId, prefixHash: entry.prefixHash, predecessorId: entry.predecessorId, ...entry.reasoning });
+    return id;
+  },
+  refreshReplayEntries: async () => {},
+}));
 mock.module("../bedrock", () => ({
   ProviderNotConfiguredError: class ProviderNotConfiguredError extends Error {},
   getBedrockClient: async () => ({
@@ -47,8 +77,14 @@ mock.module("../bedrock", () => ({
       const streaming = command instanceof ConverseStreamCommand;
       sent.push({ streaming, input: command.input });
       if (command instanceof InvokeModelWithResponseStreamCommand) return { body: (async function* () { yield { chunk: { bytes: new TextEncoder().encode('{"type":"message_stop"}') } }; })() };
+      const rejection = rejectRequest?.(command.input);
+      if (rejection && !(streaming && rejectInStream)) throw rejection;
       if (!streaming) return converseOutput;
-      return { stream: (async function* () { for (const event of streamEvents) yield event; })() };
+      const events = streamEvents;
+      return { stream: (async function* () {
+        if (rejection) throw rejection;
+        for (const event of events) yield event;
+      })() };
     },
   }),
 }));
@@ -85,6 +121,13 @@ beforeEach(() => {
   settlementFails = false;
   charged = 0.01;
   settlementGate = undefined;
+  userId = "user-1234567890";
+  rejectRequest = undefined;
+  rejectInStream = false;
+  replayEnabled = true;
+  replayRows = [];
+  replayStoreFails = false;
+  replaySaveGate = undefined;
   converseOutput = {
     output: { message: { role: "assistant", content: [
       { reasoningContent: { reasoningText: { text: "Looking at the image.", signature: "sig" } } },
@@ -473,5 +516,178 @@ describe("OpenAI-compatible handler", () => {
     expect(deltas).toContainEqual({ reasoning_content: "Thinking it through." });
     expect(deltas.findIndex((delta) => delta.reasoning_content)).toBeLessThan(deltas.findIndex((delta) => delta.content === "Done."));
     expect(sent[0]).toMatchObject({ streaming: true, input: { additionalModelRequestFields: { output_config: { effort: "low" } } } });
+  });
+});
+
+describe("reasoning replay through the OpenAI-compatible handler", () => {
+  const OPUS_55 = "eu.anthropic.claude-opus-5-5";
+  const BINDING_BETA = "thinking-binding-controls-2026-08-01";
+  const TOOLS = [{ type: "function", function: { name: "weather", parameters: { type: "object", properties: { city: { type: "string" } } } } }];
+  const QUESTION = { role: "user", content: "What is the weather in Stockholm?" };
+  const signatureBlock = (signature: string) => ({ reasoningContent: { reasoningText: { text: `Thinking ${signature}.`, signature } } });
+
+  /** One tool step: what Bedrock returns, and what the client sends back afterwards. */
+  function toolStep(toolUseId: string, signature: string) {
+    const usage = { inputTokens: 10, outputTokens: 20, totalTokens: 30 };
+    return {
+      events: [
+        { messageStart: { role: "assistant" } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: `Thinking ${signature}.` } } } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { signature } } } },
+        { contentBlockDelta: { contentBlockIndex: 1, delta: { text: "Checking." } } },
+        { contentBlockStart: { contentBlockIndex: 2, start: { toolUse: { toolUseId, name: "weather" } } } },
+        { contentBlockDelta: { contentBlockIndex: 2, delta: { toolUse: { input: "{\"city\":\"Stockholm\"}" } } } },
+        { messageStop: { stopReason: "tool_use" } },
+        { metadata: { usage } },
+      ],
+      output: {
+        output: { message: { role: "assistant", content: [signatureBlock(signature), { text: "Checking." }, { toolUse: { toolUseId, name: "weather", input: { city: "Stockholm" } } }] } },
+        stopReason: "tool_use",
+        usage,
+      },
+      history: [
+        { role: "assistant", content: "Checking.", tool_calls: [{ id: toolUseId, type: "function", function: { name: "weather", arguments: "{\"city\":\"Stockholm\"}" } }] },
+        { role: "tool", tool_call_id: toolUseId, content: "{\"temperature\":18}" },
+      ],
+    };
+  }
+
+  async function run(stepResponse: ReturnType<typeof toolStep>, body: Record<string, unknown>) {
+    streamEvents = stepResponse.events;
+    converseOutput = stepResponse.output;
+    const response = await call({ reasoning_effort: "max", tools: TOOLS, ...body });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    return text;
+  }
+  const reasoningIn = (input: ConverseCommandInput) => (input.messages ?? []).flatMap((message) => (message.content ?? []).filter((block) => block.reasoningContent));
+  const rejection = (message: string) => Object.assign(new Error(message), { name: "ValidationException" });
+
+  beforeEach(() => { modelRow = model({ modelId: OPUS_55 }); });
+
+  for (const stream of [false, true]) {
+    test(`stores Claude's reasoning and sends it back unmodified in the next tool step (stream=${stream})`, async () => {
+      const step1 = toolStep("tooluse_1", "sig-1");
+      await run(step1, { model: OPUS_55, stream, messages: [QUESTION] });
+      expect(sent[0]!.input.additionalModelRequestFields).toEqual({
+        thinking: { type: "adaptive", display: "summarized", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+        output_config: { effort: "max" },
+        anthropic_beta: [BINDING_BETA],
+      });
+      expect(sent[0]!.input.additionalModelResponseFieldPaths).toEqual(["/input_transformations"]);
+      expect(replayRows).toHaveLength(1);
+      expect(replayRows[0]).toMatchObject({ userId, modelId: OPUS_55, lookupKey: "tool:tooluse_1", predecessorId: null });
+
+      const step2 = toolStep("tooluse_2", "sig-2");
+      await run(step2, { model: OPUS_55, stream, messages: [QUESTION, ...step1.history] });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]!.input.messages![1]!.content).toEqual([
+        signatureBlock("sig-1"),
+        { text: "Checking." },
+        { toolUse: { toolUseId: "tooluse_1", name: "weather", input: { city: "Stockholm" } } },
+      ]);
+      expect(replayRows[1]).toMatchObject({ lookupKey: "tool:tooluse_2", predecessorId: replayRows[0]!.id });
+
+      await run(toolStep("tooluse_3", "sig-3"), { model: OPUS_55, stream, messages: [QUESTION, ...step1.history, ...step2.history] });
+      expect(reasoningIn(sent[2]!.input)).toEqual([signatureBlock("sig-1"), signatureBlock("sig-2")]);
+    });
+  }
+
+  test("sends reasoning back only to the same user and upstream model", async () => {
+    const step1 = toolStep("tooluse_1", "sig-1");
+    await run(step1, { model: OPUS_55, messages: [QUESTION] });
+    userId = "user-other";
+    await run(toolStep("tooluse_2", "sig-2"), { model: OPUS_55, messages: [QUESTION, ...step1.history] });
+    expect(reasoningIn(sent[1]!.input)).toEqual([]);
+    userId = "user-1234567890";
+    modelRow = model({ modelId: "eu.anthropic.claude-sonnet-5-5" });
+    await run(toolStep("tooluse_3", "sig-3"), { model: "eu.anthropic.claude-sonnet-5-5", messages: [QUESTION, ...step1.history] });
+    expect(reasoningIn(sent[2]!.input)).toEqual([]);
+  });
+
+  for (const [stream, where] of [[false, "send"], [true, "send"], [true, "stream"]] as const) {
+    test(`retries once without replayed reasoning when Bedrock rejects it (stream=${stream}, ${where})`, async () => {
+      const step1 = toolStep("tooluse_1", "sig-1");
+      await run(step1, { model: OPUS_55, stream, messages: [QUESTION] });
+      rejectRequest = (input) => reasoningIn(input).length > 0 ? rejection("messages.1.content.0: Invalid `signature` in `thinking` block") : undefined;
+      rejectInStream = where === "stream";
+      const text = await run(toolStep("tooluse_2", "sig-2"), { model: OPUS_55, stream, messages: [QUESTION, ...step1.history] });
+      expect(text).toContain("Checking.");
+      if (stream) expect(text.trim().endsWith("data: [DONE]")).toBe(true);
+      expect(sent).toHaveLength(3);
+      expect(reasoningIn(sent[1]!.input)).toHaveLength(1);
+      // The retry is the request without anything replay added.
+      expect(reasoningIn(sent[2]!.input)).toEqual([]);
+      expect(sent[2]!.input.additionalModelRequestFields).toEqual({ thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "max" } });
+      // Reasoning produced without the earlier blocks starts a new chain.
+      expect(replayRows.find((row) => row.lookupKey === "tool:tooluse_2")?.predecessorId).toBeNull();
+      expect(settlements).toHaveLength(2);
+    });
+  }
+
+  test("leaves out the binding controls for a while after a model rejects them", async () => {
+    const HAIKU_55 = "eu.anthropic.claude-haiku-5-5";
+    modelRow = model({ modelId: HAIKU_55 });
+    rejectRequest = (input) => JSON.stringify(input.additionalModelRequestFields).includes("block_binding")
+      ? rejection("thinking.adaptive.block_binding: Extra inputs are not permitted") : undefined;
+    await run(toolStep("tooluse_1", "sig-1"), { model: HAIKU_55, messages: [QUESTION] });
+    expect(sent).toHaveLength(2);
+    await run(toolStep("tooluse_2", "sig-2"), { model: HAIKU_55, messages: [QUESTION] });
+    expect(sent).toHaveLength(3);
+    expect(sent[2]!.input.additionalModelRequestFields).not.toHaveProperty("anthropic_beta");
+  });
+
+  test("budget-thinking Claude models replay without binding controls", async () => {
+    const SONNET_45 = "anthropic.claude-sonnet-4-5-20250929-v1:0";
+    modelRow = model({ modelId: SONNET_45 });
+    const step1 = toolStep("tooluse_1", "sig-1");
+    await run(step1, { model: SONNET_45, reasoning_effort: "low", messages: [QUESTION] });
+    await run(toolStep("tooluse_2", "sig-2"), { model: SONNET_45, reasoning_effort: "low", messages: [QUESTION, ...step1.history] });
+    expect(sent[1]!.input.additionalModelRequestFields).toEqual({ thinking: { type: "enabled", budget_tokens: 1024 } });
+    expect(reasoningIn(sent[1]!.input)).toEqual([signatureBlock("sig-1")]);
+  });
+
+  test("takes no part when replay is turned off or thinking is off", async () => {
+    replayEnabled = false;
+    const step1 = toolStep("tooluse_1", "sig-1");
+    await run(step1, { model: OPUS_55, messages: [QUESTION] });
+    expect(sent[0]!.input.additionalModelRequestFields).toEqual({ thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "max" } });
+    expect(replayRows).toEqual([]);
+
+    replayEnabled = true;
+    modelRow = model({ modelId: "anthropic.claude-opus-5" });
+    await run(step1, { model: "anthropic.claude-opus-5", reasoning_effort: "none", messages: [QUESTION] });
+    expect(sent[1]!.input.additionalModelRequestFields).toEqual({ thinking: { type: "disabled" } });
+    expect(replayRows).toEqual([]);
+  });
+
+  for (const stream of [false, true]) {
+    test(`a failing store never fails the request (stream=${stream})`, async () => {
+      replayStoreFails = true;
+      const step1 = toolStep("tooluse_1", "sig-1");
+      await run(step1, { model: OPUS_55, stream, messages: [QUESTION] });
+      await run(toolStep("tooluse_2", "sig-2"), { model: OPUS_55, stream, messages: [QUESTION, ...step1.history] });
+      expect(reasoningIn(sent[1]!.input)).toEqual([]);
+      expect(settlements).toHaveLength(2);
+    });
+  }
+
+  test("a stream ends only after its reasoning is stored", async () => {
+    let release!: () => void;
+    replaySaveGate = new Promise<void>((resolve) => { release = resolve; });
+    streamEvents = toolStep("tooluse_1", "sig-1").events;
+    const response = await call({ model: OPUS_55, stream: true, reasoning_effort: "max", tools: TOOLS, messages: [QUESTION] });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let before = "";
+    try {
+      while (!before.includes("\"cost\"")) before += decoder.decode((await reader.read()).value);
+      expect(before).not.toContain("[DONE]");
+      expect(replayRows).toHaveLength(0);
+    } finally { release(); }
+    let after = "";
+    while (true) { const part = await reader.read(); if (part.done) break; after += decoder.decode(part.value); }
+    expect(after).toContain("[DONE]");
+    expect(replayRows).toHaveLength(1);
   });
 });

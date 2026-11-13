@@ -48,6 +48,8 @@ The four native compatibility endpoints retain Bedrock request/response shapes, 
 
 The OpenAI endpoint accepts images as base64 data URLs or public `http(s)` URLs (downloaded under an SSRF-restricted policy that administrators can turn off in Admin → Brand & AWS → Inference), including images inside tool results. `reasoning_effort` (`none` through `max`) maps to Claude adaptive thinking with `output_config.effort`, Claude thinking budgets, Nova 2 `reasoningConfig`, or gpt-oss `reasoning_effort` according to each model's reasoning control, and models can define a default effort. See [Chat Completions](docs/chat-completions.mdx).
 
+OpenAI-format clients cannot send Claude's thinking signatures back, so the gateway stores the reasoning blocks of each Claude thinking response (per user and upstream model, for 7 days after last use) and puts them back, unmodified and in place, into the matching assistant turns of later requests. Claude then continues from its earlier reasoning in tool loops instead of repeating it. Reasoning is only replayed while the conversation before it is unchanged, never fails a request (Bedrock rejections are retried once without it), and can be turned off in Admin → Brand & AWS → Inference, which also deletes what is stored. See [Reasoning across turns](docs/chat-completions.mdx#reasoning-across-turns). Migration `0007_reasoning_replay` adds the `reasoning_replay_entries` table and the setting.
+
 Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 digests. The app remains healthy and ready before AWS is configured; inference then returns `provider_not_configured`. Configure encrypted static AWS credentials and a default region in Admin → Brand & AWS. Per-model region overrides remain supported.
 
 ## Model aliases and apps
@@ -126,6 +128,7 @@ TIMESCALE_ADMIN_URL=postgres://... bun run timescale:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run users:verify-access
 TIMESCALE_ADMIN_URL=postgres://... bun run ledger:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run throughput:verify
+TIMESCALE_ADMIN_URL=postgres://... bun run reasoning:verify
 
 docker compose config
 helm lint charts/ai-gateway

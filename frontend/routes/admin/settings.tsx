@@ -11,7 +11,7 @@ import { managementFetch } from "../../management-api";
 import { loadPublicConfig, type PublicConfig } from "../../config";
 
 type Branding = { revision: number; productName: string; tagline: string; logoUrl: string | null; faviconUrl: string | null; primaryColor: string; primaryForegroundColor: string };
-type InferenceSettings = { revision: number; remoteImageUrlsEnabled: boolean };
+type InferenceSettings = { revision: number; remoteImageUrlsEnabled: boolean; reasoningReplayEnabled: boolean };
 type Aws = {
   revision: number; defaultRegion: string | null; accessKeyId: string | null; secretAccessKey: { configured: boolean }; sessionToken: { configured: boolean };
   lastTestedAt?: string | null; lastTestSucceeded?: boolean | null; lastTestMessage?: string | null;
@@ -63,11 +63,11 @@ function Settings() {
   };
 
   if (!brand || !aws) return <p>{error ?? "Loading settings…"}</p>;
-  const saveInference = (remoteImageUrlsEnabled: boolean) => void run(async () => {
+  const saveInference = (change: Partial<Omit<InferenceSettings, "revision">>, success: string) => void run(async () => {
     // Branding and inference settings share one application-settings revision.
-    const result = await managementFetch<{ data: InferenceSettings }>("/settings", { method: "PUT", body: JSON.stringify({ revision: brand.revision, remoteImageUrlsEnabled }) });
+    const result = await managementFetch<{ data: InferenceSettings }>("/settings", { method: "PUT", body: JSON.stringify({ revision: brand.revision, ...change }) });
     setInference(result.data); setBrand({ ...brand, revision: result.data.revision });
-  }, remoteImageUrlsEnabled ? "Image URL downloads enabled" : "Image URL downloads disabled");
+  }, success);
   return <div className="space-y-5">
     <div><h1 className="text-2xl font-semibold">Branding & AWS</h1><p className="text-sm text-muted-foreground">Runtime product identity, encrypted Bedrock credentials, and inference settings.</p></div>
     {error && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
@@ -117,10 +117,16 @@ function Settings() {
         }, "Bedrock connection succeeded")}><IconFlask />Test</Button></div>{aws.lastTestedAt && <p className={`text-xs ${aws.lastTestSucceeded ? "text-green-700 dark:text-green-400" : "text-destructive"}`}>{aws.lastTestMessage} · {new Date(aws.lastTestedAt).toLocaleString()}</p>}</div>
       </CardContent></Card>
 
-      <Card><CardHeader><CardTitle>Inference</CardTitle><CardDescription>Controls for the OpenAI-compatible API and playground.</CardDescription></CardHeader><CardContent>
+      <Card><CardHeader><CardTitle>Inference</CardTitle><CardDescription>Controls for the OpenAI-compatible API and playground.</CardDescription></CardHeader><CardContent className="space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1"><Label htmlFor="remote-image-urls">Download image URLs</Label><p className="text-sm text-muted-foreground">Fetch http(s) <code>image_url</code> inputs for the model. Only public addresses on default ports are contacted, with size and time limits. When off, clients must send images as base64 data URLs.</p></div>
-          <Switch id="remote-image-urls" checked={inference?.remoteImageUrlsEnabled ?? true} disabled={saving || !inference} onCheckedChange={saveInference} />
+          <Switch id="remote-image-urls" checked={inference?.remoteImageUrlsEnabled ?? true} disabled={saving || !inference}
+            onCheckedChange={(remoteImageUrlsEnabled) => saveInference({ remoteImageUrlsEnabled }, remoteImageUrlsEnabled ? "Image URL downloads enabled" : "Image URL downloads disabled")} />
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1"><Label htmlFor="reasoning-replay">Send Claude's earlier reasoning back</Label><p className="text-sm text-muted-foreground">Store the reasoning blocks of Claude thinking responses for 7 days after their last use and send them back with later turns of the same conversation, so tool loops build on earlier thinking instead of repeating it. Turning this off deletes the stored reasoning.</p></div>
+          <Switch id="reasoning-replay" checked={inference?.reasoningReplayEnabled ?? true} disabled={saving || !inference}
+            onCheckedChange={(reasoningReplayEnabled) => saveInference({ reasoningReplayEnabled }, reasoningReplayEnabled ? "Reasoning replay enabled" : "Reasoning replay disabled and stored reasoning deleted")} />
         </div>
       </CardContent></Card>
     </div>

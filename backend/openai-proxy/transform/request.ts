@@ -191,20 +191,16 @@ function transformAssistantContent(msg: Pick<OpenAIAssistantMessage, "content" |
   // Add tool use blocks if present
   if (msg.tool_calls) {
     for (const call of msg.tool_calls) {
-      let input: unknown;
-      try {
-        input = JSON.parse(call.function.arguments);
-      } catch {
-        // If parsing fails, use the raw string as a text field
+      const input = parseToolArguments(call.function.arguments);
+      if (input.failed) {
         console.warn("[OpenAI Transform] Failed to parse tool_call arguments for:", call.function.name);
-        input = { _raw: call.function.arguments };
       }
       
       blocks.push({
         toolUse: {
           toolUseId: call.id,
           name: call.function.name,
-          input: input as ContentBlock.ToolUseMember["toolUse"]["input"],
+          input: input.value as ContentBlock.ToolUseMember["toolUse"]["input"],
         },
       });
     }
@@ -216,6 +212,18 @@ function transformAssistantContent(msg: Pick<OpenAIAssistantMessage, "content" |
   // never produce { text: "" }. Empty assistant messages typically come from
   // canceled/interrupted streams that were persisted in conversation history.
   return blocks;
+}
+
+/**
+ * Parse OpenAI tool-call arguments into a Bedrock toolUse input. Arguments that
+ * are not valid JSON are kept as a raw string field so the call still round-trips.
+ */
+export function parseToolArguments(args: string): { value: unknown; failed: boolean } {
+  try {
+    return { value: JSON.parse(args), failed: false };
+  } catch {
+    return { value: { _raw: args }, failed: true };
+  }
 }
 
 /**

@@ -50,6 +50,13 @@
       "when": 1793281040682,
       "tag": "0006_realtime_credit_aggregates",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794598383706,
+      "tag": "0007_reasoning_replay",
+      "breakpoints": true
     }
   ]
 }

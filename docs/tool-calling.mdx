@@ -105,7 +105,7 @@ Execute the function in your application, then send the assistant message and a 
 ```
 
 <Tip>
-  Preserve the tool call ID exactly. Bedrock uses it to connect a `toolResult` to the original `toolUse`.
+  Preserve the tool call ID exactly. Bedrock uses it to connect a `toolResult` to the original `toolUse`, and the gateway uses it to send Claude's earlier reasoning back with the assistant message. See [Reasoning across turns](/docs/chat-completions#reasoning-across-turns).
 </Tip>
 
 ## Streaming tools

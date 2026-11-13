@@ -90,7 +90,7 @@ Responses include `X-Request-ID`. Supply your own request ID when correlating an
 
 Mutable configuration resources expose a `revision`. Send the current revision with an update so stale clients cannot silently overwrite newer settings.
 
-Branding (`/branding`) and inference settings (`/settings`) are stored together and share one revision, so re-read either document after updating the other. For example, to stop the gateway from downloading `http(s)` image URLs:
+Branding (`/branding`) and inference settings (`/settings`) are stored together and share one revision, so re-read either document after updating the other. Inference settings are `remoteImageUrlsEnabled` (download `http(s)` image URLs) and `reasoningReplayEnabled` (send Claude's earlier reasoning back; turning it off deletes the stored reasoning). For example, to stop the gateway from downloading `http(s)` image URLs:
 
 ```bash
 curl --request PUT \

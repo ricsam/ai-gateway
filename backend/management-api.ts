@@ -9,7 +9,7 @@ import { ManagementAuthError, MANAGEMENT_SCOPES, requireManagementPrincipal, typ
 import { fetchOidcDiscoveryMetadata, oidcDiscoveryUrl, requiresAuthorizationResponseIssuer } from "./oidc-metadata";
 import {
   apiKeysTable, applicationSettingsTable, auditEventsTable, authProvidersTable, awsConfigurationTable, brandingAssetsTable,
-  creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, modelsTable, userTable,
+  creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, modelsTable, reasoningReplayEntriesTable, userTable,
 } from "./schema";
 import { applySecretWrite, maskAccessKey, secretStatus, type SecretWrite } from "./settings-crypto";
 import resetCredits from "./jobs/reset-credits";
@@ -332,22 +332,34 @@ export async function handleManagementApi(request: Request): Promise<Response> {
     }
     if (path === "/settings" && request.method === "GET") {
       await requireManagementPrincipal(request, "settings.read");
-      const [settings] = await db.select({ revision: applicationSettingsTable.revision, remoteImageUrlsEnabled: applicationSettingsTable.remoteImageUrlsEnabled })
-        .from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
-      return response(requestId, { data: settings ?? { revision: 1, remoteImageUrlsEnabled: true } });
+      const [settings] = await db.select({
+        revision: applicationSettingsTable.revision,
+        remoteImageUrlsEnabled: applicationSettingsTable.remoteImageUrlsEnabled,
+        reasoningReplayEnabled: applicationSettingsTable.reasoningReplayEnabled,
+      }).from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
+      return response(requestId, { data: settings ?? { revision: 1, remoteImageUrlsEnabled: true, reasoningReplayEnabled: true } });
     }
     if (path === "/settings" && request.method === "PUT") {
-      const principal = await requireManagementPrincipal(request, "settings.write"); const data = await body<{ revision?: number; remoteImageUrlsEnabled?: unknown }>(request);
+      const principal = await requireManagementPrincipal(request, "settings.write");
+      const data = await body<{ revision?: number; remoteImageUrlsEnabled?: unknown; reasoningReplayEnabled?: unknown }>(request);
       const [current] = await db.select().from(applicationSettingsTable).where(eq(applicationSettingsTable.id, "main")).limit(1);
       if (!current || data.revision !== current.revision) return failure(requestId, 409, "revision_conflict", "Settings have changed");
       if (data.remoteImageUrlsEnabled !== undefined && typeof data.remoteImageUrlsEnabled !== "boolean") return failure(requestId, 400, "validation_error", "remoteImageUrlsEnabled must be a boolean");
-      const values = data.remoteImageUrlsEnabled === undefined ? {} : { remoteImageUrlsEnabled: data.remoteImageUrlsEnabled };
+      if (data.reasoningReplayEnabled !== undefined && typeof data.reasoningReplayEnabled !== "boolean") return failure(requestId, 400, "validation_error", "reasoningReplayEnabled must be a boolean");
+      const values = {
+        ...(data.remoteImageUrlsEnabled !== undefined && { remoteImageUrlsEnabled: data.remoteImageUrlsEnabled }),
+        ...(data.reasoningReplayEnabled !== undefined && { reasoningReplayEnabled: data.reasoningReplayEnabled }),
+      };
       const settings = await db.transaction(async (tx) => {
         const [changed] = await tx.update(applicationSettingsTable).set({ ...values, revision: current.revision + 1, updatedAt: new Date() }).where(eq(applicationSettingsTable.id, "main")).returning();
-        await tx.insert(auditEventsTable).values({ actorType: principal.actorType, actorId: principal.actorId, action: "settings.updated", targetType: "application_settings", targetId: "main", requestId, metadata: values });
+        // Turning replay off also deletes the reasoning stored for it.
+        const purged = data.reasoningReplayEnabled === false
+          ? (await tx.delete(reasoningReplayEntriesTable)).rowCount ?? 0
+          : undefined;
+        await tx.insert(auditEventsTable).values({ actorType: principal.actorType, actorId: principal.actorId, action: "settings.updated", targetType: "application_settings", targetId: "main", requestId, metadata: { ...values, ...(purged !== undefined && { reasoningEntriesDeleted: purged }) } });
         return changed!;
       });
-      return response(requestId, { data: { revision: settings.revision, remoteImageUrlsEnabled: settings.remoteImageUrlsEnabled } });
+      return response(requestId, { data: { revision: settings.revision, remoteImageUrlsEnabled: settings.remoteImageUrlsEnabled, reasoningReplayEnabled: settings.reasoningReplayEnabled } });
     }
     if ((match = path.match(/^\/branding\/assets\/(logo|favicon)$/)) && request.method === "POST") {
       const principal = await requireManagementPrincipal(request, "branding.write"); const bytes = new Uint8Array(await request.arrayBuffer());

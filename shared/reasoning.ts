@@ -47,6 +47,12 @@ export interface ReasoningProfile {
   summarizedDisplay?: boolean;
   /** Anthropic budget only: the model also accepts `output_config.effort` behind the effort-2025-11-24 beta. */
   effortBeta?: boolean;
+  /**
+   * Anthropic adaptive only: the model binds each thinking block to the conversation that
+   * produced it ("preserved thinking") and accepts `thinking.block_binding` behind the
+   * thinking-binding-controls-2026-08-01 beta.
+   */
+  preservedThinking?: boolean;
 }
 
 const ALL_LEVELS: readonly EffortLevel[] = EFFORT_LEVELS;
@@ -76,8 +82,18 @@ function parseClaudeModel(id: string): ClaudeModel | null {
   return null;
 }
 
-function adaptive(label: string, efforts: readonly EffortLevel[], options: Pick<ReasoningProfile, "thinkingOff" | "summarizedDisplay" | "thinkingOptional"> = {}): ReasoningProfile {
+function adaptive(label: string, efforts: readonly EffortLevel[], options: Pick<ReasoningProfile, "thinkingOff" | "summarizedDisplay" | "thinkingOptional" | "preservedThinking"> = {}): ReasoningProfile {
   return { style: "anthropic_adaptive", efforts, label, detected: true, ...options };
+}
+
+/**
+ * Models with preserved thinking: Claude Opus, Sonnet and Haiku 5.5, Fable and Mythos 5.1,
+ * and later versions. Earlier models (such as Claude Opus 5) reject `thinking.block_binding`.
+ */
+function hasPreservedThinking({ family, major, minor }: ClaudeModel): boolean {
+  if (major === null || major < 5) return false;
+  if (major > 5) return true;
+  return family === "fable" || family === "mythos" ? minor >= 1 : minor >= 5;
 }
 
 function budget(label: string, effortBeta = false): ReasoningProfile {
@@ -89,16 +105,17 @@ function claudeProfile(model: ClaudeModel): ReasoningProfile {
     ? `Claude ${model.family.replace("-preview", " Preview").replace(/^./, (c) => c.toUpperCase())}`
     : `Claude ${model.family.replace(/^./, (c) => c.toUpperCase())} ${model.major}${model.minor ? `.${model.minor}` : ""}`;
   const { family, major, minor } = model;
+  const preserved = hasPreservedThinking(model) ? { preservedThinking: true } : {};
   // Fable and Mythos only support adaptive thinking, which is always on.
   if (family === "fable-preview" || family === "mythos-preview") return adaptive(name, WITHOUT_XHIGH, { summarizedDisplay: true });
-  if (family === "fable" || family === "mythos" || major === null) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true });
+  if (family === "fable" || family === "mythos" || major === null) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, ...preserved });
   if (major >= 5) {
     // Opus 5.5+ always thinks; Sonnet 5.5+ turns up-front thinking off with between_tools;
     // Opus/Sonnet 5 accept thinking.type "disabled". Unknown variants keep the model default for "none".
-    if (family === "opus" && minor >= 5) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true });
-    if (family === "sonnet" && minor >= 5) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, thinkingOff: { type: "between_tools" } });
-    if ((family === "opus" || family === "sonnet") && minor === 0) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, thinkingOff: { type: "disabled" } });
-    return adaptive(name, ALL_LEVELS, { summarizedDisplay: true });
+    if (family === "opus" && minor >= 5) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, ...preserved });
+    if (family === "sonnet" && minor >= 5) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, thinkingOff: { type: "between_tools" }, ...preserved });
+    if ((family === "opus" || family === "sonnet") && minor === 0) return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, thinkingOff: { type: "disabled" }, ...preserved });
+    return adaptive(name, ALL_LEVELS, { summarizedDisplay: true, ...preserved });
   }
   if (major === 4) {
     // 4.7+ reject budget thinking, default to omitted thinking display, and add xhigh.

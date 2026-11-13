@@ -127,6 +127,20 @@ Readable reasoning appears in the non-standard `reasoning_content` field: `choic
 
 Discover which values a model accepts in the model catalog: the dashboard's model pricing page lists each model's effort levels.
 
+## Reasoning across turns
+
+Claude's thinking is only useful in later turns if its thinking blocks go back to the model exactly as produced, signature included. OpenAI-format clients never receive those signatures, so the gateway keeps them for you: it stores the reasoning blocks of each Claude response and puts them back, unmodified and in their original position, when the response's assistant message appears in a later request. In a tool loop Claude then continues from its earlier reasoning instead of working the problem out again at every step.
+
+This happens automatically for Claude models when thinking is on (any `reasoning_effort` other than `none`, a model default effort, or an alias that pins thinking). Clients don't change anything, but replay only works when they keep the conversation append-only:
+
+- Send each assistant message back as you received it: the same `content` text and the same `tool_calls` (IDs, names and arguments). The gateway finds a response by its first tool call ID, or by its text when it has no tool calls.
+- Keep the system prompt, developer messages and `tools` the same for the whole conversation. All `system` and `developer` messages become Bedrock's system prompt, so adding one later in the conversation changes it.
+- Don't edit, reorder or remove earlier messages or tool results.
+
+Claude ties each thinking block to everything before it, so the gateway sends a block back only while that conversation is unchanged, and only in an unbroken run from the newest turn backwards. A change, or a turn whose reasoning is no longer stored, means the reasoning before it is left out; reasoning produced after it is used again. Changing the effort level, `max_tokens`, `tool_choice` or the managed cache points does not affect it; a request with thinking off sends no reasoning back.
+
+Reasoning is only sent back to the user and the upstream Bedrock model that produced it, so aliases and app tiers of the same upstream share it. It is stored for 7 days after it was last sent back. Replayed reasoning counts as input tokens, mostly as cache reads, and appears in `usage` like other input. For models that check it (Claude Opus, Sonnet and Haiku 5.5 and later), the gateway asks Bedrock to drop rather than reject reasoning whose conversation changed, and if Bedrock still rejects a request because of replayed reasoning, the gateway sends it again once without it. Replay never makes a request fail. Administrators can turn it off; see [Models and AWS](/docs/administration/models-and-aws#reasoning-replay).
+
 ## Image input
 
 User messages can include images as `image_url` content parts. Send either a base64 data URL or a public `http(s)` URL:
