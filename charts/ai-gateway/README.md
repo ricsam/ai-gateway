@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-bf70783d923b2af6b2caae9a387eabe17c56a43a
+ghcr.io/ricsam/ai-gateway:sha-46d763e1a2508d9311342efec54fe52f26f5e5db
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -32,6 +32,15 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 ```
 
 See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, image pinning, bundled TimescaleDB, storage, and publication details.
+
+## Upgrading to 0.1.14
+
+This release adds migration `0007_reasoning_replay`, which the pre-upgrade migration Job applies before the new application starts. It creates the empty `reasoning_replay_entries` table and adds `application_settings.reasoning_replay_enabled` (default `true`): it is fast, needs no backfill and changes no existing data. Upgrading from 0.1.10 through 0.1.13 needs no special steps (from 0.1.10 or 0.1.11, the pre-upgrade migration Job also applies the 0.1.12 migration described below). Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below. The migration only adds a table and a column, so an earlier application image still runs against the upgraded database.
+
+- Chat Completions now send Claude's earlier reasoning back to Bedrock. OpenAI-format clients never receive thinking signatures, so the gateway stores the reasoning blocks of each Claude response with thinking on and puts them back, unmodified and in place, into the matching assistant turns of later requests, as long as the conversation before them is unchanged. In tool loops Claude continues from its earlier reasoning instead of working the problem out again at every step. Replayed reasoning counts as input tokens, mostly cache reads. See [Reasoning across turns](https://github.com/ricsam/ai-gateway/blob/main/docs/chat-completions.mdx#reasoning-across-turns).
+- Stored reasoning belongs to one user and upstream model, is kept for 7 days after its last use and is deleted with its user. A long max-effort step can store up to about a megabyte, so the table grows with thinking-heavy usage. **Admin → Brand & AWS → Inference → Send Claude's earlier reasoning back** (or `reasoningReplayEnabled` at `/management/v1/settings`) turns replay off and deletes what is stored.
+- Replay never fails a request: on Claude Opus, Sonnet and Haiku 5.5 and later the gateway sends `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the `thinking-binding-controls-2026-08-01` beta, and a request Bedrock rejects is sent once more without replayed reasoning.
+- New log lines: `[OpenAI Proxy] Reasoning replay: request=…` for each request with thinking (replayed, missing and stale turns), `Reasoning stored:`, `Reasoning replay rejected, retrying without it` and `Bedrock dropped replayed reasoning`.
 
 ## Upgrading to 0.1.13
 
