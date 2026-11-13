@@ -19,6 +19,7 @@
     "ledger:verify": "bun scripts/verify-ledger-usage.ts",
     "throughput:verify": "bun scripts/verify-throughput.ts",
     "reasoning:verify": "bun scripts/verify-reasoning-replay.ts",
+    "reasoning:ab": "bun scripts/reasoning-replay-ab.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts"
   },
   "dependencies": {

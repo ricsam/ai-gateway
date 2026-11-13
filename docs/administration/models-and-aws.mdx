@@ -91,6 +91,8 @@ Each request with thinking logs one line, for example:
 
 `missing` counts assistant turns without stored reasoning (turns without thinking, or reasoning that expired), `stale` counts stored reasoning left out because the conversation before it changed, and `unchained` counts reasoning left out because a turn before it is missing. Retries without replay log `Reasoning replay rejected, retrying without it`, and blocks Bedrock reports as dropped log `Bedrock dropped replayed reasoning` (non-streaming requests only; ConverseStream does not report them).
 
+To measure the effect on a deployment, `bun run reasoning:ab` runs a multi-step tool task and sends every step twice: with the key of a user whose reasoning is replayed, and with the key of a second user, for whom nothing is stored. It reports output tokens, time and settled cost per step. Set `GATEWAY_URL`, `AI_GATEWAY_API_KEY` and `AI_GATEWAY_CONTROL_API_KEY`; it spends real credits, so cap it with `--max-cost`.
+
 ## Region selection
 
 A model's region override wins over the default region. The runtime caches Bedrock clients by configuration revision and region. Saving AWS settings invalidates the client cache so new requests use the current credentials.
