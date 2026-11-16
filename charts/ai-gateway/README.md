@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-46d763e1a2508d9311342efec54fe52f26f5e5db
+ghcr.io/ricsam/ai-gateway:sha-f62fbbc3a3cb84ba4f4af8e509ad452cbeddb8bc
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -32,6 +32,26 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 ```
 
 See the Mintlify deployment guide in `docs/deployment/helm.mdx` for Ingress, image pinning, bundled TimescaleDB, storage, and publication details.
+
+## Manage the gateway with kubectl
+
+The image includes `aigctl`, the management CLI. Run it in the gateway pod:
+
+```bash
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl --help
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl setup init --username admin --email admin@example.com
+```
+
+Inside the container aigctl uses the pod's own database access, so anyone allowed to exec into the gateway's pods can administer it. See [Management CLI](https://github.com/ricsam/ai-gateway/blob/main/docs/administration/cli.mdx).
+
+## Upgrading to 0.1.15
+
+This release adds no database migration; upgrading from 0.1.10 through 0.1.14 needs no special steps (from 0.1.10 or 0.1.11, the pre-upgrade migration Job still applies the 0.1.12 migration, and from 0.1.13 or earlier the 0.1.14 migration, described below). Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- The image includes `aigctl`, a management CLI for users, groups, inference and management keys, credits, settings, branding, AWS credentials, login providers, audit history, usage and analytics: `kubectl exec -it deploy/<release>-ai-gateway -- aigctl users list`. Inside the container it works on the gateway's database directly, so it needs no management key; its changes are audited as `cli aigctl@<pod>`. Treat `pods/exec` on the namespace as administrative access to the gateway. With `--server` and a management key, it also works against the management API from elsewhere.
+- `aigctl setup init` completes first-boot setup from inside the cluster, so a new installation never has to expose an open `/setup` page. `helm install` now prints the command.
+- `GET /management/v1/users?search=` matches the username and display name as well as the email, and treats `%` and `_` literally.
+- The management API answers `409 conflict` instead of `500` when a name is already taken (for example a duplicate group name), and its error log no longer includes query parameters.
 
 ## Upgrading to 0.1.14
 
