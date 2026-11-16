@@ -4,17 +4,13 @@ import env from "./env";
 import { authenticateRequest } from "./auth";
 import { extractBearerToken, hashApiKey } from "./api-key-utils";
 import { managementApiKeysTable, userTable } from "./schema";
+import type { ManagementScope } from "../shared/management-scopes";
 
-export const MANAGEMENT_SCOPES = [
-  "users.read", "users.write", "groups.read", "groups.write", "auth.read", "auth.write",
-  "branding.read", "branding.write", "aws.read", "aws.write", "models.read", "models.write",
-  "settings.read", "settings.write", "usage.read", "management-keys.read", "management-keys.write", "audit.read",
-  "api-keys.read", "api-keys.write",
-] as const;
-export type ManagementScope = typeof MANAGEMENT_SCOPES[number];
+export { MANAGEMENT_SCOPES, type ManagementScope } from "../shared/management-scopes";
 
 export interface ManagementPrincipal {
-  actorType: "user" | "management_key";
+  /** `cli` is aigctl running inside the gateway container, authorized by its access to the deployment's database. */
+  actorType: "user" | "management_key" | "cli";
   actorId: string;
   userId: string | null;
   scopes: ReadonlySet<string>;
@@ -32,6 +28,12 @@ function assertOrigin(request: Request): void {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
   const origin = request.headers.get("origin");
   if (!origin || new URL(origin).origin !== new URL(env.BASE_URL).origin) throw new ManagementAuthError(403, "invalid_origin", "Mutation origin is not allowed");
+}
+
+/** Checks a principal that in-process code has already established, such as aigctl's local operator. */
+export function requireScope(principal: ManagementPrincipal, scope: ManagementScope): ManagementPrincipal {
+  if (!hasScope(principal.scopes, scope)) throw new ManagementAuthError(403, "insufficient_scope", `Required scope: ${scope}`);
+  return principal;
 }
 
 export async function requireManagementPrincipal(request: Request, scope: ManagementScope): Promise<ManagementPrincipal> {

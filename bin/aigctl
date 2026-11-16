@@ -1,0 +1,6 @@
+#!/bin/sh
+# aigctl: the AI Gateway management CLI. The container image links it to
+# /usr/local/bin/aigctl, so `kubectl exec deploy/<release>-ai-gateway -- aigctl`
+# works. See docs/administration/cli.mdx.
+root=$(dirname "$(readlink -f "$0")")/..
+exec bun "$root/backend/cli/aigctl.ts" "$@"

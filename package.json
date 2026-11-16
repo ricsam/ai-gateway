@@ -20,7 +20,9 @@
     "throughput:verify": "bun scripts/verify-throughput.ts",
     "reasoning:verify": "bun scripts/verify-reasoning-replay.ts",
     "reasoning:ab": "bun scripts/reasoning-replay-ab.ts",
-    "admin:recover": "bun scripts/recover-admin-password.ts"
+    "admin:recover": "bun scripts/recover-admin-password.ts",
+    "aigctl": "bun backend/cli/aigctl.ts",
+    "cli:verify": "bun scripts/verify-cli.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "3.1003.0",

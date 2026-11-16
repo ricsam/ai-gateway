@@ -3,10 +3,10 @@ title: "First boot"
 description: "Prepare deployment secrets and safely create the initial administrator."
 ---
 
-An unconfigured installation exposes a one-time setup transaction at `/setup`. The first successful submission creates the initial local administrator, disables public registration, and permanently closes setup.
+An unconfigured installation exposes a one-time setup transaction at `/setup`. The first successful submission creates the initial local administrator, disables public registration, and permanently closes setup. In Kubernetes you can instead complete setup from inside the gateway container with [`aigctl setup init`](/docs/administration/cli#first-boot-without-an-open-setup-page), so `/setup` is never reachable from outside.
 
 <Warning>
-  Do not expose an unconfigured installation to the public internet. Complete setup through a protected tunnel or port-forward before enabling public Ingress.
+  Do not expose an unconfigured installation to the public internet. Complete setup with `aigctl setup init` or through a protected tunnel or port-forward before enabling public Ingress.
 </Warning>
 
 ## Required deployment values
@@ -40,10 +40,15 @@ Prefix the second value with `v1:` for `SETTINGS_ENCRYPTION_KEY`.
     Keep public Ingress disabled. Verify `/healthz` and `/readyz` through the private network.
   </Step>
   <Step title="Open a protected tunnel">
-    For Kubernetes, port-forward the Service and visit the local URL. For Compose, bind only to a trusted interface until setup is complete.
+    For Kubernetes, port-forward the Service and visit the local URL, or skip the tunnel and use `aigctl setup init` in the next step. For Compose, bind only to a trusted interface until setup is complete.
   </Step>
   <Step title="Create the first administrator">
-    Visit `/setup`, choose a username and strong password, and submit once.
+    Visit `/setup`, choose a username and strong password, and submit once. In Kubernetes, the same works without a browser:
+
+    ```bash
+    kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- \
+      aigctl setup init --username admin --email admin@example.com --name "Gateway Admin"
+    ```
   </Step>
   <Step title="Enable public access">
     Configure TLS at your ingress or edge, publish the application, then configure AWS and at least one model.
@@ -58,10 +63,18 @@ Do not rotate the encryption key by replacing the environment value. A safe rota
 
 ## Offline administrator recovery
 
-If an administrator is locked out but database access remains available:
+If an administrator is locked out, run [aigctl](/docs/administration/cli) in the gateway container. It asks for the new password, so the password stays out of the command line:
+
+```bash
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users set-password admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users update admin --role admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users enable admin
+```
+
+With only database access:
 
 ```bash
 DATABASE_URL=postgres://... bun run admin:recover -- username 'new-strong-password'
 ```
 
-This enables and promotes the user, replaces or creates the local credential, revokes sessions, and requires another password change at login. It does not reopen first-boot setup.
+Both enable and promote the user, replace or create the local credential, revoke sessions, and require another password change at login. Neither reopens first-boot setup.

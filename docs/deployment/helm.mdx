@@ -43,6 +43,14 @@ The chart pins a public, pre-built `ghcr.io/ricsam/ai-gateway:sha-<full-commit-s
     kubectl -n ai-gateway get pods,service,ingress
     ```
   </Step>
+  <Step title="Create the first administrator">
+    Complete first-boot setup from inside the cluster with the image's [management CLI](/docs/administration/cli), which asks for the password:
+
+    ```bash
+    kubectl -n ai-gateway exec -it deployment/ai-gateway-ai-gateway -- \
+      aigctl setup init --username admin --email admin@example.com --name "Gateway Admin"
+    ```
+  </Step>
 </Steps>
 
 To override the chart's pinned application build, select another published immutable image tag:
@@ -57,8 +65,19 @@ helm upgrade --install ai-gateway ai-gateway/ai-gateway \
 Main-branch builds publish `latest` and `sha-<full-commit-sha>`. Git tags pushed directly to GitHub also publish a matching image tag.
 
 <Warning>
-  Keep public Ingress disabled until you can complete `/setup` through a protected tunnel. The first successful setup request creates the initial administrator.
+  Until setup is complete, anyone who reaches `/setup` can create the initial administrator. Run `aigctl setup init` as soon as the rollout finishes, or keep public Ingress disabled until you have completed `/setup` through a protected tunnel.
 </Warning>
+
+## Manage the gateway with kubectl
+
+The image includes `aigctl`, which manages users, groups, keys, credits, settings, AWS credentials, login providers, usage and audit history from inside the pod, authorized by your access to it:
+
+```bash
+kubectl -n ai-gateway exec -it deployment/ai-gateway-ai-gateway -- aigctl users list
+kubectl -n ai-gateway exec -it deployment/ai-gateway-ai-gateway -- aigctl --help
+```
+
+See [Management CLI](/docs/administration/cli). Treat `pods/exec` permission on the namespace as full administrative access to the gateway.
 
 ## Use the bundled TimescaleDB
 

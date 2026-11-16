@@ -55,10 +55,11 @@ Use immutable image tags in production and run migrations before the application
 - Restrict AWS credentials to required Bedrock actions and resources.
 - Give automation management keys the smallest scope and an expiry.
 - Keep at least two enabled administrators.
-- Do not expose `/setup` before an operator can complete it.
+- Do not expose `/setup` before an operator can complete it; `aigctl setup init` completes it from inside the cluster.
+- Treat `pods/exec` on the gateway as full administrative access: [aigctl](/docs/administration/cli) in the container manages the gateway without a key.
 - Treat trusted-header mode as privileged network integration.
 - Review audit events and usage anomalies.
 
 ## Recovery
 
-Use `bun run admin:recover` with database access to restore a local administrator. If `SETTINGS_ENCRYPTION_KEY` is lost, encrypted AWS and login-provider settings cannot be decrypted; restore the key from backup or clear and reconfigure those settings through a controlled database recovery.
+Run `aigctl users set-password` in the gateway container, or `bun run admin:recover` with database access, to restore a local administrator (see [First boot](/docs/administration/first-boot#offline-administrator-recovery)). If `SETTINGS_ENCRYPTION_KEY` is lost, encrypted AWS and login-provider settings cannot be decrypted; restore the key from backup or clear and reconfigure those settings through a controlled database recovery.

@@ -1,0 +1,175 @@
+---
+title: "Management CLI"
+description: "Manage the gateway with aigctl from inside its container, or remotely with a management key."
+---
+
+`aigctl` is the gateway's command-line tool for administrators. It is installed in the container image, so with access to the cluster you can manage users, groups, keys, credits, settings, AWS credentials, login providers, usage and audit history through `kubectl exec`, without signing in to the web interface or creating a management key first.
+
+```bash
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users list
+```
+
+```text
+USERNAME   NAME            EMAIL               ROLE    ENABLED   BALANCE   MONTHLY   GROUPS
+admin      Gateway Admin   admin@example.com   admin   yes         $0.00     $0.00   -
+alice      Alice Smith     alice@example.com   user    yes        $42.10    $50.00   engineering
+```
+
+The Helm chart names the Deployment `<release>-ai-gateway`; `kubectl exec` picks one of its pods. Every command is an operation of the [management API](/docs/administration/management-api), with the same validation, safeguards (such as keeping the last enabled administrator) and audit events.
+
+## How aigctl is authorized
+
+Inside the container, aigctl works on the gateway's database directly, with the container's `DATABASE_URL` and `SETTINGS_ENCRYPTION_KEY`, and needs no management key. Whoever can `kubectl exec` into the gateway can already read those values, so the CLI gives no access beyond what pod access already has.
+
+<Warning>
+  Treat `pods/exec` on the gateway's namespace as full administrative access to the gateway, and grant it only to its operators.
+</Warning>
+
+Changes made this way are audited with the actor `cli aigctl@<pod-name>` (shown in Admin → Security and by `aigctl audit list`). The Kubernetes API server's audit log records which cluster user ran the `exec`. To name yourself in the gateway's own audit history, add `--actor` (or set `AIGCTL_ACTOR`); the name is self-reported and recorded as `cli <name> via aigctl@<pod-name>`:
+
+```bash
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl --actor richard users disable bob
+```
+
+## Passwords and secrets
+
+aigctl never takes a password or secret as an argument: `kubectl exec` arguments are recorded in the Kubernetes API server's audit log and in your shell history. It asks for them instead, without echoing, when you run it with `kubectl exec -it`, or reads them from standard input with `kubectl exec -i`:
+
+```bash
+# Asks for the password twice
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users set-password alice
+
+# From a secret manager or a script
+printf '%s\n' "$PASSWORD" | kubectl -n ai-gateway exec -i deploy/ai-gateway-ai-gateway -- \
+  aigctl users set-password alice --password-stdin
+
+# Or let aigctl generate one; it is printed once
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users set-password alice --generate-password
+```
+
+Created keys and generated passwords are the only output on standard output (the explanation goes to standard error), so a shell variable captures exactly the secret. Leave out `-t` here: with a terminal, `kubectl exec` merges standard error into standard output.
+
+```bash
+KEY=$(kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl api-keys create alice --name ci --expires 90d)
+```
+
+`--password-stdin` and `aws set-credentials --stdin` read a pipe and accept a single line per value; on a terminal, leave them out and aigctl asks without echoing.
+
+Destructive commands (deleting users, groups or login providers, revoking keys, clearing AWS credentials, the monthly reset and disabling whole groups) ask for confirmation on a terminal. Without one, pass `--yes`.
+
+## First boot without an open setup page
+
+A new installation can be set up entirely from inside the cluster, so `/setup` is never reachable from the internet:
+
+```bash
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- \
+  aigctl setup init --username admin --email admin@example.com --name "Gateway Admin"
+```
+
+`aigctl setup init` does what the `/setup` page does: it creates the first local administrator and permanently closes setup. `aigctl setup status` shows whether setup is still open. While it is, `aigctl users create` refuses to run, because only setup closes it for good.
+
+## Common tasks
+
+Commands that take a user accept its ID, username or email; groups take an ID or name, and login providers an ID or key. The examples show the aigctl part: run them after `kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway --`, or in a shell in the container (`kubectl exec -it ... -- sh`).
+
+<CodeGroup>
+```bash Users
+aigctl users list --search example.com
+aigctl users get alice
+aigctl users create --username alice --email alice@example.com --name "Alice Smith" --monthly-credits 50
+aigctl users update alice --role admin
+aigctl users update alice --balance 25          # recorded as an administrator adjustment
+aigctl users disable alice                       # signs out, blocks sign-in and inference keys
+aigctl users enable alice
+aigctl users set-groups alice engineering research
+aigctl users delete alice
+```
+
+```bash Inference keys
+aigctl api-keys list alice
+aigctl api-keys create alice --name laptop
+aigctl api-keys create alice --name ci --scope ai.invoke,models.read --expires 90d --replace
+aigctl api-keys revoke alice laptop
+```
+
+```bash Groups and credits
+aigctl groups create engineering --description "Product engineering"
+aigctl groups add-member engineering alice bob@example.com
+aigctl groups get engineering
+aigctl groups bulk-update engineering research --monthly-credits 100
+aigctl groups bulk-update contractors --disable
+aigctl credits monthly-reset
+```
+
+```bash Management keys
+aigctl management-keys create --name provisioning --scope 'users.*,api-keys.write' --expires 90d
+aigctl management-keys create --name reporting --scope '*.read'
+aigctl management-keys list
+aigctl management-keys revoke provisioning
+```
+
+```bash Configuration
+aigctl aws set-credentials --access-key-id AKIA... --region us-east-1   # asks for the secret key
+aigctl aws test
+aigctl models list
+aigctl settings set --remote-image-urls off
+aigctl branding set --product-name "Acme AI" --primary-color "#0f766e"
+aigctl branding upload logo - < logo.png        # with kubectl exec -i
+aigctl auth-providers create -f - < entra.json  # with kubectl exec -i
+aigctl auth-providers test entra
+aigctl auth-providers enable entra
+```
+
+```bash Reports
+aigctl audit list --limit 100
+aigctl usage summary --days 7 --group engineering
+aigctl usage events --user alice
+aigctl analytics throughput --range week
+aigctl analytics users --range month
+```
+</CodeGroup>
+
+`aigctl <command> --help` lists a command's subcommands and options. To recover an administrator who is locked out:
+
+```bash
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users set-password admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users update admin --role admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users enable admin
+```
+
+For anything without a dedicated command, `aigctl api` sends a request to the management API and prints the JSON response:
+
+```bash
+aigctl api GET '/analytics/tokens?timeRange=day'
+aigctl api PATCH /users/<id> -d '{"defaultMonthlyCredits": 100}'
+```
+
+Model, alias and app configuration is edited in **Admin → Models**; the management API and aigctl list models.
+
+## Output formats
+
+| Option | Output |
+| --- | --- |
+| `-o table` (default) | Aligned columns; long values are shortened with … |
+| `-o wide` | More columns, such as IDs, and full values |
+| `-o json` | The management API's data, for scripts |
+
+Exit codes are `0` for success, `1` when the gateway refuses a change, a request fails or you decline a confirmation, `2` for wrong arguments and `130` when you cancel a prompt with Ctrl-C or Ctrl-D. Set `AIGCTL_DEBUG=1` to see the stack trace of an unexpected error.
+
+Values that users or login providers control, such as display names, are printed with control characters shown as `\uXXXX` escapes, so they cannot send escape sequences to your terminal; `-o json` keeps them exact.
+
+## Use aigctl outside the cluster
+
+With a management key, aigctl works against any gateway's management API over HTTPS. The key's scopes limit what it can do, and its changes are audited as that key. `aigctl setup` and `--actor` only apply inside the container. aigctl warns when `--server` is plain HTTP to a host other than this machine, because the key would travel unencrypted.
+
+```bash
+export AI_GATEWAY_MANAGEMENT_KEY=aigm_...
+aigctl --server https://gateway.example.com users list
+```
+
+`AI_GATEWAY_URL` can replace `--server`. Run aigctl from the container image, or from a checkout of the repository with `bun run aigctl -- <command>`:
+
+```bash
+docker run --rm -e AI_GATEWAY_MANAGEMENT_KEY ghcr.io/ricsam/ai-gateway:sha-<full-commit-sha> \
+  aigctl --server https://gateway.example.com audit list
+```

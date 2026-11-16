@@ -16,6 +16,8 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000
 COPY --from=build --chown=bun:bun /app /app
+# The management CLI: kubectl exec deploy/<release>-ai-gateway -- aigctl --help
+RUN chmod 0755 /app/bin/aigctl && ln -s /app/bin/aigctl /usr/local/bin/aigctl
 USER bun
 EXPOSE 3000
 CMD ["bun", "scripts/serve.ts", "--host", "0.0.0.0", "--port", "3000", "--production"]

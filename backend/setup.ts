@@ -4,6 +4,7 @@ import { count, eq, sql } from "drizzle-orm";
 import db from "./db";
 import { auth } from "./auth";
 import { accountTable, auditEventsTable, installationTable, userTable } from "./schema";
+import { passwordPolicyError } from "./password-policy";
 
 export interface SetupInput {
   username: string;
@@ -31,8 +32,8 @@ export function validateLocalAccount(input: SetupInput): SetupInput {
   if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username)) throw new SetupError("Username must be 3-40 letters, numbers, dots, underscores, or hyphens");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) throw new SetupError("A valid email address is required");
   if (!name || name.length > 100) throw new SetupError("Display name is required and must not exceed 100 characters");
-  if (input.password.length < 12 || input.password.length > 128) throw new SetupError("Password must be between 12 and 128 characters");
-  if (!/[a-z]/i.test(input.password) || !/\d/.test(input.password)) throw new SetupError("Password must contain a letter and a number");
+  const passwordError = passwordPolicyError(input.password);
+  if (passwordError) throw new SetupError(passwordError);
   return { username, email, name, password: input.password };
 }
 
@@ -43,7 +44,8 @@ export async function getSetupStatus(): Promise<{ required: boolean; completedAt
   return { required, completedAt: installation?.setupCompletedAt?.toISOString() ?? null };
 }
 
-export async function createInitialAdministrator(input: SetupInput, requestId: string): Promise<{ id: string; username: string; email: string }> {
+/** `auditMetadata` adds to the setup audit event, such as the aigctl that completed setup. */
+export async function createInitialAdministrator(input: SetupInput, requestId: string, auditMetadata: Record<string, unknown> = {}): Promise<{ id: string; username: string; email: string }> {
   const normalized = validateLocalAccount(input);
   const passwordHash = await hashPassword(normalized.password);
   return db.transaction(async (tx) => {
@@ -65,7 +67,7 @@ export async function createInitialAdministrator(input: SetupInput, requestId: s
     await tx.update(installationTable).set({ setupCompletedAt: now, revision: installation.revision + 1, updatedAt: now }).where(eq(installationTable.id, "main"));
     await tx.insert(auditEventsTable).values({
       actorType: "setup", actorId: userId, action: "installation.setup.completed", targetType: "user", targetId: userId, requestId,
-      metadata: { username: normalized.username, email: normalized.email },
+      metadata: { ...auditMetadata, username: normalized.username, email: normalized.email },
     });
     return { id: userId, username: normalized.username, email: normalized.email };
   });

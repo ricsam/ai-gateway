@@ -13,7 +13,7 @@ BETTER_AUTH_SECRET=<strong random secret>
 SETTINGS_ENCRYPTION_KEY=v1:<base64 of exactly 32 random bytes>
 ```
 
-Run migrations, start the service, and visit `/setup`. The first successful visitor creates the initial local administrator and permanently closes setup. **Do not expose an unconfigured installation's Ingress until an operator can immediately complete setup.** A safe rollout creates the database and private service first, completes setup through a protected tunnel/port-forward, then enables public Ingress.
+Run migrations, start the service, and visit `/setup`, or complete setup from inside the cluster with `aigctl setup init` (see [Management CLI](#management-cli)). The first successful setup creates the initial local administrator and permanently closes setup. **Do not expose an unconfigured installation's Ingress until an operator can immediately complete setup.** A safe rollout creates the database and private service first, completes setup through `aigctl setup init` or a protected tunnel/port-forward, then enables public Ingress.
 
 The encryption key protects OIDC, trusted-header, and AWS secret material. Back it up with the database; losing it makes encrypted settings unrecoverable. Do not rotate it by replacing the environment value alone—decrypt/re-encrypt all envelopes in a maintenance operation first.
 
@@ -29,6 +29,19 @@ curl https://gateway.example.com/management/v1/users \
 Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, inference settings, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
 
 The analytics dashboards and `GET /management/v1/analytics/throughput` report the values a Bedrock quota increase request asks for: steady-state and peak tokens and requests per minute, and average input and output tokens per request, overall and per upstream model. Tokens follow Bedrock's quota accounting (input, cache writes and output; no cache reads or output burndown). See [Throughput and Bedrock quotas](docs/administration/models-and-aws.mdx#throughput-and-bedrock-quotas).
+
+## Management CLI
+
+The container image includes `aigctl`, a command-line client for every management API operation. Inside the gateway container it works on the gateway's database directly, so cluster operators manage the gateway with `kubectl exec` and no management key; changes are audited as `cli aigctl@<pod>`:
+
+```sh
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users list
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl setup init --username admin --email admin@example.com
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users create --username alice --email alice@example.com --monthly-credits 50
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl management-keys create --name ci --scope 'users.*' --expires 90d
+```
+
+Commands cover first-boot setup, users and passwords, inference and management keys, groups, credits, settings, branding, AWS credentials, login providers, audit history, usage and analytics, plus `aigctl api` for raw requests. Passwords and secrets are read from a hidden prompt or standard input, never from arguments, which `kubectl exec` records in the Kubernetes audit log. Because pod access already exposes the database credentials, treat `pods/exec` on the gateway as full administrative access. With `--server https://gateway.example.com` and `AI_GATEWAY_MANAGEMENT_KEY`, the same commands use a gateway's management API from anywhere. See [Management CLI](docs/administration/cli.mdx).
 
 ## Inference API
 
@@ -106,13 +119,21 @@ The default image is pinned for reproducible deployments; set `image.tag=sha-<fu
 
 Back up TimescaleDB and `SETTINGS_ENCRYPTION_KEY` together. Restore them as a pair and retain `BETTER_AUTH_SECRET` if existing sessions should remain valid. Use Timescale-aware logical backups (`pg_dump`/`pg_restore` with the extension installed at the same compatible version) or a storage/database snapshot that includes extension catalogs. Restore into an empty database, install TimescaleDB first, restore, then run migrations and verify `timescaledb_information.hypertables`, all three `credit_events_*` continuous aggregates (real-time, with `materialized_only` false), refresh jobs, and the compression policy. Test restores regularly; do not reset by dropping extension-owned views individually.
 
-With database access, recover a local administrator offline:
+With cluster access, recover a local administrator from inside the gateway container (aigctl asks for the password):
+
+```sh
+kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users set-password admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users update admin --role admin
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl users enable admin
+```
+
+With only database access, recover it offline:
 
 ```sh
 DATABASE_URL=postgres://... bun run admin:recover -- username 'new-strong-password'
 ```
 
-This promotes/enables the user, replaces or creates its credential account, revokes sessions, and requires another password change after login. It does not reopen first-boot setup.
+Both promote/enable the user, replace or create its credential account, revoke sessions, and require another password change after login. Neither reopens first-boot setup.
 
 Rotate AWS keys by saving replacement credentials in Admin → Brand & AWS, testing a configured model, then revoking the former key in AWS. Clearing credentials makes enabled models unavailable. Secret values and sensitive test errors are excluded from API responses and audit metadata.
 
@@ -129,6 +150,7 @@ TIMESCALE_ADMIN_URL=postgres://... bun run users:verify-access
 TIMESCALE_ADMIN_URL=postgres://... bun run ledger:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run throughput:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run reasoning:verify
+TIMESCALE_ADMIN_URL=postgres://... bun run cli:verify
 
 docker compose config
 helm lint charts/ai-gateway
