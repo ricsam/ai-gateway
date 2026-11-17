@@ -1,5 +1,6 @@
 import { ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import db from "./db";
 import { generateUserApiKey, hashApiKey, userApiKeyScopes } from "./api-key-utils";
 import { getBedrockClient, invalidateBedrockClients, ProviderNotConfiguredError } from "./bedrock";
@@ -9,7 +10,7 @@ import { ManagementAuthError, MANAGEMENT_SCOPES, requireManagementPrincipal, req
 import { fetchOidcDiscoveryMetadata, oidcDiscoveryUrl, requiresAuthorizationResponseIssuer } from "./oidc-metadata";
 import {
   apiKeysTable, applicationSettingsTable, auditEventsTable, authProvidersTable, awsConfigurationTable, brandingAssetsTable,
-  creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, modelsTable, reasoningReplayEntriesTable, userTable,
+  creditEventsTable, groupMembersTable, groupsTable, managementApiKeysTable, reasoningReplayEntriesTable, userTable,
 } from "./schema";
 import { applySecretWrite, maskAccessKey, secretStatus, type SecretWrite } from "./settings-crypto";
 import resetCredits from "./jobs/reset-credits";
@@ -19,6 +20,11 @@ import {
   validateBucketSize, validateTimeRange, type AnalyticsScope,
 } from "./analytics-service";
 import { getThroughput } from "./throughput-service";
+import {
+  CatalogError, createAlias, createApp, createModel, deleteCatalogEntry, deleteModel, loadCatalogView, patchAlias, patchApp, updateModel,
+} from "./model-alias-service";
+import { aliasCreateSchema, aliasPatchSchema, appCreateSchema, appPatchSchema } from "../shared/alias-contract";
+import { modelCreateSchema, modelUpdateSchema } from "../shared/model-contract";
 import { bulkUpdateUsersByGroups, createLocalUser, deleteUser, setUserGroups, setUserPassword, updateUser } from "./user-service";
 import { METERED_USAGE_EVENT_TYPES } from "./usage-contract";
 
@@ -67,6 +73,11 @@ function secretWrite(value: unknown): SecretWrite | undefined {
 }
 
 const managementSecurity = [{ cookieSession: [] }, { managementKey: [] }];
+/** An OpenAPI request body from the zod schema that validates it. */
+function jsonBody(schema: z.ZodType) {
+  const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
+  return { required: true, content: { "application/json": { schema: jsonSchema } } };
+}
 const OPENAPI = {
   openapi: "3.1.0", info: { title: "AI Gateway Management API", version: "1.0.0" },
   servers: [{ url: "/management/v1" }], security: managementSecurity,
@@ -128,7 +139,33 @@ const OPENAPI = {
     "/settings": { get: { summary: "Get runtime inference settings" }, put: { summary: "Update runtime inference settings (shares the branding revision)" } },
     "/aws": { get: { summary: "Get redacted AWS configuration" }, put: { summary: "Update AWS configuration" } },
     "/aws/test": { post: { summary: "Test configured AWS credentials against a Bedrock model" } },
-    "/models": { get: { summary: "List configured models" } },
+    "/models": {
+      get: { summary: "List configured models", description: "Ordered by name. `available` is true when API clients can use the model: it is enabled and /v1/models lists it." },
+      post: { summary: "Create a model", description: "`modelId` is the Bedrock model ID, inference profile or ARN, and also the model's public ID. Prices are USD per million tokens.", requestBody: jsonBody(modelCreateSchema.strict()) },
+    },
+    "/models/{id}": {
+      get: { summary: "Get a model" },
+      patch: { summary: "Change a model's fields", description: "Send only the fields to change; null clears an optional field (cache prices, context window, description, region, default effort).", requestBody: jsonBody(modelUpdateSchema.strict()) },
+      delete: { summary: "Delete a model that no alias references" },
+    },
+    "/model-aliases": {
+      get: { summary: "List model aliases", description: "`available` is true when /v1/models lists the alias: it and its upstream model are enabled and its reasoning settings suit the upstream model." },
+      post: { summary: "Create a model alias", description: "`modelId` is the alias's public ID; `upstreamModelId` is the ID of a configured model. With `reasoningSource: \"alias\"` (pinned) the alias sets `thinking` and `effort`; with `\"client\"` requests choose `reasoning_effort`.", requestBody: jsonBody(aliasCreateSchema.strict()) },
+    },
+    "/model-aliases/{id}": {
+      get: { summary: "Get a model alias" },
+      patch: { summary: "Change a model alias's fields", requestBody: jsonBody(aliasPatchSchema.strict()) },
+      delete: { summary: "Delete a model alias that no app tier maps to" },
+    },
+    "/model-apps": {
+      get: { summary: "List apps", description: "Each tier's public ID is `<app>-<tier>`; `available` is true when /v1/models lists it." },
+      post: { summary: "Create an app", description: "Tiers default to min, low, medium, high and max, unmapped. Map a tier by setting its `aliasId` to an alias ID.", requestBody: jsonBody(appCreateSchema.strict()) },
+    },
+    "/model-apps/{id}": {
+      get: { summary: "Get an app" },
+      patch: { summary: "Change an app's fields", description: "`tiers` replaces the whole tier list.", requestBody: jsonBody(appPatchSchema.strict()) },
+      delete: { summary: "Delete an app" },
+    },
     "/management-keys": { get: { summary: "List management keys" }, post: { summary: "Create management key" } },
     "/management-keys/{id}": { delete: { summary: "Revoke a management key" } },
     "/audit-events": { get: { summary: "List audit events" } },
@@ -429,10 +466,40 @@ export async function handleManagementApi(request: Request, options: ManagementA
       } catch (error) { const message = error instanceof ProviderNotConfiguredError ? error.message : "Bedrock connection test failed"; await db.update(awsConfigurationTable).set({ lastTestedAt: testedAt, lastTestSucceeded: false, lastTestMessage: message }).where(eq(awsConfigurationTable.id, "main")); await audit(principal, requestId, "aws.test.failed", "aws_configuration", "main", { modelId: data.modelId }); return failure(requestId, 400, "aws_test_failed", message); }
     }
 
-    if (path === "/models" && request.method === "GET") {
-      await authorize("models.read");
-      const models = await db.select().from(modelsTable).orderBy(asc(modelsTable.name));
-      return response(requestId, { data: models });
+    const catalogMatch = path.match(/^\/(models|model-aliases|model-apps)(?:\/([^/]+))?$/);
+    if (catalogMatch) {
+      // Models, aliases and apps: the public model catalog (/v1/models).
+      const kind = ({ models: "model", "model-aliases": "alias", "model-apps": "app" } as const)[catalogMatch[1] as "models" | "model-aliases" | "model-apps"];
+      const label = { model: "Model", alias: "Alias", app: "App" }[kind];
+      const id = catalogMatch[2] === undefined ? undefined : decodeURIComponent(catalogMatch[2]);
+      const entries = async () => { const view = await loadCatalogView(); return kind === "model" ? view.models : kind === "alias" ? view.aliases : view.apps; };
+      const entry = async (entryId: string) => (await entries() as { id: string }[]).find((candidate) => candidate.id === entryId) ?? null;
+      if (request.method === "GET" && id === undefined) {
+        await authorize("models.read");
+        return response(requestId, { data: await entries() });
+      }
+      if (request.method === "GET") {
+        await authorize("models.read"); const found = await entry(id!);
+        return found ? response(requestId, { data: found }) : failure(requestId, 404, "not_found", `${label} not found`);
+      }
+      if (request.method === "POST" && id === undefined) {
+        const principal = await authorize("models.write"); const input = await body<unknown>(request);
+        const created = kind === "model" ? await createModel(input, principal, requestId) : kind === "alias" ? await createAlias(input, principal, requestId) : await createApp(input, principal, requestId);
+        return response(requestId, { data: await entry(created.id) }, 201);
+      }
+      if (request.method === "PATCH" && id !== undefined) {
+        const principal = await authorize("models.write"); const input = await body<unknown>(request);
+        if (kind === "model") { if (!await updateModel(id, input, principal, requestId)) return failure(requestId, 404, "not_found", "Model not found"); }
+        else if (kind === "alias") await patchAlias(id, input, principal, requestId);
+        else await patchApp(id, input, principal, requestId);
+        return response(requestId, { data: await entry(id) });
+      }
+      if (request.method === "DELETE" && id !== undefined) {
+        const principal = await authorize("models.write");
+        if (kind === "model") { if (!await deleteModel(id, principal, requestId)) return failure(requestId, 404, "not_found", "Model not found"); }
+        else await deleteCatalogEntry(kind, id, principal, requestId);
+        return response(requestId, { success: true });
+      }
     }
 
     if (path === "/auth/providers" && request.method === "GET") {
@@ -586,13 +653,18 @@ export async function handleManagementApi(request: Request, options: ManagementA
     return failure(requestId, 404, "not_found", "Management endpoint not found");
   } catch (error) {
     if (error instanceof ManagementAuthError) return failure(requestId, error.status, error.code, error.message);
+    if (error instanceof CatalogError) return failure(requestId, error.status, error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : "validation_error", error.message);
     if (error instanceof SyntaxError) return failure(requestId, 400, "invalid_json", "Request body must be valid JSON");
+    if (error instanceof URIError) return failure(requestId, 400, "invalid_path", "The request path is not valid percent-encoding");
     // Drizzle wraps database errors: its message holds the query and its parameters,
     // which must not reach logs or clients; the cause has the database's reason.
     const databaseError = error instanceof Error && error.cause && typeof error.cause === "object" ? error.cause as { code?: unknown; message?: unknown } : undefined;
-    const message = typeof databaseError?.message === "string" ? databaseError.message : error instanceof Error ? error.message : "Request failed";
+    const message = (typeof databaseError?.message === "string" ? databaseError.message : error instanceof Error ? error.message : "Request failed").replace(/\nparams:[\s\S]*$/, "");
     if (databaseError?.code === "23505" || /unique|duplicate/i.test(message)) return failure(requestId, 409, "conflict", "A resource with that normalized identifier already exists");
     if (!databaseError && /final enabled administrator|Credits cannot|Password must|Username must|email address|required|Invalid secret|Select at least|bulk update|selected groups do not exist|Display name|must be a boolean|Role must|Invalid time range|Invalid bucket size|either userId|scopeId/i.test(message)) return failure(requestId, 400, "validation_error", message);
+    // aigctl in the gateway container already has the database: tell its operator
+    // what failed instead of logging it into their terminal.
+    if (trusted) return failure(requestId, 500, "internal_error", `Internal server error: ${message}`);
     console.error("Management API error", { requestId, path, message }); return failure(requestId, 500, "internal_error", "Internal server error");
   }
 }

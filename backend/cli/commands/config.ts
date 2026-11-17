@@ -1,52 +1,11 @@
 import { inspectImage } from "../../branding-assets";
 import { call, type ManagementClient } from "../client";
-import { CliError, UsageError } from "../errors";
+import { ApiError, CliError, UsageError } from "../errors";
 import type { Command, CommandGroup } from "../framework";
-import { confirm, optionalBoolean, readPipedSecret, stringOption, YES_OPTION } from "../inputs";
-import { formatCredits, formatInteger, formatTime, printJson, printList, renderDetails, type Column } from "../output";
+import { confirm, optionalBoolean, parseRegion, readPipedSecret, stringOption, YES_OPTION } from "../inputs";
+import { formatTime, printJson, renderDetails } from "../output";
+import { listModels, type Model } from "../resources";
 import { report, requiredOption } from "./common";
-
-interface Model {
-  id: string; modelId: string; name: string; description: string | null; provider: string;
-  inputPricePerMTok: number; outputPricePerMTok: number; cacheReadPricePerMTok: number | null;
-  cacheWrite5mPricePerMTok: number | null; cacheWrite1hPricePerMTok: number | null;
-  contextWindow: number | null; maxOutputTokens: number; thinking: boolean; reasoningMode: string;
-  defaultReasoningEffort: string | null; managedCache: boolean; region: string | null; enabled: boolean;
-}
-
-const MODEL_COLUMNS: Column<Model>[] = [
-  { header: "ID", value: (model) => model.id, wide: true },
-  { header: "NAME", value: (model) => model.name, maxWidth: 32 },
-  { header: "MODEL-ID", value: (model) => model.modelId },
-  { header: "ENABLED", value: (model) => model.enabled },
-  { header: "INPUT/MTOK", value: (model) => formatCredits(model.inputPricePerMTok), align: "right" },
-  { header: "OUTPUT/MTOK", value: (model) => formatCredits(model.outputPricePerMTok), align: "right" },
-  { header: "CACHE-READ/MTOK", value: (model) => formatCredits(model.cacheReadPricePerMTok), align: "right", wide: true },
-  { header: "REGION", value: (model) => model.region ?? "default" },
-  { header: "THINKING", value: (model) => model.thinking },
-  { header: "REASONING", value: (model) => model.reasoningMode, wide: true },
-  { header: "DEFAULT-EFFORT", value: (model) => model.defaultReasoningEffort, wide: true },
-  { header: "MANAGED-CACHE", value: (model) => model.managedCache },
-  { header: "CONTEXT", value: (model) => formatInteger(model.contextWindow), align: "right", wide: true },
-  { header: "MAX-OUTPUT", value: (model) => formatInteger(model.maxOutputTokens), align: "right", wide: true },
-];
-
-async function listModels(client: ManagementClient): Promise<Model[]> {
-  return (await call<{ data: Model[] }>(client, "GET", "/models")).data;
-}
-
-export const modelsGroup: CommandGroup = {
-  name: "models",
-  summary: "Configured Bedrock models and their prices",
-  details: "Models, aliases and apps are edited in Admin → Models; the management API lists models.",
-  commands: [{
-    name: "list",
-    summary: "List configured models",
-    async run(context) {
-      printList(context.io, context.output, await listModels(await context.client()), MODEL_COLUMNS, "No models are configured.");
-    },
-  }],
-};
 
 interface Settings { revision: number; remoteImageUrlsEnabled: boolean; reasoningReplayEnabled: boolean }
 
@@ -236,12 +195,26 @@ function awsDetails(aws: AwsConfiguration): string {
   ]);
 }
 
-const REGION = /^[a-z]{2}(-[a-z0-9]+)+$/;
-
 function region(value: string, flag?: string): string {
-  const text = value.trim();
-  if (!REGION.test(text)) throw new UsageError(`${flag ? `--${flag}` : "The region"} must be an AWS region such as us-east-1 or eu-west-1`);
-  return text;
+  return parseRegion(flag, value);
+}
+
+/** Configured models for aws test, or null when the key lacks models.read (raw Bedrock IDs still work). */
+async function configuredModels(client: ManagementClient): Promise<Model[] | null> {
+  try { return await listModels(client); } catch (error) { if (error instanceof ApiError && error.status === 403) return null; throw error; }
+}
+
+/**
+ * The configured model with this ID, Bedrock model ID or unique name. Undefined
+ * when nothing matches, so the reference is tested as a Bedrock model ID; a name
+ * that several models share is an error rather than a guess.
+ */
+function findConfigured(models: readonly Model[], reference: string): Model | undefined {
+  const exact = models.find((model) => model.id === reference || model.modelId === reference);
+  if (exact) return exact;
+  const named = models.filter((model) => model.name.toLowerCase() === reference.toLowerCase());
+  if (named.length > 1) throw new CliError(`${named.length} models are named '${reference}'; use one of: ${named.map((model) => model.modelId).join(", ")}`);
+  return named[0];
 }
 
 export const awsGroup: CommandGroup = {
@@ -335,20 +308,22 @@ Replaces any previous key and session token. Test it with 'aigctl aws test'.`,
     {
       name: "test",
       summary: "Send a short Converse request to Bedrock with the stored credentials",
-      usage: "[bedrock-model-id]",
-      details: "Without a model ID, tests the first enabled configured model. The request costs a few tokens.",
+      usage: "[model]",
+      details: `<model> is a configured model (ID, Bedrock model ID or name), whose region is used, or any Bedrock model ID.
+Without it, tests the first enabled configured model. The request costs a few tokens.`,
       options: { region: { type: "string", value: "<region>", description: "Test this region instead of the model's or the default" } },
-      examples: ["aigctl aws test", "aigctl aws test anthropic.claude-sonnet-4-5-20250929-v1:0 --region us-east-1"],
+      examples: ["aigctl aws test", "aigctl aws test 'Claude Opus 4.6'", "aigctl aws test anthropic.claude-sonnet-4-5-20250929-v1:0 --region us-east-1"],
       async run(context) {
         const client = await context.client();
-        let modelId = context.args[0];
-        let modelRegion = stringOption(context.options.region);
-        if (!modelId) {
-          const model = (await listModels(client)).find((candidate) => candidate.enabled);
-          if (!model) throw new UsageError("No enabled model is configured: pass a Bedrock model ID", context.commandName);
-          modelId = model.modelId;
-          modelRegion ??= model.region ?? undefined;
-        }
+        const reference = context.args[0]?.trim();
+        const regionOption = stringOption(context.options.region);
+        let modelRegion = regionOption === undefined ? undefined : region(regionOption, "region");
+        const models = await configuredModels(client);
+        if (!reference && models === null) throw new UsageError("Pass a Bedrock model ID: finding a configured model needs a key with models.read", context.commandName);
+        const configured = reference ? findConfigured(models ?? [], reference) : models!.find((candidate) => candidate.enabled);
+        if (!reference && !configured) throw new UsageError("No enabled model is configured: pass a Bedrock model ID", context.commandName);
+        const modelId = configured?.modelId ?? reference!;
+        modelRegion ??= configured?.region || undefined;
         const result = await call<{ success: boolean; message: string }>(client, "POST", "/aws/test", { json: { modelId, region: modelRegion } });
         report(context, `${result.message} (${modelId}${modelRegion ? ` in ${modelRegion}` : ""}).`, { ...result, modelId, region: modelRegion ?? null });
       },

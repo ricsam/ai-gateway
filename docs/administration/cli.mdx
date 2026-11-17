@@ -3,7 +3,7 @@ title: "Management CLI"
 description: "Manage the gateway with aigctl from inside its container, or remotely with a management key."
 ---
 
-`aigctl` is the gateway's command-line tool for administrators. It is installed in the container image, so with access to the cluster you can manage users, groups, keys, credits, settings, AWS credentials, login providers, usage and audit history through `kubectl exec`, without signing in to the web interface or creating a management key first.
+`aigctl` is the gateway's command-line tool for administrators. It is installed in the container image, so with access to the cluster you can manage users, groups, keys, credits, models, aliases and apps, settings, AWS credentials, login providers, usage and audit history through `kubectl exec`, without signing in to the web interface or creating a management key first.
 
 ```bash
 kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users list
@@ -108,10 +108,22 @@ aigctl management-keys list
 aigctl management-keys revoke provisioning
 ```
 
+```bash Models, aliases and apps
+aigctl models create --model-id us.anthropic.claude-opus-4-6-v1 --name "Claude Opus 4.6" \
+  --input-price 5 --output-price 25 --cache-read-price 0.5 --thinking on --max-output-tokens 128000
+aigctl aws test "Claude Opus 4.6"
+aigctl models update "Claude Opus 4.6" --region eu-west-1 --default-effort high
+aigctl models list
+aigctl aliases create claude-opus-max-thinking --upstream "Claude Opus 4.6" --thinking on --effort max
+aigctl aliases create claude-opus --upstream "Claude Opus 4.6" --reasoning client
+aigctl apps create chat-app --map max=claude-opus-max-thinking --map high=claude-opus
+aigctl apps set-tier chat-app medium claude-opus   # map, add or (with -) unmap a tier
+aigctl models disable "Claude Opus 4.6"           # also hides its aliases and their app tiers
+```
+
 ```bash Configuration
 aigctl aws set-credentials --access-key-id AKIA... --region us-east-1   # asks for the secret key
 aigctl aws test
-aigctl models list
 aigctl settings set --remote-image-urls off
 aigctl branding set --product-name "Acme AI" --primary-color "#0f766e"
 aigctl branding upload logo - < logo.png        # with kubectl exec -i
@@ -144,7 +156,17 @@ aigctl api GET '/analytics/tokens?timeRange=day'
 aigctl api PATCH /users/<id> -d '{"defaultMonthlyCredits": 100}'
 ```
 
-Model, alias and app configuration is edited in **Admin → Models**; the management API and aigctl list models.
+## Models, aliases and apps
+
+The `models`, `aliases` and `apps` commands edit the model catalog that API clients see at `/v1/models`, as **Admin → Models**, **Model aliases** and **Apps** do. Changes apply to the next request; no restart is needed.
+
+- A **model** is a Bedrock model ID (or inference profile ID or ARN) with its prices, limits, region and reasoning controls. Its ID is also a public model ID. Commands take a model's ID, Bedrock model ID or name.
+- An **alias** is another public model ID for a model, such as `claude-opus-max-thinking`, with its own name and reasoning settings: pinned (the default), where the alias sets thinking and effort, or `--reasoning client`, where requests choose `reasoning_effort`. Prices and limits come from the model.
+- An **app** gives an application stable model IDs `<app>-<tier>`, such as `chat-app-max`, and maps each tier to an alias. Remapping a tier changes what its ID serves without changing the ID.
+
+`list` and `get` show whether each entry is **available**: it and everything it depends on are enabled, and `/v1/models` lists it. A model that an alias uses can't be deleted, and an alias that an app tier uses can't either; changes that would make an alias's pinned settings invalid for its model are refused. In `models create` and `models update`, prices are USD per million tokens, and `''` or `none` clears an optional price or the context window, `''` or `default` the region and the default effort.
+
+The management key scopes are `models.read` and `models.write`, for all three.
 
 ## Output formats
 

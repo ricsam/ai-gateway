@@ -61,6 +61,12 @@ export function formatInteger(value: number | null | undefined): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
+/** A price per million tokens: at least two decimals, and every significant one up to six ($0.075). */
+export function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`;
+}
+
 export function formatDecimal(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "-";
   return value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });

@@ -35,6 +35,67 @@ export interface AuthProvider {
   lastTestSucceeded: boolean | null; lastTestMessage: string | null; createdAt: string; updatedAt: string;
 }
 
+/** A configured Bedrock model. `available`: API clients can use it (/v1/models lists it). */
+export interface Model {
+  id: string; modelId: string; name: string; description: string | null; provider: string;
+  inputPricePerMTok: number; outputPricePerMTok: number; cacheReadPricePerMTok: number | null;
+  cacheWrite5mPricePerMTok: number | null; cacheWrite1hPricePerMTok: number | null;
+  contextWindow: number | null; maxOutputTokens: number; thinking: boolean; reasoningMode: string;
+  defaultReasoningEffort: string | null; managedCache: boolean; region: string | null; enabled: boolean;
+  available: boolean; createdAt: string; updatedAt: string;
+}
+
+/** A model alias: a public model ID with its own name and reasoning settings for an upstream model. */
+export interface Alias {
+  id: string; modelId: string; name: string; description: string | null; upstreamModelId: string;
+  reasoningSource: "alias" | "client"; thinking: boolean; effort: string | null; enabled: boolean;
+  available: boolean; createdAt: string; updatedAt: string;
+}
+
+export interface AppTier { name: string; aliasId: string | null; modelId: string; available: boolean }
+
+/** An app: public model IDs <app>-<tier> whose tiers map to aliases. */
+export interface App {
+  id: string; name: string; description: string | null; enabled: boolean; tiers: AppTier[]; createdAt: string; updatedAt: string;
+}
+
+export async function listModels(client: ManagementClient): Promise<Model[]> {
+  return (await call<{ data: Model[] }>(client, "GET", "/models")).data;
+}
+export async function listAliases(client: ManagementClient): Promise<Alias[]> {
+  return (await call<{ data: Alias[] }>(client, "GET", "/model-aliases")).data;
+}
+export async function listApps(client: ManagementClient): Promise<App[]> {
+  return (await call<{ data: App[] }>(client, "GET", "/model-apps")).data;
+}
+
+/** Finds an entry by an exact key (ID, model ID), else by a unique case-insensitive name. */
+function findCatalogEntry<T extends { id: string; name: string }>(entries: readonly T[], reference: string, what: string, exact: (entry: T) => string[], describe: (entry: T) => string): T {
+  const ref = reference.trim();
+  if (!ref) throw new CliError(`A ${what} is required`);
+  const match = entries.find((entry) => exact(entry).includes(ref));
+  if (match) return match;
+  const named = entries.filter((entry) => entry.name.toLowerCase() === ref.toLowerCase());
+  if (named.length === 1) return named[0]!;
+  if (named.length > 1) throw new CliError(`${named.length} ${what}s are named '${ref}'; use one of: ${named.map(describe).join(", ")}`);
+  throw new CliError(`No ${what} '${ref}'`);
+}
+
+/** Finds a model by ID, Bedrock model ID or name. */
+export async function resolveModel(client: ManagementClient, reference: string, models?: readonly Model[]): Promise<Model> {
+  return findCatalogEntry(models ?? await listModels(client), reference, "model", (model) => [model.id, model.modelId], (model) => model.modelId);
+}
+
+/** Finds an alias by ID, public model ID or name. */
+export async function resolveAlias(client: ManagementClient, reference: string, aliases?: readonly Alias[]): Promise<Alias> {
+  return findCatalogEntry(aliases ?? await listAliases(client), reference, "alias", (alias) => [alias.id, alias.modelId], (alias) => alias.modelId);
+}
+
+/** Finds an app by ID or name. */
+export async function resolveApp(client: ManagementClient, reference: string): Promise<App> {
+  return findCatalogEntry(await listApps(client), reference, "app", (app) => [app.id, app.name], (app) => app.id);
+}
+
 /** Fetches every page of a paginated collection, or the first `max` items. */
 export async function listAll<T>(client: ManagementClient, path: string, query: Query = {}, max = Infinity, start = 0): Promise<{ items: T[]; total: number }> {
   const items: T[] = [];

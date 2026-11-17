@@ -1,6 +1,7 @@
 import { defineContract, Status } from "@richie-rpc/core";
 import { z } from "zod";
 import { aliasContract } from "./alias-contract";
+import { modelCreateSchema, modelUpdateSchema } from "./model-contract";
 const catalogErrors = { [Status.BadRequest]: z.object({ error: z.string() }), [Status.NotFound]: z.object({ error: z.string() }), [Status.Conflict]: z.object({ error: z.string() }) };
 import { EFFORT_LEVELS, REASONING_EFFORT_VALUES, REASONING_MODES } from "./reasoning";
 
@@ -175,29 +176,13 @@ export const contract = defineContract({
   },
   adminCreateModel: {
     type: "standard", method: "POST", path: "/admin/models",
-    body: z.object({
-      modelId: z.string().min(1), name: z.string().min(1), description: z.string().optional(),
-      inputPricePerMTok: z.number().nonnegative(), outputPricePerMTok: z.number().nonnegative(),
-      cacheWrite5mPricePerMTok: z.number().nonnegative().optional(), cacheWrite1hPricePerMTok: z.number().nonnegative().optional(),
-      cacheReadPricePerMTok: z.number().nonnegative().optional(), contextWindow: z.number().positive().optional(),
-      maxOutputTokens: z.number().positive().optional(), thinking: z.boolean().optional(), managedCache: z.boolean().optional(),
-      reasoningMode: reasoningModeSchema.optional(), defaultReasoningEffort: reasoningEffortSchema.nullable().optional(),
-      enabled: z.boolean().optional(), region: z.string().optional(),
-    }),
+    body: modelCreateSchema,
     responses: { [Status.Created]: modelSchema },
     errorResponses: catalogErrors,
   },
   adminUpdateModel: {
     type: "standard", method: "PATCH", path: "/admin/models/:id", params: z.object({ id: z.string() }),
-    body: z.object({
-      modelId: z.string().min(1).optional(), name: z.string().min(1).optional(), description: z.string().optional(),
-      inputPricePerMTok: z.number().nonnegative().optional(), outputPricePerMTok: z.number().nonnegative().optional(),
-      cacheWrite5mPricePerMTok: z.number().nonnegative().optional(), cacheWrite1hPricePerMTok: z.number().nonnegative().optional(),
-      cacheReadPricePerMTok: z.number().nonnegative().optional(), contextWindow: z.number().positive().optional(),
-      maxOutputTokens: z.number().positive().optional(), thinking: z.boolean().optional(), managedCache: z.boolean().optional(),
-      reasoningMode: reasoningModeSchema.optional(), defaultReasoningEffort: reasoningEffortSchema.nullable().optional(),
-      region: z.string().optional(), enabled: z.boolean().optional(),
-    }),
+    body: modelUpdateSchema,
     responses: { [Status.OK]: modelSchema },
     errorResponses: catalogErrors,
   },

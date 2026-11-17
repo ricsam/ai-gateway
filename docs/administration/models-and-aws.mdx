@@ -41,6 +41,14 @@ Open **Admin → Models** and configure:
 
 Use **Test model before saving** to verify that the identifier, region, credentials, and Bedrock access are correct.
 
+The same settings are available from a terminal with [`aigctl models`](/docs/administration/cli#models-aliases-and-apps) in the gateway container, and to automation at `/management/v1/models` with the `models.read` and `models.write` scopes; see [Management API](/docs/administration/management-api#models-aliases-and-apps). Model aliases and apps have `aigctl aliases`, `aigctl apps`, `/management/v1/model-aliases` and `/management/v1/model-apps`.
+
+```bash
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl models create \
+  --model-id us.anthropic.claude-opus-4-6-v1 --name "Claude Opus 4.6" --input-price 5 --output-price 25 --thinking on
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl aws test "Claude Opus 4.6"
+```
+
 ## Reasoning effort
 
 With **Reasoning / effort** enabled, API clients and the playground can send `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The **Reasoning control** decides the Bedrock request shape:

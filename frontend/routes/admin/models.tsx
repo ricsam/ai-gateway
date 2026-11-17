@@ -40,13 +40,14 @@ function Models() {
       reasoningMode: model.reasoningMode, defaultEffort: model.defaultReasoningEffort ?? "default",
     } : blank);
   };
+  // Empty optional fields are sent as null, so clearing a field in the dialog clears it on save.
   const body = () => ({
-    modelId: form.modelId.trim(), name: form.name.trim(), description: form.description || undefined,
+    modelId: form.modelId.trim(), name: form.name.trim(), description: form.description.trim() || null,
     inputPricePerMTok: Number(form.input), outputPricePerMTok: Number(form.output),
-    cacheWrite5mPricePerMTok: form.cacheWrite5m ? Number(form.cacheWrite5m) : undefined,
-    cacheWrite1hPricePerMTok: form.cacheWrite1h ? Number(form.cacheWrite1h) : undefined,
-    cacheReadPricePerMTok: form.cacheRead ? Number(form.cacheRead) : undefined,
-    contextWindow: form.context ? Number(form.context) : undefined, maxOutputTokens: Number(form.maxOutput), region: form.region.trim(),
+    cacheWrite5mPricePerMTok: form.cacheWrite5m ? Number(form.cacheWrite5m) : null,
+    cacheWrite1hPricePerMTok: form.cacheWrite1h ? Number(form.cacheWrite1h) : null,
+    cacheReadPricePerMTok: form.cacheRead ? Number(form.cacheRead) : null,
+    contextWindow: form.context ? Number(form.context) : null, maxOutputTokens: Number(form.maxOutput), region: form.region.trim() || null,
     thinking: form.thinking, managedCache: form.cache, enabled: form.enabled,
     reasoningMode: form.reasoningMode, defaultReasoningEffort: form.defaultEffort === "default" ? null : form.defaultEffort,
   });

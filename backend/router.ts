@@ -4,7 +4,7 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import db from "@/db";
 import { contract } from "@/shared/contract";
 import { requireAdmin } from "./admin-guard";
-import { aliasResponse, appResponse, assertModelPublicId, assertModelUnreferenced, catalogErrorResponse, deleteCatalogEntry, loadModelCatalog, lockModelCatalog, saveAlias, saveApp, validateModelWrite } from "./model-alias-service";
+import { aliasResponse, appResponse, catalogErrorResponse, createModel, deleteCatalogEntry, deleteModel, loadModelCatalog, modelResponse, saveAlias, saveApp, updateModel, type CatalogActor } from "./model-alias-service";
 import { listAvailableModels } from "./model-catalog";
 import { modelReasoningMetadata } from "./model-routing";
 import { authenticateRequest } from "./auth";
@@ -14,7 +14,6 @@ import { addCredits, calculateCost } from "./credit-service";
 import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
-import { isReasoningEffort, isReasoningMode } from "@/shared/reasoning";
 import {
   getBalanceBurndown,
   getCreditsConsumed,
@@ -29,7 +28,6 @@ import {
 import { getThroughput } from "./throughput-service";
 import {
   apiKeysTable,
-  auditEventsTable,
   creditEventsTable,
   modelsTable,
   groupMembersTable,
@@ -40,6 +38,8 @@ import {
 interface RouterContext { getUserId: () => string }
 const groupRoleValues = new Set(["owner", "admin", "member"]);
 function adminPrincipal(userId: string): ManagementPrincipal { return { actorType: "user", actorId: userId, userId, scopes: new Set(["*"]) }; }
+function adminActor(userId: string): CatalogActor { return { actorType: "user", actorId: userId }; }
+function requestIdOf(request: Request): string { return request.headers.get("x-request-id") || crypto.randomUUID(); }
 
 async function usageLogs(userId: string, rawLimit?: string, rawOffset?: string) {
   const limit = Math.min(Math.max(Number(rawLimit ?? 20), 1), 100);
@@ -77,31 +77,6 @@ function analyticsScope(scope: "system" | "user" | "group", scopeId?: string): A
 
 function analyticsFailure(error: unknown) {
   return { status: Status.BadRequest, body: { error: error instanceof Error ? error.message : "Analytics query failed" } };
-}
-
-function modelResponse(model: typeof modelsTable.$inferSelect) {
-  return {
-    id: model.id,
-    modelId: model.modelId,
-    name: model.name,
-    description: model.description,
-    provider: model.provider,
-    inputPricePerMTok: model.inputPricePerMTok,
-    outputPricePerMTok: model.outputPricePerMTok,
-    cacheWrite5mPricePerMTok: model.cacheWrite5mPricePerMTok,
-    cacheWrite1hPricePerMTok: model.cacheWrite1hPricePerMTok,
-    cacheReadPricePerMTok: model.cacheReadPricePerMTok,
-    contextWindow: model.contextWindow,
-    maxOutputTokens: model.maxOutputTokens,
-    thinking: model.thinking,
-    reasoningMode: isReasoningMode(model.reasoningMode) ? model.reasoningMode : "auto" as const,
-    defaultReasoningEffort: isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
-    managedCache: model.managedCache,
-    region: model.region,
-    enabled: model.enabled,
-    createdAt: model.createdAt.toISOString(),
-    updatedAt: model.updatedAt.toISOString(),
-  };
 }
 
 export const router = createRouter<typeof contract, RouterContext>(contract, {
@@ -201,17 +176,17 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
   adminCreateAlias: async ({ body, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.Created, body: await saveAlias(body, undefined, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.Created, body: await saveAlias(body, undefined, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
   adminUpdateAlias: async ({ body, params, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.OK, body: await saveAlias(body, params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.OK, body: await saveAlias(body, params.id, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
   adminDeleteAlias: async ({ params, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.OK, body: await deleteCatalogEntry("alias", params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.OK, body: await deleteCatalogEntry("alias", params.id, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
   adminListApps: async ({ request }) => {
@@ -220,17 +195,17 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
   adminCreateApp: async ({ body, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.Created, body: await saveApp(body, undefined, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.Created, body: await saveApp(body, undefined, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
   adminUpdateApp: async ({ body, params, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.OK, body: await saveApp(body, params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.OK, body: await saveApp(body, params.id, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
   adminDeleteApp: async ({ params, request }) => {
     const actor = await requireAdmin(request);
-    try { return { status: Status.OK, body: await deleteCatalogEntry("app", params.id, actor.id, request.headers.get("x-request-id") || crypto.randomUUID()) }; }
+    try { return { status: Status.OK, body: await deleteCatalogEntry("app", params.id, adminActor(actor.id), requestIdOf(request)) }; }
     catch (error) { return catalogErrorResponse(error); }
   },
 
@@ -241,48 +216,25 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
 
   adminCreateModel: async ({ body, request }) => {
-    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
-    try {
-    const [model] = await db.transaction(async (tx) => {
-      await lockModelCatalog(tx);
-      await assertModelPublicId(tx, body.modelId);
-      const created = await tx.insert(modelsTable).values(body).returning();
-      await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.created", targetType: "model", targetId: created[0]!.id, requestId, metadata: { modelId: created[0]!.modelId } });
-      return created;
-    });
-    return { status: Status.Created, body: modelResponse(model!) };
-    } catch (error) { return catalogErrorResponse(error); }
+    const actor = await requireAdmin(request);
+    try { return { status: Status.Created, body: modelResponse(await createModel(body, adminActor(actor.id), requestIdOf(request))) }; }
+    catch (error) { return catalogErrorResponse(error); }
   },
 
   adminUpdateModel: async ({ params, body, request }) => {
-    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    const actor = await requireAdmin(request);
     try {
-    const model = await db.transaction(async (tx) => {
-      await lockModelCatalog(tx);
-      const [previous] = await tx.select().from(modelsTable).where(eq(modelsTable.id, params.id));
-      if (!previous) return undefined;
-      await validateModelWrite(tx, { ...previous, ...body });
-      const [changed] = await tx.update(modelsTable).set({ ...body, updatedAt: new Date() }).where(eq(modelsTable.id, params.id)).returning();
-      if (changed) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.updated", targetType: "model", targetId: changed.id, requestId, metadata: { fields: Object.keys(body) } });
-      return changed;
-    });
-    if (!model) return { status: Status.NotFound, body: { error: "Model not found" } };
-    return { status: Status.OK, body: modelResponse(model) };
+      const model = await updateModel(params.id, body, adminActor(actor.id), requestIdOf(request));
+      if (!model) return { status: Status.NotFound, body: { error: "Model not found" } };
+      return { status: Status.OK, body: modelResponse(model) };
     } catch (error) { return catalogErrorResponse(error); }
   },
 
   adminDeleteModel: async ({ params, request }) => {
-    const actor = await requireAdmin(request); const requestId = request.headers.get("x-request-id") || crypto.randomUUID();
+    const actor = await requireAdmin(request);
     try {
-    const removed = await db.transaction(async (tx) => {
-      await lockModelCatalog(tx);
-      await assertModelUnreferenced(tx, params.id);
-      const rows = await tx.delete(modelsTable).where(eq(modelsTable.id, params.id)).returning({ id: modelsTable.id, modelId: modelsTable.modelId });
-      if (rows[0]) await tx.insert(auditEventsTable).values({ actorType: "user", actorId: actor.id, action: "model.deleted", targetType: "model", targetId: rows[0].id, requestId, metadata: { modelId: rows[0].modelId } });
-      return rows;
-    });
-    if (!removed.length) return { status: Status.NotFound, body: { error: "Model not found" } };
-    return { status: Status.OK, body: { success: true } };
+      if (!await deleteModel(params.id, adminActor(actor.id), requestIdOf(request))) return { status: Status.NotFound, body: { error: "Model not found" } };
+      return { status: Status.OK, body: { success: true } };
     } catch (error) { return catalogErrorResponse(error); }
   },
 

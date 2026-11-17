@@ -35,7 +35,7 @@ curl https://gateway.example.com/management/v1/users \
 | Authentication | `auth.read` | `auth.write` |
 | Branding | `branding.read` | `branding.write` |
 | AWS | `aws.read` | `aws.write` |
-| Models | `models.read` | `models.write` |
+| Models, model aliases and apps | `models.read` | `models.write` |
 | Settings | `settings.read` | `settings.write` |
 | Management keys | `management-keys.read` | `management-keys.write` |
 
@@ -59,6 +59,39 @@ curl --fail-with-body \
 The operation is audited as `api_key.provisioned`. Disabled users can receive a key, but authentication with that key remains blocked until the account is enabled. Account enablement controls both login and API access; valid keys with the required scopes and sufficient inference credits are still required.
 
 Use `enabled` in user creation, updates, and group bulk-user updates to control account access. The former `apiEnabled` field is no longer part of the API contract; historical client payloads containing it do not control access. Update those clients to use `enabled` instead.
+
+## Models, aliases and apps
+
+The model catalog that API clients see at `/v1/models` has three collections, each with the same operations: list (`GET`), get (`GET /{id}`), create (`POST`), change the given fields (`PATCH /{id}`) and delete (`DELETE /{id}`). Reads need `models.read` and writes `models.write`. Changes apply to the next request.
+
+| Collection | Entries |
+| --- | --- |
+| `/models` | Bedrock models with prices (USD per million tokens), limits, region and reasoning controls. `modelId` is the Bedrock model ID, inference profile ID or ARN, and also the model's public ID. |
+| `/model-aliases` | Other public model IDs for a model (`upstreamModelId` is the model's `id`), with their own name and reasoning settings: `reasoningSource: "alias"` pins `thinking` and `effort`; `"client"` lets requests choose `reasoning_effort`. |
+| `/model-apps` | Apps whose tiers are public model IDs `<app>-<tier>`, each mapped to an alias by `aliasId`, or unmapped (`null`). Tiers default to `min`, `low`, `medium`, `high` and `max`. |
+
+Every entry includes `available`: whether `/v1/models` lists it, which needs it and everything it depends on to be enabled, an alias's settings to suit its model, and a tier to be mapped. App tiers have their own `available`.
+
+```bash
+MODEL_ID=$(curl --fail-with-body -sS -X POST \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" -H 'Content-Type: application/json' \
+  -d '{"modelId":"us.anthropic.claude-opus-4-6-v1","name":"Claude Opus 4.6","inputPricePerMTok":5,"outputPricePerMTok":25,"thinking":true,"maxOutputTokens":128000}' \
+  https://gateway.example.com/management/v1/models | jq -r .data.id)
+
+ALIAS_ID=$(curl --fail-with-body -sS -X POST \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" -H 'Content-Type: application/json' \
+  -d "{\"modelId\":\"claude-opus-max-thinking\",\"name\":\"Opus, max thinking\",\"upstreamModelId\":\"$MODEL_ID\",\"thinking\":true,\"effort\":\"max\"}" \
+  https://gateway.example.com/management/v1/model-aliases | jq -r .data.id)
+
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"chat-app\",\"tiers\":[{\"name\":\"max\",\"aliasId\":\"$ALIAS_ID\"}]}" \
+  https://gateway.example.com/management/v1/model-apps
+```
+
+`PATCH` takes only the fields to change, and an empty one changes nothing; `null` clears an optional model field (cache prices, `contextWindow`, `description`, `region` for the AWS default region, and `defaultReasoningEffort`), and an app's `tiers` replaces the whole list (tier names must be unique). Unknown fields are refused, naming them, so a misspelled field doesn't silently do nothing. The runtime OpenAPI document describes each request body.
+
+Public model IDs are unique across models, aliases and app tiers, including disabled ones and unmapped tiers (`409 conflict`). A model that an alias uses and an alias that an app tier uses can't be deleted, and a model change that would make one of its aliases' pinned settings invalid is refused (`409`). Changes are audited as `model.*`, `alias.*` and `app.*` with the entry's public ID or name. `GET /models` has listed models since earlier releases; its entries now also include `available`.
 
 ## Analytics time ranges
 

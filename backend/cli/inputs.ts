@@ -26,11 +26,15 @@ export function optionalBoolean(flag: string, value: OptionValue): boolean | und
   return text === undefined ? undefined : parseBoolean(flag, text);
 }
 
-/** A non-negative credit amount in dollars; a leading $ is accepted. */
+/** The largest amount the numeric(20,8) price and credit columns hold. */
+const MAX_AMOUNT = 999_999_999_999;
+
+/** A non-negative amount in dollars; a leading $ is accepted. */
 export function parseAmount(flag: string, value: string): number {
   const text = value.trim().replace(/^\$/, "");
   const amount = Number(text);
   if (!text || !Number.isFinite(amount) || amount < 0) throw new UsageError(`--${flag} must be a non-negative amount, such as 25 or 12.50`);
+  if (amount > MAX_AMOUNT) throw new UsageError(`--${flag} must be at most ${MAX_AMOUNT.toLocaleString("en-US")}`);
   return amount;
 }
 
@@ -50,6 +54,15 @@ export function parseInteger(flag: string, value: string, min: number, max: numb
 export function optionalInteger(flag: string, value: OptionValue, min: number, max: number): number | undefined {
   const text = stringOption(value);
   return text === undefined ? undefined : parseInteger(flag, text, min, max);
+}
+
+const AWS_REGION = /^[a-z]{2}(-[a-z0-9]+)+$/;
+
+/** An AWS region name such as us-east-1. */
+export function parseRegion(flag: string | undefined, value: string): string {
+  const text = value.trim();
+  if (!AWS_REGION.test(text)) throw new UsageError(`${flag ? `--${flag}` : "The region"} must be an AWS region such as us-east-1 or eu-west-1`);
+  return text;
 }
 
 const DURATION_UNITS: Record<string, number> = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };

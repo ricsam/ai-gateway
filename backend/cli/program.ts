@@ -1,6 +1,7 @@
 import { apiCommand } from "./commands/api";
 import { authProvidersGroup } from "./commands/auth-providers";
-import { awsGroup, brandingGroup, modelsGroup, settingsGroup } from "./commands/config";
+import { aliasesGroup, appsGroup, modelsGroup } from "./commands/catalog";
+import { awsGroup, brandingGroup, settingsGroup } from "./commands/config";
 import { groupsGroup } from "./commands/groups";
 import { managementKeysGroup } from "./commands/management-keys";
 import { analyticsGroup, auditGroup, creditsGroup, usageGroup } from "./commands/reports";
@@ -10,7 +11,7 @@ import type { Program } from "./framework";
 
 export const program: Program = {
   name: "aigctl",
-  overview: `aigctl manages an AI Gateway: users, groups, keys, credits, settings, AWS, login providers, usage and audit history.
+  overview: `aigctl manages an AI Gateway: users, groups, keys, credits, models, settings, AWS, login providers, usage and audit history.
 
 Usage:
   aigctl <command> <subcommand> [arguments] [options]
@@ -30,6 +31,8 @@ Anywhere else, aigctl uses a gateway's management API with a management key:
     creditsGroup,
     managementKeysGroup,
     modelsGroup,
+    aliasesGroup,
+    appsGroup,
     settingsGroup,
     brandingGroup,
     awsGroup,

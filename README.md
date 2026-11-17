@@ -26,7 +26,7 @@ curl https://gateway.example.com/management/v1/users \
   -H 'Authorization: Bearer aigm_...'
 ```
 
-Core resources include users and passwords, groups/memberships and bulk user controls, auth providers, branding/assets, inference settings, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
+Core resources include users and passwords, groups/memberships and bulk user controls, models, model aliases and apps, auth providers, branding/assets, inference settings, AWS settings/tests, usage reporting, management keys, and audit events. Configuration updates use revisions. Secret writes use `{ "operation": "preserve" }`, `{ "operation": "replace", "value": "..." }`, or `{ "operation": "clear" }`; plaintext secrets are never returned.
 
 The analytics dashboards and `GET /management/v1/analytics/throughput` report the values a Bedrock quota increase request asks for: steady-state and peak tokens and requests per minute, and average input and output tokens per request, overall and per upstream model. Tokens follow Bedrock's quota accounting (input, cache writes and output; no cache reads or output burndown). See [Throughput and Bedrock quotas](docs/administration/models-and-aws.mdx#throughput-and-bedrock-quotas).
 
@@ -41,7 +41,7 @@ kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users crea
 kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl management-keys create --name ci --scope 'users.*' --expires 90d
 ```
 
-Commands cover first-boot setup, users and passwords, inference and management keys, groups, credits, settings, branding, AWS credentials, login providers, audit history, usage and analytics, plus `aigctl api` for raw requests. Passwords and secrets are read from a hidden prompt or standard input, never from arguments, which `kubectl exec` records in the Kubernetes audit log. Because pod access already exposes the database credentials, treat `pods/exec` on the gateway as full administrative access. With `--server https://gateway.example.com` and `AI_GATEWAY_MANAGEMENT_KEY`, the same commands use a gateway's management API from anywhere. See [Management CLI](docs/administration/cli.mdx).
+Commands cover first-boot setup, users and passwords, inference and management keys, groups, credits, models, model aliases and apps, settings, branding, AWS credentials, login providers, audit history, usage and analytics, plus `aigctl api` for raw requests. Passwords and secrets are read from a hidden prompt or standard input, never from arguments, which `kubectl exec` records in the Kubernetes audit log. Because pod access already exposes the database credentials, treat `pods/exec` on the gateway as full administrative access. With `--server https://gateway.example.com` and `AI_GATEWAY_MANAGEMENT_KEY`, the same commands use a gateway's management API from anywhere. See [Management CLI](docs/administration/cli.mdx).
 
 ## Inference API
 
@@ -71,6 +71,14 @@ Inference keys begin with `aig_`, are shown once, and are stored as SHA-256 dige
 2. In **Admin → Model aliases**, create a public ID such as `claude-opus-max-thinking`, choose its upstream model, and choose **Reasoning configured by**: **Alias (pinned)** or **Client (OpenAI options)**.
 3. In **Admin → Apps**, create `chat-app` and map its `max` tier to that alias. Apps start with min/low/medium/high/max tiers; add, remove or rename tiers as needed.
 4. Clients send `"model": "chat-app-max"`. For client-configured aliases, they can also send the supported OpenAI Chat Completions option `reasoning_effort` (for example `none`, `low`, `medium`, or `high`). Remapping the tier changes its target without changing that public ID.
+
+The same steps work from a terminal or automation: `aigctl models`, `aigctl aliases` and `aigctl apps` in the gateway container, or `/management/v1/models`, `/model-aliases` and `/model-apps` with the `models.read` and `models.write` scopes:
+
+```sh
+aigctl models create --model-id us.anthropic.claude-opus-4-6-v1 --name 'Claude Opus 4.6' --input-price 5 --output-price 25 --thinking on
+aigctl aliases create claude-opus-max-thinking --upstream 'Claude Opus 4.6' --thinking on --effort max
+aigctl apps create chat-app --map max=claude-opus-max-thinking
+```
 
 Enabled aliases and mapped app tiers appear in `/v1/models`, model pricing and the playground. Alias mode (the backward-compatible default, `reasoningSource: "alias"`) pins thinking and effort and overrides client reasoning controls. Client mode (`reasoningSource: "client"`) ignores the alias’s stored thinking/effort fields and honors client `reasoning_effort`; omission falls back to the upstream model’s configured default, then its provider default. App tier IDs inherit the mapped alias’s mode. Pricing, region, caching and limits come from the actual upstream. Responses retain the requested public model ID; billing and usage analytics record the upstream model. Disabled dependencies and unmapped tiers are not exposed. Referenced aliases/models cannot be deleted until remapped, and all public IDs must be unique (including disabled or unmapped tiers).
 

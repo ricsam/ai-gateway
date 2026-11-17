@@ -5,7 +5,7 @@ import { expandScopes, generatePassword, parseAmount, parseBoolean, parseExpiry 
 import type { Io } from "./io";
 import { formatValue, printJson, renderDetails, renderTable, terminalSafe } from "./output";
 import { program } from "./program";
-import { findKey, keyStatus, type User } from "./resources";
+import { findKey, keyStatus, type Alias, type App, type Model, type User } from "./resources";
 
 interface RecordedRequest { method: string; path: string; query: Record<string, string>; json: unknown; contentType: string | null; bytes?: Uint8Array }
 type Handler = (request: RecordedRequest) => { status?: number; body?: unknown } | undefined;
@@ -390,6 +390,146 @@ describe("commands", () => {
     const result = await run(["setup", "status"], new FakeClient({}, "remote"));
     expect(result.code).toBe(1);
     expect(result.err).toContain("runs only inside the gateway container");
+  });
+});
+
+const MODEL_ID = "7d0f3f5e-9a1f-4b8e-8f0e-2f3c4d5e6f70";
+const ALIAS_ID = "0b1c2d3e-4f50-4a6b-9c7d-8e9fa0b1c2d3";
+function model(overrides: Partial<Model> = {}): Model {
+  return {
+    id: MODEL_ID, modelId: "us.anthropic.claude-opus-4-6-v1", name: "Claude Opus 4.6", description: null, provider: "bedrock",
+    inputPricePerMTok: 5, outputPricePerMTok: 25, cacheReadPricePerMTok: 0.5, cacheWrite5mPricePerMTok: null, cacheWrite1hPricePerMTok: null,
+    contextWindow: null, maxOutputTokens: 128000, thinking: true, reasoningMode: "auto", defaultReasoningEffort: null, managedCache: false,
+    region: null, enabled: true, available: true, createdAt: "2026-11-16T10:00:00.000Z", updatedAt: "2026-11-16T10:00:00.000Z", ...overrides,
+  };
+}
+function alias(overrides: Partial<Alias> = {}): Alias {
+  return {
+    id: ALIAS_ID, modelId: "opus-max", name: "Opus max", description: null, upstreamModelId: MODEL_ID, reasoningSource: "alias",
+    thinking: true, effort: "max", enabled: true, available: true, createdAt: "2026-11-16T10:00:00.000Z", updatedAt: "2026-11-16T10:00:00.000Z", ...overrides,
+  };
+}
+function catalogRoutes(apps: App[] = []): Record<string, Handler> {
+  return {
+    "GET /models": () => ({ body: { data: [model()] } }),
+    "GET /model-aliases": () => ({ body: { data: [alias()] } }),
+    "GET /model-apps": () => ({ body: { data: apps } }),
+  };
+}
+
+describe("model catalog commands", () => {
+  test("models create sends prices and clears with '' and default", async () => {
+    const client = new FakeClient({ "POST /models": (request) => ({ status: 201, body: { data: model({ ...(request.json as object), enabled: false }) } }) });
+    const result = await run(["models", "create", "--model-id", " amazon.nova-pro-v1:0 ", "--input-price", "0.8", "--output-price", "$3.20",
+      "--cache-read-price", "0.2", "--cache-write-5m-price", "none", "--region", "", "--default-effort", "default", "--thinking", "on",
+      "--reasoning-mode", "nova", "--max-output-tokens", "10000", "--disabled"], client);
+    expect(result.code).toBe(0);
+    expect(client.mutations()[0]!.json).toEqual({
+      modelId: "amazon.nova-pro-v1:0", name: "amazon.nova-pro-v1:0", inputPricePerMTok: 0.8, outputPricePerMTok: 3.2,
+      cacheReadPricePerMTok: 0.2, cacheWrite5mPricePerMTok: null, maxOutputTokens: 10000, region: null, thinking: true,
+      reasoningMode: "nova", defaultReasoningEffort: null, enabled: false,
+    });
+  });
+
+  test("models create requires both prices, and update requires a change", async () => {
+    const client = new FakeClient(catalogRoutes());
+    const missing = await run(["models", "create", "--model-id", "x", "--input-price", "1"], client);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain("--input-price and --output-price are required");
+    const nothing = await run(["models", "update", "Claude Opus 4.6"], client);
+    expect(nothing.code).toBe(2);
+    const effort = await run(["models", "update", "Claude Opus 4.6", "--default-effort", "turbo"], client);
+    expect(effort.code).toBe(2);
+    expect(effort.err).toContain("--default-effort must be one of none, minimal, low, medium, high, xhigh, max, or default");
+    expect(client.mutations()).toHaveLength(0);
+  });
+
+  test("models update resolves a model by name and patches only the given fields", async () => {
+    const client = new FakeClient({ ...catalogRoutes(), [`PATCH /models/${MODEL_ID}`]: (request) => ({ body: { data: model(request.json as Partial<Model>) } }) });
+    const result = await run(["models", "update", "claude opus 4.6", "--cache-read-price", "", "--context-window", "200000"], client);
+    expect(result.code).toBe(0);
+    expect(client.mutations()[0]!.json).toEqual({ cacheReadPricePerMTok: null, contextWindow: 200000 });
+  });
+
+  test("aliases create resolves the upstream model to its ID", async () => {
+    const client = new FakeClient({ ...catalogRoutes(), "POST /model-aliases": (request) => ({ status: 201, body: { data: alias({ ...(request.json as Partial<Alias>), id: "new" }) } }) });
+    const result = await run(["aliases", "create", "opus", "--upstream", "us.anthropic.claude-opus-4-6-v1", "--reasoning", "client", "--description", "Opus"], client);
+    expect(result.code).toBe(0);
+    expect(client.mutations()[0]!.json).toEqual({ modelId: "opus", name: "opus", description: "Opus", reasoningSource: "client", upstreamModelId: MODEL_ID });
+    expect(result.out).toContain("Added alias opus for us.anthropic.claude-opus-4-6-v1 (client); API clients can use the model ID opus.");
+    const pinned = await run(["aliases", "create", "opus-x", "--upstream", "Claude Opus 4.6", "--reasoning", "maybe"], client);
+    expect(pinned.code).toBe(2);
+    expect(pinned.err).toContain("--reasoning must be pinned");
+  });
+
+  test("apps create maps tiers to alias IDs and keeps the default tiers", async () => {
+    const client = new FakeClient({ ...catalogRoutes(), "POST /model-apps": (request) => {
+      const body = request.json as { name: string; tiers: { name: string; aliasId: string | null }[] };
+      return { status: 201, body: { data: { id: "app", name: body.name, description: null, enabled: true, createdAt: "", updatedAt: "",
+        tiers: body.tiers.map((tier) => ({ ...tier, modelId: `${body.name}-${tier.name}`, available: tier.aliasId !== null })) } } };
+    } });
+    const result = await run(["apps", "create", "chat-app", "--map", "max=opus-max"], client);
+    expect(result.code).toBe(0);
+    expect(client.mutations()[0]!.json).toEqual({ name: "chat-app", description: null, enabled: true, tiers: [
+      { name: "min", aliasId: null }, { name: "low", aliasId: null }, { name: "medium", aliasId: null }, { name: "high", aliasId: null }, { name: "max", aliasId: ALIAS_ID },
+    ] });
+    expect(result.out).toContain("API clients can use chat-app-max.");
+    const wrongTier = await run(["apps", "create", "other", "--tiers", "fast,smart", "--map", "max=opus-max"], client);
+    expect(wrongTier.code).toBe(2);
+    expect(wrongTier.err).toContain("'max' is not one of the app's tiers (fast, smart)");
+    const extraEquals = await run(["apps", "create", "other", "--map", "max=opus-max=foo"], client);
+    expect(extraEquals.code).toBe(1);
+    expect(extraEquals.err).toContain("No alias 'opus-max=foo'");
+    const tooExpensive = await run(["models", "update", "Claude Opus 4.6", "--input-price", "1e15"], client);
+    expect(tooExpensive.code).toBe(2);
+    expect(tooExpensive.err).toContain("--input-price must be at most 999,999,999,999");
+  });
+
+  test("apps set-tier remaps, adds and unmaps tiers", async () => {
+    const app: App = { id: "app", name: "chat-app", description: null, enabled: true, createdAt: "", updatedAt: "", tiers: [
+      { name: "low", aliasId: null, modelId: "chat-app-low", available: false }, { name: "max", aliasId: ALIAS_ID, modelId: "chat-app-max", available: true },
+    ] };
+    const client = new FakeClient({ ...catalogRoutes([app]), "PATCH /model-apps/app": (request) => {
+      const tiers = (request.json as { tiers: { name: string; aliasId: string | null }[] }).tiers;
+      return { body: { data: { ...app, tiers: tiers.map((tier) => ({ ...tier, modelId: `chat-app-${tier.name}`, available: tier.aliasId !== null })) } } };
+    } });
+    expect((await run(["apps", "set-tier", "chat-app", "low", "opus-max"], client)).out).toBe("chat-app-low now serves alias opus-max.\n");
+    expect((await run(["apps", "set-tier", "chat-app", "fast", "Opus max"], client)).out).toBe("Added tier: chat-app-fast now serves alias opus-max.\n");
+    expect((await run(["apps", "set-tier", "chat-app", "max", "-"], client)).out).toContain("chat-app-max is unmapped");
+    expect(client.mutations().map((request) => request.json)).toEqual([
+      { tiers: [{ name: "low", aliasId: ALIAS_ID }, { name: "max", aliasId: ALIAS_ID }] },
+      { tiers: [{ name: "low", aliasId: null }, { name: "max", aliasId: ALIAS_ID }, { name: "fast", aliasId: ALIAS_ID }] },
+      { tiers: [{ name: "low", aliasId: null }, { name: "max", aliasId: null }] },
+    ]);
+    const bad = await run(["apps", "set-tier", "chat-app", "Max Tier", "opus-max"], client);
+    expect(bad.code).toBe(2);
+  });
+
+  test("ambiguous names ask for an ID", async () => {
+    const client = new FakeClient({ "GET /models": () => ({ body: { data: [model(), model({ id: "other", modelId: "eu.anthropic.claude-opus-4-6-v1" })] } }) });
+    const result = await run(["models", "get", "Claude Opus 4.6"], client);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("2 models are named 'Claude Opus 4.6'; use one of: us.anthropic.claude-opus-4-6-v1, eu.anthropic.claude-opus-4-6-v1");
+    const test = await run(["aws", "test", "Claude Opus 4.6"], client);
+    expect(test.code).toBe(1);
+    expect(test.err).toContain("2 models are named 'Claude Opus 4.6'");
+    expect(client.mutations()).toHaveLength(0);
+  });
+
+  test("aws test uses a configured model's ID and region, or a raw Bedrock ID", async () => {
+    const client = new FakeClient({
+      "GET /models": () => ({ body: { data: [model({ region: "eu-west-1" })] } }),
+      "POST /aws/test": () => ({ body: { success: true, message: "Connection succeeded" } }),
+    });
+    expect((await run(["aws", "test", "claude opus 4.6"], client)).out).toBe("Connection succeeded (us.anthropic.claude-opus-4-6-v1 in eu-west-1).\n");
+    expect((await run(["aws", "test", "amazon.nova-micro-v1:0"], client)).out).toBe("Connection succeeded (amazon.nova-micro-v1:0).\n");
+    expect(client.mutations().map((request) => request.json)).toEqual([
+      { modelId: "us.anthropic.claude-opus-4-6-v1", region: "eu-west-1" }, { modelId: "amazon.nova-micro-v1:0" },
+    ]);
+    const noRead = new FakeClient({ "GET /models": () => ({ status: 403, body: { error: { code: "insufficient_scope", message: "Required scope: models.read" } } }) });
+    const result = await run(["aws", "test"], noRead);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("finding a configured model needs a key with models.read");
   });
 });
 

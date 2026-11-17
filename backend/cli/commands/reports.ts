@@ -6,7 +6,7 @@ import { confirm, optionalInteger, stringOption, YES_OPTION } from "../inputs";
 import {
   formatCredits, formatDecimal, formatInteger, formatTime, printJson, printList, renderDetails, renderTable, type Column,
 } from "../output";
-import { listAll, resolveGroup, resolveUser, type Group, type ManagementKey, type User } from "../resources";
+import { listAliases, listAll, listApps, listModels, resolveGroup, resolveUser, type Group, type ManagementKey, type User } from "../resources";
 import { report } from "./common";
 
 const TIME_RANGE_NAMES = Object.keys(TIME_RANGES) as TimeRange[];
@@ -49,36 +49,40 @@ async function eachLimited<T>(items: readonly T[], concurrency: number, worker: 
   }));
 }
 
-/** Names for the user, key and group IDs that appear in the events; only those are looked up. */
+/** Names for the IDs that appear in the events; only the kinds that appear are looked up. */
 async function auditNames(client: ManagementClient, events: readonly AuditEvent[]) {
   const userIds = new Set<string>();
-  let keys = false;
-  let groups = false;
+  const kinds = new Set<string>();
   for (const event of events) {
     for (const [type, id] of [[event.actorType, event.actorId], [event.targetType, event.targetId]] as const) {
       if (!id) continue;
       if (type === "user" || type === "setup") userIds.add(id);
-      else if (type === "management_key" || type === "management_api_key") keys = true;
-      else if (type === "group") groups = true;
+      else kinds.add(type === "management_api_key" ? "management_key" : type);
     }
   }
   const names = new Map<string, string>();
+  const lookup = (kind: string, load: () => Promise<void>) => kinds.has(kind) ? optional(load, undefined) : undefined;
   await Promise.all([
     eachLimited([...userIds], 8, async (id) => {
       const user = await optional(async () => (await call<{ data: User }>(client, "GET", `/users/${encodeURIComponent(id)}`)).data, null);
       if (user) names.set(`user:${id}`, user.username);
     }),
-    keys && optional(async () => {
-      for (const key of (await call<{ data: ManagementKey[] }>(client, "GET", "/management-keys")).data) names.set(`key:${key.id}`, `${key.name} (${key.keyPrefix})`);
-    }, undefined),
-    groups && optional(async () => {
+    lookup("management_key", async () => {
+      for (const key of (await call<{ data: ManagementKey[] }>(client, "GET", "/management-keys")).data) names.set(`management_key:${key.id}`, `${key.name} (${key.keyPrefix})`);
+    }),
+    lookup("group", async () => {
       for (const group of (await listAll<Group>(client, "/groups")).items) names.set(`group:${group.id}`, group.name);
-    }, undefined),
+    }),
+    lookup("model", async () => { for (const model of await listModels(client)) names.set(`model:${model.id}`, model.modelId); }),
+    lookup("alias", async () => { for (const alias of await listAliases(client)) names.set(`alias:${alias.id}`, alias.modelId); }),
+    lookup("app", async () => { for (const app of await listApps(client)) names.set(`app:${app.id}`, app.name); }),
   ]);
-  return (type: string, id: string | null) => {
+  return (type: string, id: string | null, metadata: Record<string, unknown> = {}) => {
     if (!id) return type;
-    const kind = type === "user" || type === "setup" ? "user" : type === "management_key" || type === "management_api_key" ? "key" : type;
-    return `${type} ${names.get(`${kind}:${id}`) ?? id}`;
+    const kind = type === "user" || type === "setup" ? "user" : type === "management_api_key" ? "management_key" : type;
+    // Deleted catalog entries are named by the audit metadata.
+    const recorded = typeof metadata.modelId === "string" ? metadata.modelId : typeof metadata.name === "string" && kind === "app" ? metadata.name : undefined;
+    return `${type} ${names.get(`${kind}:${id}`) ?? (kind === "model" || kind === "alias" || kind === "app" ? recorded : undefined) ?? id}`;
   };
 }
 
@@ -109,7 +113,7 @@ const auditList: Command = {
       { header: "TIME", value: (event) => formatTime(event.createdAt) },
       { header: "ACTION", value: (event) => event.action },
       { header: "ACTOR", value: (event) => name(event.actorType, event.actorId), maxWidth: 40 },
-      { header: "TARGET", value: (event) => name(event.targetType, event.targetId), maxWidth: 40 },
+      { header: "TARGET", value: (event) => name(event.targetType, event.targetId, event.metadata), maxWidth: 40 },
       { header: "DETAILS", value: (event) => Object.keys(event.metadata ?? {}).length ? JSON.stringify(event.metadata) : "", maxWidth: 60 },
       { header: "REQUEST-ID", value: (event) => event.requestId, wide: true },
     ];
