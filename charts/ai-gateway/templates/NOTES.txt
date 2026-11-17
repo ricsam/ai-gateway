@@ -1,6 +1,6 @@
 AI Gateway runs as deployment/{{ include "ai-gateway.fullname" . }} in namespace {{ .Release.Namespace }}, serving {{ .Values.config.baseUrl }}.
 
-Manage it with aigctl inside the pod (users, groups, keys, credits, settings, AWS, login providers, audit, usage):
+Manage it with aigctl inside the pod (users, groups, keys, credits, models, settings, AWS, login providers, audit, usage):
   kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "ai-gateway.fullname" . }} -- aigctl --help
 
 On a new installation, create the first administrator right away; this closes the /setup page for good:
