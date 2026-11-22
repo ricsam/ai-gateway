@@ -8,6 +8,7 @@ import env from "@/env";
 import * as schema from "./schema";
 import { getOidcRuntimeProviders } from "./auth-provider-runtime";
 import { trustedEmailLinkingProviders } from "./oidc-account-linking";
+import { oidcAccountSubject, oidcIssuerPolicyPlugin } from "./oidc-identity";
 import { userTable } from "./schema";
 
 const authBaseUrl = new URL("/api/auth", `${env.BASE_URL}/`).toString();
@@ -36,14 +37,14 @@ function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>
     } },
     plugins: [
       username({ minUsernameLength: 3, maxUsernameLength: 40, usernameValidator: (value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value), usernameNormalization: (value) => value.trim().toLowerCase() }),
-      ...(providers.length ? [genericOAuth({ config: providers.map((provider) => ({
-        providerId: provider.providerKey, discoveryUrl: provider.discoveryUrl, issuer: provider.issuer,
-        requireIssuerValidation: provider.requireAuthorizationResponseIssuer, clientId: provider.clientId,
+      ...(providers.length ? [oidcIssuerPolicyPlugin(providers, `${env.BASE_URL}/`), genericOAuth({ config: providers.map((provider) => ({
+        providerId: provider.providerKey, name: provider.label, discoveryUrl: provider.discoveryUrl,
+        requireIdTokenVerification: true, clientId: provider.clientId,
         clientSecret: provider.clientSecret, scopes: provider.scopes, pkce: provider.pkce,
         disableImplicitSignUp: true, disableSignUp: !provider.autoProvision, overrideUserInfo: false,
+        accountSubject: oidcAccountSubject(provider.claims.subject),
         mapProfileToUser: (profile: Record<string, unknown>) => {
           const claim = (name: string) => profile[name];
-          const subjectValue = claim(provider.claims.subject) ?? profile.sub ?? profile.id;
           const emailValue = claim(provider.claims.email);
           const nameValue = claim(provider.claims.name);
           const usernameValue = claim(provider.claims.username);
@@ -51,7 +52,6 @@ function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>
           const preferred = typeof usernameValue === "string" ? usernameValue : email?.split("@")[0];
           const username = `${(preferred || "external").toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 24) || "external"}-${crypto.randomUUID().slice(0, 8)}`;
           return {
-            id: subjectValue === undefined ? undefined : String(subjectValue),
             email,
             emailVerified: profile.email_verified === true,
             name: typeof nameValue === "string" ? nameValue : email,
