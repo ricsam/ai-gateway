@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-781eb7643e25c499457aebc626c6529e837de8af
+ghcr.io/ricsam/ai-gateway:sha-c9ce38e06e54c779a14520194ef49411d29e1fa6
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -43,6 +43,13 @@ kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl setup init
 ```
 
 Inside the container aigctl uses the pod's own database access, so anyone allowed to exec into the gateway's pods can administer it. See [Management CLI](https://github.com/ricsam/ai-gateway/blob/main/docs/administration/cli.mdx).
+
+## Upgrading to 0.1.17
+
+This release adds no database migration; upgrading from 0.1.10 through 0.1.16 needs no special steps (from 0.1.10 or 0.1.11, the pre-upgrade migration Job still applies the 0.1.12 migration, and from 0.1.13 or earlier the 0.1.14 migration, described below). Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- `GET /v1/models` now also lists each model's, alias's and app tier's display `name`, the `efforts` a request may send as `reasoning_effort`, its `default_effort` (`null` when none is configured), and, for pinned aliases and their app tiers, the `effort` they always run at. The existing fields are unchanged. See [Listing models](https://github.com/ricsam/ai-gateway/blob/main/docs/chat-completions.mdx#listing-models).
+- Nothing needs changing on upgrade. To show readable names in clients, name your aliases (`aigctl aliases update <alias> --name 'Claude Opus 5.5'`): an alias created with aigctl without `--name` is named after its ID.
 
 ## Upgrading to 0.1.16
 
