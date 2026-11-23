@@ -10,6 +10,7 @@ import {
 } from "./proxy-auth";
 import { userTable } from "./schema";
 import { listAvailableModels } from "./model-catalog";
+import { listedModel } from "./model-routing";
 import { UsageValidationError } from "./usage-contract";
 import { getLiteLLMDailyActivity, getNativeMonthlyUsage } from "./usage-service";
 
@@ -40,15 +41,7 @@ export async function handleListModels(request: Request): Promise<Response> {
 
   const models = await listAvailableModels();
 
-  return Response.json({
-    object: "list",
-    data: models.map((model) => ({
-      id: model.modelId,
-      object: "model",
-      created: Math.floor(model.createdAt.getTime() / 1000),
-      owned_by: "ai-gateway",
-    })),
-  });
+  return Response.json({ object: "list", data: models.map(listedModel) });
 }
 
 async function authenticatedCreditUser(request: Request) {

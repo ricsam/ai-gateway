@@ -57,7 +57,7 @@
       "get": {
         "tags": ["OpenAI compatibility"],
         "summary": "List enabled models",
-        "description": "Lists enabled Bedrock models. Requires `models.read`.",
+        "description": "Lists every enabled model, model alias and mapped app tier ID, each with its display name and the reasoning efforts it takes. Requires `models.read`.",
         "operationId": "listModels",
         "responses": {
           "200": {
@@ -402,12 +402,31 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["id", "object", "created", "owned_by"],
+              "required": ["id", "object", "created", "owned_by", "name", "efforts", "default_effort"],
               "properties": {
                 "id": { "type": "string" },
                 "object": { "const": "model" },
                 "created": { "type": "integer" },
-                "owned_by": { "const": "ai-gateway" }
+                "owned_by": { "const": "ai-gateway" },
+                "name": {
+                  "type": "string",
+                  "description": "Display name: the model's or alias's name, or `<app> / <tier>` for an app tier."
+                },
+                "efforts": {
+                  "type": "array",
+                  "items": { "type": "string", "enum": ["none", "low", "medium", "high", "xhigh", "max"] },
+                  "description": "The reasoning_effort values a request may send, lowest first. Empty for a model without reasoning enabled, and for a pinned alias and its app tiers."
+                },
+                "default_effort": {
+                  "type": ["string", "null"],
+                  "enum": ["none", "low", "medium", "high", "xhigh", "max", null],
+                  "description": "One of efforts: the effort a request without reasoning_effort runs at. Null when no default effort is configured or the ID takes no effort, so the model's own default applies."
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": ["none", "low", "medium", "high", "xhigh", "max"],
+                  "description": "Pinned aliases and their app tiers only: the effort every request runs at, or none when the alias turns thinking off without one."
+                }
               }
             }
           }

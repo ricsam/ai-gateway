@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { modelReasoningMetadata, resolveModelCatalog, type ModelCatalog } from "./model-routing";
+import { listedModel, modelReasoningMetadata, resolveModelCatalog, type ModelCatalog } from "./model-routing";
+import type { ReasoningEffort } from "../shared/reasoning";
 function catalog(): ModelCatalog {
   return {
     models: [{ id: "up", modelId: "anthropic.claude-opus-5-5", name: "Opus", enabled: true, provider: "bedrock", thinking: true, reasoningMode: "auto", maxOutputTokens: 32000, inputPricePerMTok: 5, region: "us-east-1", createdAt: new Date(0) }] as ModelCatalog["models"],
@@ -56,4 +57,44 @@ test("remapping a tier preserves its public ID while changing the upstream polic
   data.aliases.push({ ...data.aliases[0]!, id: "b", modelId: "opus-low-thinking", effort: "low" });
   data.apps[0]!.tiers[0]!.aliasId = "b";
   expect(resolveModelCatalog(data).find((row) => row.modelId === "chat-app-max")?.alias?.effort).toBe("low");
+});
+
+const OPUS_5_5_EFFORTS: ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh", "max"];
+/** /v1/models as a map of ID to its entry's other fields. */
+const listing = (data: ModelCatalog) => Object.fromEntries(resolveModelCatalog(data).map((entry) => {
+  const { id, ...fields } = listedModel(entry);
+  return [id, fields];
+}));
+test("/v1/models lists each ID's name and efforts, and the effort a pinned alias and its app tiers run at", () => {
+  const common = { object: "model", created: 0, owned_by: "ai-gateway" } as const;
+  expect(listing(catalog())).toEqual({
+    "anthropic.claude-opus-5-5": { ...common, name: "Opus", efforts: OPUS_5_5_EFFORTS, default_effort: null },
+    "chat-app-max": { ...common, name: "chat-app / max", efforts: [], default_effort: null, effort: "max" },
+    "opus-max-thinking": { ...common, name: "Opus max", efforts: [], default_effort: null, effort: "max" },
+  });
+});
+test("/v1/models lists a client alias with its upstream's efforts and the level a request without one runs at", () => {
+  const data = catalog();
+  data.aliases[0]!.reasoningSource = "client";
+  data.models[0]!.defaultReasoningEffort = "minimal";
+  for (const fields of Object.values(listing(data))) {
+    expect(fields).toMatchObject({ efforts: OPUS_5_5_EFFORTS, default_effort: "low" });
+    expect(fields).not.toHaveProperty("effort");
+  }
+  data.models[0]!.defaultReasoningEffort = "none";
+  expect(listing(data)["opus-max-thinking"]).toMatchObject({ default_effort: "none" });
+  // Without reasoning enabled, requests can't choose an effort, and a configured default doesn't apply.
+  data.models[0]!.thinking = false;
+  data.models[0]!.defaultReasoningEffort = "high";
+  for (const fields of Object.values(listing(data))) expect(fields).toMatchObject({ efforts: [], default_effort: null });
+});
+test("/v1/models maps a default effort onto the model's levels, and lists none for a pinned alias without thinking", () => {
+  const data = catalog();
+  data.models = [{ ...data.models[0]!, modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0", name: "Claude Sonnet 4.5", defaultReasoningEffort: "max" }];
+  data.aliases[0] = { ...data.aliases[0]!, modelId: "sonnet-no-thinking", name: "Sonnet without thinking", thinking: false, effort: null };
+  expect(listing(data)).toMatchObject({
+    "anthropic.claude-sonnet-4-5-20250929-v1:0": { name: "Claude Sonnet 4.5", efforts: ["none", "low", "medium", "high"], default_effort: "high" },
+    "sonnet-no-thinking": { name: "Sonnet without thinking", efforts: [], default_effort: null, effort: "none" },
+    "chat-app-max": { name: "chat-app / max", effort: "none" },
+  });
 });

@@ -96,6 +96,44 @@ Use **Admin → Model aliases** to define presets, then **Admin → Apps** to cr
 
 Native Bedrock endpoints also honor reasoning ownership: client-configured aliases and app tiers route to the upstream model without overriding caller-supplied native reasoning options. Pinned policies remain unchanged; pinned Invoke rewriting is supported for Anthropic models only.
 
+## Listing models
+
+`GET /v1/models` lists every model, alias and app tier ID a request can send as `model`. The key requires `models.read`. Each entry has OpenAI's fields (`id`, `object`, `created`, `owned_by`) and the gateway's own:
+
+| Field | Value |
+| --- | --- |
+| `name` | The display name: the model's or alias's name in **Admin → Models** or **Model aliases** (`aigctl models update --name`, `aigctl aliases update --name`), or `<app> / <tier>` for an app tier. |
+| `efforts` | The `reasoning_effort` values the ID takes, lowest first, such as `none`, `low`, `medium`, `high`, `xhigh` and `max` for Claude Opus 5.5. Empty for a model without reasoning enabled, and for a pinned alias and its app tiers. |
+| `default_effort` | One of `efforts`: the effort a request without `reasoning_effort` runs at, which is the model's configured default effort as the level the model takes. `null` when no default effort is configured, or the ID takes no effort: the model's own default behavior applies. |
+| `effort` | Pinned aliases and their app tiers only: the effort every request runs at, or `none` when the alias turns thinking off without one. |
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "claude-opus-5-5",
+      "object": "model",
+      "created": 1763380000,
+      "owned_by": "ai-gateway",
+      "name": "Claude Opus 5.5",
+      "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "default_effort": null
+    },
+    {
+      "id": "claude-opus-5-5-max",
+      "object": "model",
+      "created": 1763380000,
+      "owned_by": "ai-gateway",
+      "name": "Claude Opus 5.5 Max",
+      "efforts": [],
+      "default_effort": null,
+      "effort": "max"
+    }
+  ]
+}
+```
+
 ## Reasoning effort
 
 For a model with reasoning enabled by an administrator, set `reasoning_effort` to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. When a request omits it, the model's configured default effort (if any) applies; otherwise the model's own default behavior is used. For models without reasoning enabled, `reasoning_effort` is ignored.

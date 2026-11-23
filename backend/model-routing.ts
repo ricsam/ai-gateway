@@ -1,6 +1,8 @@
 import { validateAliasSettings, type AliasSettings } from "../shared/alias-options";
 import type { modelsTable } from "./schema";
-import { isReasoningEffort, supportedReasoningEfforts } from "../shared/reasoning";
+import {
+  isReasoningEffort, resolveEffortLevel, resolveReasoningProfile, supportedReasoningEfforts, type ReasoningEffort,
+} from "../shared/reasoning";
 
 type Model = typeof modelsTable.$inferSelect;
 export interface RoutingAlias extends AliasSettings {
@@ -28,6 +30,37 @@ export function modelReasoningMetadata({ upstream: model, alias }: ResolvedModel
     ...(alias && { alias: { modelId: alias.modelId, reasoningSource: alias.reasoningSource ?? "alias", thinking: alias.thinking, effort: alias.effort } }),
     reasoningEfforts: pinned ? [] : supportedReasoningEfforts(model),
     defaultReasoningEffort: pinned ? alias.effort : model.thinking && isReasoningEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : null,
+  };
+}
+
+/** The effort a request to `model` without `reasoning_effort` runs at, as one of `supportedReasoningEfforts(model)`:
+ * its configured default mapped onto the levels it takes (as requests are), or null when it has none. */
+function effectiveDefaultEffort(model: Model): ReasoningEffort | null {
+  if (!model.thinking || !isReasoningEffort(model.defaultReasoningEffort)) return null;
+  if (model.defaultReasoningEffort === "none") return "none";
+  return resolveEffortLevel(model.defaultReasoningEffort, resolveReasoningProfile(model.modelId, model.reasoningMode).efforts);
+}
+
+/**
+ * An entry of `GET /v1/models`: OpenAI's model object with the gateway's own fields. `name` is the display name;
+ * `efforts` are the `reasoning_effort` values a request may send (none for a pinned alias, or a model without
+ * reasoning enabled); `default_effort` is the one a request without `reasoning_effort` runs at, or null when no
+ * default effort is configured. Pinned aliases and their app tiers also list `effort`, the effort every request
+ * runs at: `none` when the alias turns thinking off without one.
+ */
+export function listedModel(entry: ResolvedModel) {
+  const { upstream: model, alias } = entry;
+  const pinned = alias && alias.reasoningSource !== "client" ? alias : undefined;
+  const efforts = pinned ? [] : supportedReasoningEfforts(model);
+  return {
+    id: entry.modelId,
+    object: "model" as const,
+    created: Math.floor(entry.createdAt.getTime() / 1000),
+    owned_by: "ai-gateway" as const,
+    name: entry.name,
+    efforts,
+    default_effort: efforts.length ? effectiveDefaultEffort(model) : null,
+    ...(pinned && { effort: pinned.effort ?? ("none" as const) }),
   };
 }
 
