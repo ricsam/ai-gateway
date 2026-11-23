@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.4-alpine AS build
+FROM oven/bun:1.4.5-alpine@sha256:da816670775f4c2b4e990b6b1847cf5540dcdc721a42033dd331ce7a88ba6a3b AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
 COPY patches ./patches
@@ -6,7 +6,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run routes:generate && bun run typecheck
 
-FROM oven/bun:1.4.4-alpine AS runtime
+FROM oven/bun:1.4.5-alpine@sha256:da816670775f4c2b4e990b6b1847cf5540dcdc721a42033dd331ce7a88ba6a3b AS runtime
 LABEL org.opencontainers.image.title="AI Gateway" \
       org.opencontainers.image.description="OpenAI-compatible AI gateway for AWS Bedrock" \
       org.opencontainers.image.source="https://github.com/ricsam/ai-gateway" \
