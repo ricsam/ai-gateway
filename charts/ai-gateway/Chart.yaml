@@ -2,8 +2,8 @@ apiVersion: v2
 name: ai-gateway
 description: Runtime-brandable OpenAI-compatible AI gateway for AWS Bedrock
 type: application
-version: 0.1.17
-appVersion: "sha-c9ce38e06e54c779a14520194ef49411d29e1fa6"
+version: 0.1.18
+appVersion: "sha-675e8259a28c01e0847e0493250c4ec2ec8673ba"
 home: https://github.com/ricsam/ai-gateway
 sources:
   - https://github.com/ricsam/ai-gateway
