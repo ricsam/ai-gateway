@@ -206,23 +206,31 @@ try {
   assert.deepEqual(await publicModels(), ["amazon.nova-pro-v1:0", "chat-app-low", "chat-app-max", "nova-client", "opus-max", "us.anthropic.claude-opus-4-6-v1"],
     "models, aliases and mapped app tiers are public; unmapped tiers are not");
   // /v1/models names each ID and lists the efforts it takes: Claude Opus 4.6's are none to max without xhigh, a
-  // model without reasoning takes none, a pinned alias and its app tiers list the effort they run at instead.
+  // model without reasoning takes none, a pinned alias and its app tiers list the effort they run at instead. Each ID
+  // lists its model's context window (none configured for Claude Opus 4.6) and output limit (Nova Pro's default).
   const opusEfforts = ["none", "low", "medium", "high", "max"];
+  const opusLimits = { context_window: null, max_output_tokens: 128000 };
+  const novaLimits = { context_window: 300000, max_output_tokens: 32000 };
   assert.deepEqual(await listedFields(), {
-    "amazon.nova-pro-v1:0": { name: "Nova Pro", efforts: [], default_effort: null },
-    "chat-app-low": { name: "chat-app / low", efforts: [], default_effort: null },
-    "chat-app-max": { name: "chat-app / max", efforts: [], default_effort: null, effort: "max" },
-    "nova-client": { name: "nova-client", efforts: [], default_effort: null },
-    "opus-max": { name: "Opus max", efforts: [], default_effort: null, effort: "max" },
-    "us.anthropic.claude-opus-4-6-v1": { name: "Claude Opus 4.6", efforts: opusEfforts, default_effort: null },
+    "amazon.nova-pro-v1:0": { name: "Nova Pro", ...novaLimits, efforts: [], default_effort: null },
+    "chat-app-low": { name: "chat-app / low", ...novaLimits, efforts: [], default_effort: null },
+    "chat-app-max": { name: "chat-app / max", ...opusLimits, efforts: [], default_effort: null, effort: "max" },
+    "nova-client": { name: "nova-client", ...novaLimits, efforts: [], default_effort: null },
+    "opus-max": { name: "Opus max", ...opusLimits, efforts: [], default_effort: null, effort: "max" },
+    "us.anthropic.claude-opus-4-6-v1": { name: "Claude Opus 4.6", ...opusLimits, efforts: opusEfforts, default_effort: null },
   });
-  await ok(["models", "update", "Claude Opus 4.6", "--default-effort", "xhigh"]);
+  await ok(["models", "update", "Claude Opus 4.6", "--default-effort", "xhigh", "--context-window", "1000000"]);
   await ok(["aliases", "update", "nova-client", "--name", "Nova Pro (client)"]);
   const renamed = await listedFields();
-  assert.deepEqual(renamed["us.anthropic.claude-opus-4-6-v1"], { name: "Claude Opus 4.6", efforts: opusEfforts, default_effort: "high" },
-    "a default effort is listed as the level the model runs it at");
+  assert.deepEqual(renamed["us.anthropic.claude-opus-4-6-v1"],
+    { name: "Claude Opus 4.6", context_window: 1000000, max_output_tokens: 128000, efforts: opusEfforts, default_effort: "high" },
+    "a default effort is listed as the level the model runs it at, and a new context window at once");
+  for (const id of ["opus-max", "chat-app-max"]) {
+    assert.deepEqual([renamed[id]?.context_window, renamed[id]?.max_output_tokens], [1000000, 128000], `${id} lists its upstream model's new context window`);
+  }
   assert.equal(renamed["nova-client"]?.name, "Nova Pro (client)", "an alias's new name is listed at once");
-  await ok(["models", "update", "Claude Opus 4.6", "--default-effort", "default"]);
+  await ok(["models", "update", "Claude Opus 4.6", "--default-effort", "default", "--context-window", "none"]);
+  assert.equal((await listedFields())["opus-max"]?.context_window, null, "a cleared context window is listed as null");
   const app = await json(["apps", "get", "chat-app"]);
   assert.deepEqual(app.tiers.map((tier: { modelId: string; available: boolean }) => `${tier.modelId}:${tier.available}`),
     ["chat-app-min:false", "chat-app-low:true", "chat-app-medium:false", "chat-app-high:false", "chat-app-max:true"]);

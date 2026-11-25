@@ -57,7 +57,7 @@
       "get": {
         "tags": ["OpenAI compatibility"],
         "summary": "List enabled models",
-        "description": "Lists every enabled model, model alias and mapped app tier ID, each with its display name and the reasoning efforts it takes. Requires `models.read`.",
+        "description": "Lists every enabled model, model alias and mapped app tier ID, each with its display name, its model's context window and output limit, and the reasoning efforts it takes. Requires `models.read`.",
         "operationId": "listModels",
         "responses": {
           "200": {
@@ -402,7 +402,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["id", "object", "created", "owned_by", "name", "efforts", "default_effort"],
+              "required": ["id", "object", "created", "owned_by", "name", "context_window", "max_output_tokens", "efforts", "default_effort"],
               "properties": {
                 "id": { "type": "string" },
                 "object": { "const": "model" },
@@ -411,6 +411,16 @@
                 "name": {
                   "type": "string",
                   "description": "Display name: the model's or alias's name, or `<app> / <tier>` for an app tier."
+                },
+                "context_window": {
+                  "type": ["integer", "null"],
+                  "minimum": 1,
+                  "description": "The model's configured context window in tokens; an alias and its app tiers list their upstream model's. Null when none is configured."
+                },
+                "max_output_tokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The model's output limit in tokens: the most a request may ask for (max_tokens, max_completion_tokens or max_output_tokens), and the limit a request without one gets. An alias and its app tiers list their upstream model's."
                 },
                 "efforts": {
                   "type": "array",

@@ -103,6 +103,8 @@ Native Bedrock endpoints also honor reasoning ownership: client-configured alias
 | Field | Value |
 | --- | --- |
 | `name` | The display name: the model's or alias's name in **Admin → Models** or **Model aliases** (`aigctl models update --name`, `aigctl aliases update --name`), or `<app> / <tier>` for an app tier. |
+| `context_window` | The model's context window in tokens, as configured in **Admin → Models** (`aigctl models update --context-window`). `null` when none is configured. An alias and its app tiers list their upstream model's. |
+| `max_output_tokens` | The model's output limit in tokens (`aigctl models update --max-output-tokens`): the most a request may ask for with `max_tokens`, `max_completion_tokens` or `max_output_tokens`, and the limit a request without one gets. Every model has one; it is 32,000 unless configured. An alias and its app tiers list their upstream model's. |
 | `efforts` | The `reasoning_effort` values the ID takes, lowest first, such as `none`, `low`, `medium`, `high`, `xhigh` and `max` for Claude Opus 5.5. Empty for a model without reasoning enabled, and for a pinned alias and its app tiers. |
 | `default_effort` | One of `efforts`: the effort a request without `reasoning_effort` runs at, which is the model's configured default effort as the level the model takes. `null` when no default effort is configured, or the ID takes no effort: the model's own default behavior applies. |
 | `effort` | Pinned aliases and their app tiers only: the effort every request runs at, or `none` when the alias turns thinking off without one. |
@@ -117,6 +119,8 @@ Native Bedrock endpoints also honor reasoning ownership: client-configured alias
       "created": 1763380000,
       "owned_by": "ai-gateway",
       "name": "Claude Opus 5.5",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
       "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
       "default_effort": null
     },
@@ -126,6 +130,8 @@ Native Bedrock endpoints also honor reasoning ownership: client-configured alias
       "created": 1763380000,
       "owned_by": "ai-gateway",
       "name": "Claude Opus 5.5 Max",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
       "efforts": [],
       "default_effort": null,
       "effort": "max"

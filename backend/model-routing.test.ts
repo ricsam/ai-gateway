@@ -66,7 +66,8 @@ const listing = (data: ModelCatalog) => Object.fromEntries(resolveModelCatalog(d
   return [id, fields];
 }));
 test("/v1/models lists each ID's name and efforts, and the effort a pinned alias and its app tiers run at", () => {
-  const common = { object: "model", created: 0, owned_by: "ai-gateway" } as const;
+  // The model has the default output limit and no context window configured.
+  const common = { object: "model", created: 0, owned_by: "ai-gateway", context_window: null, max_output_tokens: 32000 } as const;
   expect(listing(catalog())).toEqual({
     "anthropic.claude-opus-5-5": { ...common, name: "Opus", efforts: OPUS_5_5_EFFORTS, default_effort: null },
     "chat-app-max": { ...common, name: "chat-app / max", efforts: [], default_effort: null, effort: "max" },
@@ -97,4 +98,21 @@ test("/v1/models maps a default effort onto the model's levels, and lists none f
     "sonnet-no-thinking": { name: "Sonnet without thinking", efforts: [], default_effort: null, effort: "none" },
     "chat-app-max": { name: "chat-app / max", effort: "none" },
   });
+});
+test("/v1/models lists each ID's context window and output limit: an alias's and its app tiers' are its upstream model's", () => {
+  const data = catalog();
+  data.models[0] = { ...data.models[0]!, contextWindow: 1_000_000, maxOutputTokens: 128_000 };
+  data.models.push({ ...data.models[0]!, id: "micro", modelId: "amazon.nova-micro-v1:0", name: "Nova Micro", thinking: false, contextWindow: null, maxOutputTokens: 10_000 });
+  data.aliases.push({ ...data.aliases[0]!, id: "b", modelId: "nova-micro", name: "Nova", upstreamModelId: "micro", reasoningSource: "client" });
+  data.apps[0]!.tiers[1]!.aliasId = "b";
+  const limits = Object.fromEntries(Object.entries(listing(data)).map(([id, fields]) => [id, [fields.context_window, fields.max_output_tokens]]));
+  expect(limits).toEqual({
+    "amazon.nova-micro-v1:0": [null, 10_000], // No context window configured.
+    "anthropic.claude-opus-5-5": [1_000_000, 128_000],
+    "chat-app-low": [null, 10_000],
+    "chat-app-max": [1_000_000, 128_000],
+    "nova-micro": [null, 10_000],
+    "opus-max-thinking": [1_000_000, 128_000],
+  });
+  expect(JSON.parse(JSON.stringify(listing(data)["nova-micro"]))).toHaveProperty("context_window", null);
 });

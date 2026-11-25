@@ -43,10 +43,12 @@ function effectiveDefaultEffort(model: Model): ReasoningEffort | null {
 
 /**
  * An entry of `GET /v1/models`: OpenAI's model object with the gateway's own fields. `name` is the display name;
- * `efforts` are the `reasoning_effort` values a request may send (none for a pinned alias, or a model without
- * reasoning enabled); `default_effort` is the one a request without `reasoning_effort` runs at, or null when no
- * default effort is configured. Pinned aliases and their app tiers also list `effort`, the effort every request
- * runs at: `none` when the alias turns thinking off without one.
+ * `context_window` and `max_output_tokens` are the model's configured context window (null when none is configured)
+ * and output limit (the most a request may ask for, and what it gets without a limit); an alias and its app tiers
+ * list their upstream model's. `efforts` are the `reasoning_effort` values a request may send (none for a pinned
+ * alias, or a model without reasoning enabled); `default_effort` is the one a request without `reasoning_effort`
+ * runs at, or null when no default effort is configured. Pinned aliases and their app tiers also list `effort`, the
+ * effort every request runs at: `none` when the alias turns thinking off without one.
  */
 export function listedModel(entry: ResolvedModel) {
   const { upstream: model, alias } = entry;
@@ -58,6 +60,8 @@ export function listedModel(entry: ResolvedModel) {
     created: Math.floor(entry.createdAt.getTime() / 1000),
     owned_by: "ai-gateway" as const,
     name: entry.name,
+    context_window: model.contextWindow ?? null,
+    max_output_tokens: model.maxOutputTokens,
     efforts,
     default_effort: efforts.length ? effectiveDefaultEffort(model) : null,
     ...(pinned && { effort: pinned.effort ?? ("none" as const) }),

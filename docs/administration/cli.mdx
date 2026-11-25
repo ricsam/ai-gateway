@@ -164,7 +164,7 @@ The `models`, `aliases` and `apps` commands edit the model catalog that API clie
 - An **alias** is another public model ID for a model, such as `claude-opus-max-thinking`, with its own name and reasoning settings: pinned (the default), where the alias sets thinking and effort, or `--reasoning client`, where requests choose `reasoning_effort`. Prices and limits come from the model.
 - An **app** gives an application stable model IDs `<app>-<tier>`, such as `chat-app-max`, and maps each tier to an alias. Remapping a tier changes what its ID serves without changing the ID.
 
-`/v1/models` lists each ID under its name (`--name`; an alias created without one is named after its ID), with the efforts it takes; see [Listing models](/docs/chat-completions#listing-models).
+`/v1/models` lists each ID under its name (`--name`; an alias created without one is named after its ID), with the efforts it takes and its model's context window and output limit (`models update --context-window`, `--max-output-tokens`; an alias and its app tiers list their model's); see [Listing models](/docs/chat-completions#listing-models).
 
 `list` and `get` show whether each entry is **available**: it and everything it depends on are enabled, and `/v1/models` lists it. A model that an alias uses can't be deleted, and an alias that an app tier uses can't either; changes that would make an alias's pinned settings invalid for its model are refused. In `models create` and `models update`, prices are USD per million tokens, and `''` or `none` clears an optional price or the context window, `''` or `default` the region and the default effort.
 
