@@ -61,7 +61,7 @@ jobs:
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
     steps:
       - name: Checkout chart repository
         uses: actions/checkout@v4
@@ -79,6 +79,20 @@ jobs:
         with:
           path: site
 
+      # deploy-pages looks the artifact up once, and the artifact service can list a new artifact only seconds, at
+      # times most of a minute, after its upload (actions/deploy-pages#451). A lookup that finds none fails before any
+      # deployment is created, so deploy again after a minute. Re-running the job can't help: it uploads a second
+      # github-pages artifact to the run, which deploy-pages refuses.
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait for the artifact to be listed
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to GitHub Pages again
+        id: deployment-retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
