@@ -21,20 +21,26 @@ Open **Admin → Authentication**, add an OpenID Connect provider, and configure
 Register the following exact callback as a server-side **Web** redirect or reply URI at the identity provider:
 
 ```text
-<BASE_URL>/api/auth/oauth2/callback/<provider-key>
+<BASE_URL>/api/auth/callback/<provider-key>
 ```
 
 For example, a provider key of `company-oidc` at `https://gateway.example.com` uses:
 
 ```text
-https://gateway.example.com/api/auth/oauth2/callback/company-oidc
+https://gateway.example.com/api/auth/callback/company-oidc
 ```
 
 The provider key becomes part of the callback and cannot be edited after creation. Avoid wildcard, localhost, SPA, and trailing-slash callback variants in a production registration.
 
+<Warning>
+  Releases before the Better Auth 1.7 upgrade used `<BASE_URL>/api/auth/oauth2/callback/<provider-key>`. That path no longer exists. When upgrading, register the new callback at the identity provider before deploying, and remove the old one afterwards.
+</Warning>
+
 ### Test and enable
 
-New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in. The discovery document's issuer must exactly match the configured issuer.
+New providers are created disabled. Save the provider, test discovery and configuration, then edit it again to enable sign-in. The discovery document's issuer must exactly match the configured issuer, and discovery must publish a `jwks_uri`: every ID token is verified against those keys, its issuer, the client ID as audience, and a per-request nonce. A provider whose discovery cannot be used is left unavailable rather than falling back to unverified tokens.
+
+The identity is the verified ID token's `sub` claim. When another subject claim is configured, it must be present in the verified profile; a missing subject claim rejects the sign-in instead of falling back to `sub`.
 
 AI Gateway applies the authorization-response `iss` check from RFC 9207 when the provider advertises `authorization_response_iss_parameter_supported: true`. Providers that do not advertise that optional response parameter remain compatible; the configured issuer must still exactly match discovery, and the authorization code is redeemed only at the discovered token endpoint. This behavior is capability-driven and does not require provider-specific adapters.
 
