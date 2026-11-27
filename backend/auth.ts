@@ -7,11 +7,14 @@ import db from "@/db";
 import env from "@/env";
 import * as schema from "./schema";
 import { getOidcRuntimeProviders } from "./auth-provider-runtime";
+import { clientIpOptions } from "./client-ip";
 import { trustedEmailLinkingProviders } from "./oidc-account-linking";
 import { oidcAccountSubject, oidcIssuerPolicyPlugin } from "./oidc-identity";
 import { userTable } from "./schema";
 
 const authBaseUrl = new URL("/api/auth", `${env.BASE_URL}/`).toString();
+// The client IP for Better Auth's rate limits and session records.
+const ipAddress = clientIpOptions(env.CLIENT_IP_HEADERS, env.TRUSTED_PROXIES);
 let authRuntime: { fingerprint: string; instance: ReturnType<typeof buildAuth> } | null = null;
 
 function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>>) {
@@ -19,6 +22,7 @@ function buildAuth(providers: Awaited<ReturnType<typeof getOidcRuntimeProviders>
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET,
     baseURL: authBaseUrl,
+    ...(ipAddress ? { advanced: { ipAddress } } : {}),
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: { user: schema.userTable, session: schema.sessionTable, account: schema.accountTable, verification: schema.verificationTable },

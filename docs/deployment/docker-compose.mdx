@@ -69,3 +69,5 @@ docker compose config
 ```
 
 For public production traffic, terminate TLS at a trusted reverse proxy, set `BASE_URL` to the exact external HTTPS origin, and restrict direct database access.
+
+Behind that proxy, set `CLIENT_IP_HEADERS` or `TRUSTED_PROXIES` in `.env` so that sign-in rate limits count each client separately; see [Client IP addresses](/docs/deployment/helm#client-ip-addresses).

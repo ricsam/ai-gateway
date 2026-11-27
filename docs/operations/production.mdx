@@ -50,6 +50,7 @@ Use immutable image tags in production and run migrations before the application
 ## Security checklist
 
 - Terminate public traffic with HTTPS and set `BASE_URL` to that exact origin.
+- Behind proxies, set where the client's address is (`config.clientIpHeaders` or `config.trustedProxies`), so that sign-in rate limits count each client separately. See [Client IP addresses](/docs/deployment/helm#client-ip-addresses).
 - Keep TimescaleDB private.
 - Use long random deployment secrets and a secret manager.
 - Restrict AWS credentials to required Bedrock actions and resources.

@@ -109,6 +109,31 @@ When `secrets.existingSecret` is set, the Secret must contain:
 
 You can rename the key mappings with `secrets.keys.*`.
 
+## Client IP addresses
+
+Sign-in limits each client to 3 attempts per 10 seconds, and every session records the address it signed in from. The gateway finds a request's client address in `X-Forwarded-For` when that header holds a single address. Requests without one, or with a list of addresses as proxies append them, all share one limit, so a few failed sign-ins can briefly block everyone's, and the log says `Rate limiting could not determine a client IP` once. Behind proxies, tell the gateway where the client's address is:
+
+| Value | Environment variable | Use it when |
+| --- | --- | --- |
+| `config.clientIpHeaders` | `CLIENT_IP_HEADERS` | A proxy in front of the gateway sets a header to the client's address alone, replacing whatever the client sent, such as Cloudflare's `CF-Connecting-IP`. Headers are read in order, so add `x-forwarded-for` to fall back to it. |
+| `config.trustedProxies` | `TRUSTED_PROXIES` | Proxies append to `X-Forwarded-For`, so it holds a list such as `203.0.113.7, 10.42.0.12`. List the proxies' addresses or CIDR ranges; the client address is the rightmost one that isn't a proxy's. |
+
+```bash
+# Every request reaches the gateway through Cloudflare (proxied DNS or Cloudflare Tunnel)
+helm upgrade ai-gateway ai-gateway/ai-gateway --namespace ai-gateway --reuse-values \
+  --set 'config.clientIpHeaders={cf-connecting-ip}'
+
+# The ingress controller's pods, in 10.42.0.0/16, append to X-Forwarded-For
+helm upgrade ai-gateway ai-gateway/ai-gateway --namespace ai-gateway --reuse-values \
+  --set 'config.trustedProxies={10.42.0.0/16}'
+```
+
+The environment variables take the same values separated by commas. The gateway refuses to start when an entry isn't a header name, an IP address or a CIDR range, and the chart restarts the pods when these values change.
+
+<Warning>
+  Any client can send these headers itself. Name a header only when every request reaches the gateway through a proxy that sets it, and list only your proxies' own addresses as trusted, not a private range that clients also connect from. Trusted-header sign-in doesn't use these settings: it always checks the address of the connection itself.
+</Warning>
+
 ## Install from a checkout
 
 ```bash

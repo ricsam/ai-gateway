@@ -1,3 +1,5 @@
+import { parseClientIpHeaders, parseTrustedProxies } from "./client-ip";
+
 declare const process: { env: Record<string, string | undefined> };
 
 function required(name: string): string {
@@ -27,6 +29,9 @@ const env = {
   DATABASE_URL: required("DATABASE_URL"),
   BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
   SETTINGS_ENCRYPTION_KEY: encryptionKey(required("SETTINGS_ENCRYPTION_KEY")),
+  // Optional: where the client's address is behind proxies (see docs/deployment/helm.mdx#client-ip-addresses).
+  CLIENT_IP_HEADERS: parseClientIpHeaders("CLIENT_IP_HEADERS", process.env.CLIENT_IP_HEADERS),
+  TRUSTED_PROXIES: parseTrustedProxies("TRUSTED_PROXIES", process.env.TRUSTED_PROXIES),
 };
 
 export default env;
