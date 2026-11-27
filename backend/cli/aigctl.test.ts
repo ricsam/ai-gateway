@@ -69,8 +69,9 @@ async function run(argv: string[], client: FakeClient, ioOptions: Parameters<typ
 function user(overrides: Partial<User> = {}): User {
   return {
     id: "u-bob", username: "bob", name: "Bob Builder", email: "bob@example.com", role: "user", enabled: true,
-    mustChangePassword: false, creditBalance: 12.5, defaultMonthlyCredits: 50, createdAt: "2026-11-16T10:00:00.000Z",
-    groups: [{ id: "g-eng", name: "engineering", role: "member" }], ...overrides,
+    mustChangePassword: false, creditBalance: 12.5, defaultMonthlyCredits: 50, monthlyCreditMode: "reset",
+    rolloverCap: null, monthlySpendLimit: null, monthlySpendRemaining: null, monthlyCreditsAppliedAt: null,
+    createdAt: "2026-11-16T10:00:00.000Z", groups: [{ id: "g-eng", name: "engineering", role: "member" }], ...overrides,
   };
 }
 
@@ -238,7 +239,7 @@ describe("commands", () => {
     const table = await run(["users", "list"], client);
     expect(table.code).toBe(0);
     expect(table.out).toContain("USERNAME   NAME          EMAIL");
-    expect(table.out).toContain("bob        Bob Builder   bob@example.com   user   yes        $12.50    $50.00   engineering");
+    expect(table.out).toContain("bob        Bob Builder   bob@example.com   user   yes        $12.50    $50.00   reset   engineering");
     const json = await run(["users", "list", "-o", "json"], client);
     expect(JSON.parse(json.out)).toEqual([user()]);
     expect(client.closed).toBe(true);
@@ -288,6 +289,58 @@ describe("commands", () => {
       username: "alice", email: "alice@example.com", name: "alice", password, role: "user", enabled: true,
       mustChangePassword: true, defaultMonthlyCredits: 25, groupIds: ["g-eng"],
     });
+  });
+
+  test("sets and clears a user's monthly credit mode, rollover cap and monthly spend limit", async () => {
+    const patches: unknown[] = [];
+    const rollover = user({ monthlyCreditMode: "rollover", defaultMonthlyCredits: 100, rolloverCap: 600, monthlySpendLimit: 300, monthlySpendRemaining: 136.78, monthlyCreditsAppliedAt: "2026-11-01T00:00:12.000Z" });
+    const client = new FakeClient({
+      ...userRoutes(rollover),
+      "PATCH /users/u-bob": (request) => { patches.push(request.json); return { body: { data: rollover } }; },
+    });
+    const result = await run(["users", "update", "bob", "--monthly-credits", "100", "--monthly-credit-mode", "Rollover", "--rollover-cap", "$600", "--monthly-spend-limit", "300"], client);
+    expect(result.code).toBe(0);
+    const cleared = await run(["users", "update", "bob", "--rollover-cap", "none", "--monthly-spend-limit", ""], client);
+    expect(cleared.code).toBe(0);
+    expect(patches).toEqual([
+      { defaultMonthlyCredits: 100, monthlyCreditMode: "rollover", rolloverCap: 600, monthlySpendLimit: 300 },
+      { rolloverCap: null, monthlySpendLimit: null },
+    ]);
+    const invalid = await run(["users", "update", "bob", "--monthly-credit-mode", "bank"], client);
+    expect(invalid.code).toBe(2);
+    expect(invalid.err).toContain("--monthly-credit-mode must be one of reset, rollover");
+    const details = await run(["users", "get", "bob"], client);
+    expect(details.out).toContain("Monthly credit mode:     rollover (unspent credits carry over)");
+    expect(details.out).toContain("Rollover cap:            $600.00");
+    expect(details.out).toContain("Monthly spend limit:     $300.00 ($136.78 left this month)");
+    const wide = await run(["users", "list", "-o", "wide"], client);
+    expect(wide.out).toMatch(/MODE +ROLLOVER-CAP +SPEND-LIMIT/);
+    expect(wide.out).toMatch(/rollover +\$600\.00 +\$300\.00/);
+  });
+
+  test("applies credit control to every member of groups", async () => {
+    let body: unknown;
+    const client = new FakeClient({
+      "GET /groups/engineering": () => undefined,
+      "GET /groups": () => page([{ id: "g-eng", name: "engineering", description: null, createdAt: "2026-11-16T10:00:00.000Z" }]),
+      "POST /groups/bulk-user-update": (request) => { body = request.json; return { body: { data: { usersUpdated: 4 } } }; },
+    });
+    const result = await run(["groups", "bulk-update", "engineering", "--monthly-credit-mode", "rollover", "--rollover-cap", "600", "--monthly-spend-limit", "none"], client);
+    expect(result.code).toBe(0);
+    expect(body).toEqual({ groupIds: ["g-eng"], monthlyCreditMode: "rollover", rolloverCap: 600, monthlySpendLimit: null });
+    expect(result.out).toBe("Updated 4 users in engineering: set the monthly credit mode to rollover, set the rollover cap to $600.00 and set the monthly spend limit to none.\n");
+    const nothing = await run(["groups", "bulk-update", "engineering"], client);
+    expect(nothing.code).toBe(2);
+    expect(nothing.err).toContain("--monthly-credit-mode");
+  });
+
+  test("reports what the monthly credit run did", async () => {
+    const client = new FakeClient({ "POST /users/monthly-reset": () => ({ body: { data: { usersReset: 3, usersRolledOver: 2, usersSkipped: 1 } } }) });
+    const result = await run(["credits", "monthly-reset", "--yes"], client);
+    expect(result.code).toBe(0);
+    expect(result.out).toBe("Reset 3 users to their monthly credits and added this month's credits to 2 users in rollover mode; skipped 1 user in rollover mode who already received them.\n");
+    const older = new FakeClient({ "POST /users/monthly-reset": () => ({ body: { data: { usersReset: 1 } } }) });
+    expect((await run(["credits", "monthly-reset", "--yes"], older)).out).toBe("Reset 1 user to their monthly credits.\n");
   });
 
   test("asks for a password twice on a terminal and checks the policy first", async () => {

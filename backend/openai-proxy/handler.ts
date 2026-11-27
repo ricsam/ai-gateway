@@ -22,8 +22,7 @@ import {
   requireProxyScope,
   type ProxyPrincipal,
 } from "../proxy-auth";
-import { deductCredits, calculateCostBreakdown, checkBalance } from "../credit-service";
-import { hasAvailableCredits } from "../credit-settlement";
+import { deductCredits, calculateCostBreakdown, checkCreditAdmission } from "../credit-service";
 import { getRemoteImageUrlsEnabled } from "../config-service";
 import { isReasoningEffort, resolveReasoningProfile } from "@/shared/reasoning";
 import { transformRequest } from "./transform/request";
@@ -270,10 +269,10 @@ export async function handleOpenAIProxy(
     region: model.region,
   };
 
-  // 4. Check user has a positive credit balance
-  const balance = await checkBalance(userId);
-  if (!hasAvailableCredits(balance)) {
-    return errorResponse("Insufficient credit balance", "invalid_request_error", 402, "insufficient_credits");
+  // 4. Check the user has a positive credit balance and is under any monthly spend limit
+  const admission = await checkCreditAdmission(userId);
+  if (!admission.ok) {
+    return errorResponse(admission.message, "invalid_request_error", 402, admission.code);
   }
 
   const suppliedRequestId = request.headers.get("x-request-id")?.trim();

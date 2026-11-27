@@ -9,6 +9,7 @@ import {
   buildNativeMonthlyUsage,
   buildPeriodBudget,
   type BudgetUnavailableReason,
+  creditControlSummary,
   normalizeUsageMetrics,
   parseUtcDailyRange,
   type DailyUsageRow,
@@ -94,6 +95,12 @@ export async function getNativeMonthlyUsage(params: { userId: string }) {
       balance,
       monthlyAllocation: Number(row.monthly_allocation),
       metrics: usageMetrics(row as unknown as AggregateRow),
+      creditControl: creditControlSummary({
+        monthlyCreditMode: String(row.monthly_credit_mode),
+        rolloverCap: row.rollover_cap,
+        monthlySpendLimit: row.monthly_spend_limit,
+        monthlySpendRemaining: row.monthly_spend_remaining,
+      }),
     }),
     observed_at: new Date(row.observed_at as string | Date).toISOString(),
     budget: buildPeriodBudget({

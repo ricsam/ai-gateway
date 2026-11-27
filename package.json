@@ -22,7 +22,8 @@
     "reasoning:ab": "bun scripts/reasoning-replay-ab.ts",
     "admin:recover": "bun scripts/recover-admin-password.ts",
     "aigctl": "bun backend/cli/aigctl.ts",
-    "cli:verify": "bun scripts/verify-cli.ts"
+    "cli:verify": "bun scripts/verify-cli.ts",
+    "credits:verify": "bun scripts/verify-credit-control.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "3.1003.0",

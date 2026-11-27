@@ -43,6 +43,13 @@ export function optionalAmount(flag: string, value: OptionValue): number | undef
   return text === undefined ? undefined : parseAmount(flag, text);
 }
 
+/** An amount, or null for '' or none (no cap or limit); undefined when the option is absent. */
+export function optionalNullableAmount(flag: string, value: OptionValue): number | null | undefined {
+  const text = stringOption(value);
+  if (text === undefined) return undefined;
+  return ["", "none"].includes(text.trim().toLowerCase()) ? null : parseAmount(flag, text);
+}
+
 export function parseInteger(flag: string, value: string, min: number, max: number): number {
   const number = Number(value.trim());
   if (!/^\d+$/.test(value.trim()) || !Number.isSafeInteger(number) || number < min || number > max) {

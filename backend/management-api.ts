@@ -27,6 +27,8 @@ import { aliasCreateSchema, aliasPatchSchema, appCreateSchema, appPatchSchema } 
 import { modelCreateSchema, modelUpdateSchema } from "../shared/model-contract";
 import { bulkUpdateUsersByGroups, createLocalUser, deleteUser, setUserGroups, setUserPassword, updateUser } from "./user-service";
 import { METERED_USAGE_EVENT_TYPES } from "./usage-contract";
+import { monthlySpendRemainingQuery, numberOrNull } from "./monthly-spend";
+import type { MonthlyCreditMode } from "../shared/credit-control";
 
 const jsonHeaders = { "content-type": "application/json" };
 
@@ -55,10 +57,17 @@ function analyticsInput(url: URL) {
   const scope: AnalyticsScope = userId ? { userId } : groupId ? { groupId } : {};
   return { timeRange, bucketSize, scope, userId, groupId };
 }
-function userDto(user: typeof userTable.$inferSelect, groups: { id: string; name: string; role: string }[] = []) {
+function userDto(user: typeof userTable.$inferSelect, groups: { id: string; name: string; role: string }[] = [], monthlySpendRemaining: number | null = null) {
   return { id: user.id, username: user.username, name: user.name, email: user.email, role: user.role, enabled: user.enabled,
     mustChangePassword: user.mustChangePassword, creditBalance: user.creditBalance,
-    defaultMonthlyCredits: user.defaultMonthlyCredits, createdAt: user.createdAt.toISOString(), groups };
+    defaultMonthlyCredits: user.defaultMonthlyCredits, monthlyCreditMode: user.monthlyCreditMode, rolloverCap: user.rolloverCap,
+    monthlySpendLimit: user.monthlySpendLimit, monthlySpendRemaining: user.monthlySpendLimit === null ? null : monthlySpendRemaining,
+    monthlyCreditsAppliedAt: user.monthlyCreditsAppliedAt?.toISOString() ?? null, createdAt: user.createdAt.toISOString(), groups };
+}
+/** What a user's monthly spend limit has left this UTC month; null without a limit. */
+async function monthlySpendRemainingOf(userId: string): Promise<number | null> {
+  const [row] = await db.select({ value: monthlySpendRemainingQuery() }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+  return numberOrNull(row?.value);
 }
 async function audit(principal: ManagementPrincipal, requestId: string, action: string, targetType: string, targetId: string | null, metadata: Record<string, unknown> = {}) {
   await db.insert(auditEventsTable).values({ actorType: principal.actorType, actorId: principal.actorId, action, targetType, targetId, requestId, metadata });
@@ -73,6 +82,8 @@ function secretWrite(value: unknown): SecretWrite | undefined {
 }
 
 const managementSecurity = [{ cookieSession: [] }, { managementKey: [] }];
+/** The credit fields of users, as their create and update operations take them. */
+const USER_CREDIT_FIELDS = "Credits are USD. `creditBalance` is the balance; changing it records an administrator adjustment. `defaultMonthlyCredits` are the monthly credits, and `monthlyCreditMode` says what the monthly run does with them: `reset` (the default) replaces the balance with them, so unspent credits expire; `rollover` adds them to the balance, so unspent credits carry over, up to `rolloverCap` when it is set (null: no cap). `monthlySpendLimit` caps the metered usage charged in a UTC calendar month whatever the balance (null: no limit). Users also include `monthlySpendRemaining`, what the limit leaves this month (null without a limit), and `monthlyCreditsAppliedAt`, when the monthly run last applied their monthly credits.";
 /** An OpenAPI request body from the zod schema that validates it. */
 function jsonBody(schema: z.ZodType) {
   const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
@@ -119,18 +130,18 @@ const OPENAPI = {
       { name: "search", in: "query", schema: { type: "string" }, description: "Case-insensitive substring of the username, email or display name" },
       { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
       { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 } },
-    ] }, post: { summary: "Create local user" } },
-    "/users/{id}": { get: { summary: "Get user" }, patch: { summary: "Update user" }, delete: { summary: "Delete user" } },
+    ] }, post: { summary: "Create local user", description: `Takes \`username\`, \`email\`, \`name\` and \`password\`, and optionally \`role\`, \`enabled\`, \`mustChangePassword\`, \`groupIds\` and the credit fields. ${USER_CREDIT_FIELDS}` } },
+    "/users/{id}": { get: { summary: "Get user" }, patch: { summary: "Update user", description: `Send only the fields to change. ${USER_CREDIT_FIELDS}` }, delete: { summary: "Delete user" } },
     "/users/{id}/password": { post: { summary: "Set a local password and revoke sessions" } },
     "/users/{id}/groups": { put: { summary: "Replace a user's manual group memberships" } },
     "/users/{id}/api-keys": { get: { summary: "List a user's inference keys" }, post: { summary: "Create a one-time inference key for a user" } },
     "/users/{id}/api-keys/{keyId}": { delete: { summary: "Revoke a user's inference key" } },
-    "/users/monthly-reset": { post: { summary: "Run the monthly credit reset now" } },
+    "/users/monthly-reset": { post: { summary: "Apply monthly credits now", description: "Applies every user's monthly credits as the scheduler does on the first day of each UTC month: resets `reset` users to them and adds them to `rollover` users' balances, up to each rollover cap. A rollover user receives one month's credits once per UTC month, so a rollover user who already received this month's is skipped. Returns `usersReset`, `usersRolledOver` and `usersSkipped`." } },
     "/groups": { get: { summary: "List groups" }, post: { summary: "Create group" } },
     "/groups/{id}": { get: { summary: "Get a group and its members" }, patch: { summary: "Update a group" }, delete: { summary: "Delete a group" } },
     "/groups/{id}/members": { post: { summary: "Add a group member" } },
     "/groups/{id}/members/{userId}": { patch: { summary: "Update a membership role" }, delete: { summary: "Remove a manual membership" } },
-    "/groups/bulk-user-update": { post: { summary: "Update all distinct users in selected groups" } },
+    "/groups/bulk-user-update": { post: { summary: "Update all distinct users in selected groups", description: "Takes `groupIds` and any of `enabled`, `defaultMonthlyCredits`, `monthlyCreditMode`, `rolloverCap` and `monthlySpendLimit` (as for a user), and applies them once to each distinct member." } },
     "/auth/providers": { get: { summary: "List login providers" }, post: { summary: "Create login provider" } },
     "/auth/providers/{id}": { patch: { summary: "Update a login provider" }, delete: { summary: "Delete a login provider" } },
     "/auth/providers/{id}/test": { post: { summary: "Test provider configuration" } },
@@ -216,29 +227,30 @@ export async function handleManagementApi(request: Request, options: ManagementA
       const search = url.searchParams.get("search")?.trim();
       const where = search ? or(...[userTable.username, userTable.email, userTable.name].map((column) => ilike(column, containsPattern(search)))) : undefined;
       const [users, totals, memberships] = await Promise.all([
-        db.select().from(userTable).where(where).orderBy(asc(userTable.username)).limit(limit).offset(offset),
+        db.select({ user: userTable, monthlySpendRemaining: monthlySpendRemainingQuery() }).from(userTable).where(where).orderBy(asc(userTable.username)).limit(limit).offset(offset),
         db.select({ value: count() }).from(userTable).where(where),
         db.select({ userId: groupMembersTable.userId, id: groupsTable.id, name: groupsTable.name, role: groupMembersTable.role }).from(groupMembersTable).innerJoin(groupsTable, eq(groupMembersTable.groupId, groupsTable.id)),
       ]);
-      return response(requestId, { data: users.map((user) => userDto(user, memberships.filter((entry) => entry.userId === user.id))), pagination: { limit, offset, total: totals[0]?.value ?? 0 } });
+      return response(requestId, { data: users.map(({ user, monthlySpendRemaining }) => userDto(user, memberships.filter((entry) => entry.userId === user.id), numberOrNull(monthlySpendRemaining))), pagination: { limit, offset, total: totals[0]?.value ?? 0 } });
     }
     if (path === "/users" && request.method === "POST") {
       const principal = await authorize("users.write");
       const user = await createLocalUser(await body(request), principal, requestId);
-      return response(requestId, { data: userDto(user) }, 201);
+      // A new account has spent nothing yet.
+      return response(requestId, { data: userDto(user, [], user.monthlySpendLimit) }, 201);
     }
     if ((match = path.match(/^\/users\/([^/]+)$/)) && request.method === "GET") {
       await authorize("users.read"); const id = decodeURIComponent(match[1]!);
-      const [user, memberships] = await Promise.all([
-        db.select().from(userTable).where(eq(userTable.id, id)).limit(1).then((rows) => rows[0]),
+      const [row, memberships] = await Promise.all([
+        db.select({ user: userTable, monthlySpendRemaining: monthlySpendRemainingQuery() }).from(userTable).where(eq(userTable.id, id)).limit(1).then((rows) => rows[0]),
         db.select({ id: groupsTable.id, name: groupsTable.name, role: groupMembersTable.role }).from(groupMembersTable).innerJoin(groupsTable, eq(groupMembersTable.groupId, groupsTable.id)).where(eq(groupMembersTable.userId, id)),
       ]);
-      return user ? response(requestId, { data: userDto(user, memberships) }) : failure(requestId, 404, "not_found", "User not found");
+      return row ? response(requestId, { data: userDto(row.user, memberships, numberOrNull(row.monthlySpendRemaining)) }) : failure(requestId, 404, "not_found", "User not found");
     }
     if ((match = path.match(/^\/users\/([^/]+)$/)) && request.method === "PATCH") {
       const principal = await authorize("users.write");
       const user = await updateUser(decodeURIComponent(match[1]!), await body(request), principal, requestId);
-      return user ? response(requestId, { data: userDto(user) }) : failure(requestId, 404, "not_found", "User not found");
+      return user ? response(requestId, { data: userDto(user, [], await monthlySpendRemainingOf(user.id)) }) : failure(requestId, 404, "not_found", "User not found");
     }
     if ((match = path.match(/^\/users\/([^/]+)$/)) && request.method === "DELETE") {
       const principal = await authorize("users.write");
@@ -280,7 +292,7 @@ export async function handleManagementApi(request: Request, options: ManagementA
     if ((match = path.match(/^\/users\/([^/]+)\/(enable|disable)$/)) && request.method === "POST") {
       const principal = await authorize("users.write");
       const user = await updateUser(decodeURIComponent(match[1]!), { enabled: match[2] === "enable" }, principal, requestId);
-      return user ? response(requestId, { data: userDto(user) }) : failure(requestId, 404, "not_found", "User not found");
+      return user ? response(requestId, { data: userDto(user, [], await monthlySpendRemainingOf(user.id)) }) : failure(requestId, 404, "not_found", "User not found");
     }
     if ((match = path.match(/^\/users\/([^/]+)\/password$/)) && request.method === "POST") {
       const principal = await authorize("users.write"); const data = await body<{ password: string; mustChangePassword?: boolean }>(request);
@@ -314,9 +326,12 @@ export async function handleManagementApi(request: Request, options: ManagementA
     }
     if (path === "/groups/bulk-user-update" && request.method === "POST") {
       const principal = await authorize("users.write");
-      const data = await body<{ groupIds: string[]; enabled?: boolean; defaultMonthlyCredits?: number }>(request);
+      const data = await body<{ groupIds: string[]; enabled?: boolean; defaultMonthlyCredits?: number; monthlyCreditMode?: MonthlyCreditMode; rolloverCap?: number | null; monthlySpendLimit?: number | null }>(request);
       if (!Array.isArray(data.groupIds) || data.groupIds.some((id) => typeof id !== "string")) return failure(requestId, 400, "validation_error", "groupIds must be an array of group IDs");
-      const usersUpdated = await bulkUpdateUsersByGroups(data.groupIds, { enabled: data.enabled, defaultMonthlyCredits: data.defaultMonthlyCredits }, principal, requestId);
+      const usersUpdated = await bulkUpdateUsersByGroups(data.groupIds, {
+        enabled: data.enabled, defaultMonthlyCredits: data.defaultMonthlyCredits,
+        monthlyCreditMode: data.monthlyCreditMode, rolloverCap: data.rolloverCap, monthlySpendLimit: data.monthlySpendLimit,
+      }, principal, requestId);
       return response(requestId, { data: { usersUpdated } });
     }
     if ((match = path.match(/^\/groups\/([^/]+)$/)) && request.method === "GET") {
@@ -327,7 +342,8 @@ export async function handleManagementApi(request: Request, options: ManagementA
         userId: userTable.id, username: userTable.username, name: userTable.name, email: userTable.email,
         role: groupMembersTable.role, source: groupMembersTable.source, joinedAt: groupMembersTable.joinedAt,
         enabled: userTable.enabled, creditBalance: userTable.creditBalance,
-        defaultMonthlyCredits: userTable.defaultMonthlyCredits,
+        defaultMonthlyCredits: userTable.defaultMonthlyCredits, monthlyCreditMode: userTable.monthlyCreditMode,
+        rolloverCap: userTable.rolloverCap, monthlySpendLimit: userTable.monthlySpendLimit,
       }).from(groupMembersTable).innerJoin(userTable, eq(groupMembersTable.userId, userTable.id)).where(eq(groupMembersTable.groupId, id));
       return response(requestId, { data: { ...group, members } });
     }
@@ -661,7 +677,7 @@ export async function handleManagementApi(request: Request, options: ManagementA
     const databaseError = error instanceof Error && error.cause && typeof error.cause === "object" ? error.cause as { code?: unknown; message?: unknown } : undefined;
     const message = (typeof databaseError?.message === "string" ? databaseError.message : error instanceof Error ? error.message : "Request failed").replace(/\nparams:[\s\S]*$/, "");
     if (databaseError?.code === "23505" || /unique|duplicate/i.test(message)) return failure(requestId, 409, "conflict", "A resource with that normalized identifier already exists");
-    if (!databaseError && /final enabled administrator|Credits cannot|Password must|Username must|email address|required|Invalid secret|Select at least|bulk update|selected groups do not exist|Display name|must be a boolean|Role must|Invalid time range|Invalid bucket size|either userId|scopeId/i.test(message)) return failure(requestId, 400, "validation_error", message);
+    if (!databaseError && /final enabled administrator|Credits cannot|Password must|Username must|email address|required|Invalid secret|Select at least|bulk update|selected groups do not exist|Display name|must be a boolean|Role must|must be reset or rollover|must be null or a non-negative amount|Invalid time range|Invalid bucket size|either userId|scopeId/i.test(message)) return failure(requestId, 400, "validation_error", message);
     // aigctl in the gateway container already has the database: tell its operator
     // what failed instead of logging it into their terminal.
     if (trusted) return failure(requestId, 500, "internal_error", `Internal server error: ${message}`);

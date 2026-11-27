@@ -73,7 +73,7 @@
       "get": {
         "tags": ["Credits"],
         "summary": "Get credit balance",
-        "description": "Returns the key owner's current balance and monthly allocation. Requires `credits.read`.",
+        "description": "Returns the key owner's current balance, monthly allocation, how the allocation works (reset or rollover, with any rollover cap) and any monthly spend limit with what it leaves this month. Requires `credits.read`.",
         "operationId": "getCredits",
         "responses": {
           "200": {
@@ -244,7 +244,7 @@
     "responses": {
       "BadRequest": { "description": "Invalid request or unavailable model", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Unauthorized": { "description": "Missing or invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "InsufficientCredits": { "description": "The user has no available credits", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "InsufficientCredits": { "description": "The user has no available credits (code insufficient_credits) or has reached their monthly spend limit (code monthly_spend_limit_reached)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Forbidden": { "description": "Disabled access or insufficient scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Unavailable": { "description": "Bedrock is not configured (`provider_not_configured`), is unavailable, or cannot be reached (`service_unavailable`, with a message that names no upstream address)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     },
@@ -443,13 +443,29 @@
         }
       },
       "CreditBalance": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["object", "currency", "balance", "monthly_allocation"],
+            "properties": {
+              "object": { "const": "credit_balance" },
+              "currency": { "const": "USD" },
+              "balance": { "type": "number" },
+              "monthly_allocation": { "type": "number" }
+            }
+          },
+          { "$ref": "#/components/schemas/CreditControl" }
+        ]
+      },
+      "CreditControl": {
         "type": "object",
-        "required": ["object", "currency", "balance", "monthly_allocation"],
+        "description": "How the account's monthly allocation works and its monthly spend limit. Gateways from before these fields omit them; treat that as the reset mode without a cap or limit.",
+        "required": ["monthly_credit_mode", "rollover_cap", "monthly_spend_limit", "monthly_spend_remaining"],
         "properties": {
-          "object": { "const": "credit_balance" },
-          "currency": { "const": "USD" },
-          "balance": { "type": "number" },
-          "monthly_allocation": { "type": "number" }
+          "monthly_credit_mode": { "type": "string", "enum": ["reset", "rollover"], "description": "What the monthly run does with monthly_allocation: reset replaces the balance with it (unspent credits expire); rollover adds it to the balance (unspent credits carry over), trimmed so the balance does not pass rollover_cap." },
+          "rollover_cap": { "type": ["number", "null"], "minimum": 0, "description": "Rollover mode: the balance the monthly allocation may bring the account up to; at or above it the allocation is skipped. Null: no cap. Ignored in reset mode." },
+          "monthly_spend_limit": { "type": ["number", "null"], "minimum": 0, "description": "The most metered usage the account may be charged in a UTC calendar month, whatever its balance. Once reached, inference returns 402 monthly_spend_limit_reached until the next month. Null: no limit." },
+          "monthly_spend_remaining": { "type": ["number", "null"], "minimum": 0, "description": "What monthly_spend_limit leaves this month: the limit less this month's metered spend, never below zero. The account can spend the lesser of this and its balance. Null without a limit." }
         }
       },
       "PeriodBudget": {
@@ -464,8 +480,8 @@
           "opening_balance": { "type": ["number", "null"], "minimum": 0, "description": "All pre-month ledger additions less consumption: carry-in, not a new recurring grant." },
           "top_ups": { "type": ["number", "null"], "minimum": 0, "description": "Current-month administrator additions, including initial funding within this month." },
           "adjustment_removals": { "type": ["number", "null"], "minimum": 0, "description": "Current-month administrator removals, expressed positively." },
-          "reset_additions": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month positive replacement-reset deltas, including repeated resets." },
-          "reset_removals": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month negative replacement-reset deltas, expressed positively." },
+          "reset_additions": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month positive monthly-run deltas: replacement resets and rollover allocations, including repeated runs." },
+          "reset_removals": { "type": ["number", "null"], "minimum": 0, "description": "Sum of current-month negative replacement-reset deltas, expressed positively. A rollover never removes credits." },
           "net_funding": { "type": ["number", "null"], "description": "top_ups - adjustment_removals + reset_additions - reset_removals; may be negative. Allocation edits alone grant nothing." },
           "effective_budget": { "type": ["number", "null"], "minimum": 0, "description": "opening_balance + net_funding; authoritative percentage denominator." },
           "metered_spend": { "type": ["number", "null"], "description": "Current-month charged usage/chat/api/embedding consumption. Still reported when unavailable if finite, otherwise null." },
@@ -527,14 +543,19 @@
             }
           },
           "credits": {
-            "type": "object",
-            "required": ["used", "balance", "monthly_allocation", "percent_used"],
-            "properties": {
-              "used": { "type": "number", "description": "Metered USD charged in this period" },
-              "balance": { "type": "number", "description": "Current balance, not a historical period-end balance" },
-              "monthly_allocation": { "type": "number" },
-              "percent_used": { "type": ["number", "null"], "description": "Legacy used divided by recurring allocation times 100, uncapped; null when allocation is zero. Unchanged and not top-up-inclusive; use available budget.percent_used for the authoritative period budget." }
-            }
+            "allOf": [
+              {
+                "type": "object",
+                "required": ["used", "balance", "monthly_allocation", "percent_used"],
+                "properties": {
+                  "used": { "type": "number", "description": "Metered USD charged in this period; what monthly_spend_limit counts" },
+                  "balance": { "type": "number", "description": "Current balance, not a historical period-end balance" },
+                  "monthly_allocation": { "type": "number" },
+                  "percent_used": { "type": ["number", "null"], "description": "Legacy used divided by recurring allocation times 100, uncapped; null when allocation is zero. Unchanged and not top-up-inclusive; use available budget.percent_used for the authoritative period budget." }
+                }
+              },
+              { "$ref": "#/components/schemas/CreditControl" }
+            ]
           },
           "requests": { "type": "integer" },
           "tokens": {

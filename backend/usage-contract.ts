@@ -1,3 +1,5 @@
+import { isMonthlyCreditMode, type MonthlyCreditMode } from "../shared/credit-control";
+
 export const METERED_USAGE_EVENT_TYPES = ["usage", "chat", "api", "embedding"] as const;
 
 export type MeteredUsageEventType = (typeof METERED_USAGE_EVENT_TYPES)[number];
@@ -174,6 +176,44 @@ function breakdownObject(values: Map<string, BreakdownEntry>) {
 
 export type BudgetUnavailableReason = "unsupported_ledger_event" | "future_ledger_event" | "ledger_balance_mismatch" | "invalid_amount";
 
+/** How an account's monthly credits work, as /v1/credits and /v1/usage report it. */
+export interface CreditControlSummary {
+  /** `reset`: the monthly run replaces the balance with the monthly allocation; `rollover`: it adds the allocation. */
+  monthly_credit_mode: MonthlyCreditMode;
+  /** Rollover: the balance the monthly allocation may bring the account up to; null is no cap. */
+  rollover_cap: number | null;
+  /** The most metered usage that may be charged in a UTC month; null is no limit. */
+  monthly_spend_limit: number | null;
+  /** What the limit leaves to spend this month, never below zero; null without a limit. */
+  monthly_spend_remaining: number | null;
+}
+
+const DEFAULT_CREDIT_CONTROL: CreditControlSummary = {
+  monthly_credit_mode: "reset", rollover_cap: null, monthly_spend_limit: null, monthly_spend_remaining: null,
+};
+
+function finiteOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** The credit control fields of a user row; amounts may be numeric text. */
+export function creditControlSummary(account: {
+  monthlyCreditMode: string;
+  rolloverCap: unknown;
+  monthlySpendLimit: unknown;
+  monthlySpendRemaining: unknown;
+}): CreditControlSummary {
+  const limit = finiteOrNull(account.monthlySpendLimit);
+  return {
+    monthly_credit_mode: isMonthlyCreditMode(account.monthlyCreditMode) ? account.monthlyCreditMode : "reset",
+    rollover_cap: finiteOrNull(account.rolloverCap),
+    monthly_spend_limit: limit,
+    monthly_spend_remaining: limit === null ? null : finiteOrNull(account.monthlySpendRemaining),
+  };
+}
+
 /** Funding amounts are calculated/reconciled with exact NUMERIC arithmetic in SQL. */
 export interface PeriodBudgetAmounts {
   opening_balance: number;
@@ -212,6 +252,7 @@ export function buildNativeMonthlyUsage(params: {
   monthlyAllocation: number;
   metrics: UsageMetrics;
   dashboardUrl?: string;
+  creditControl?: CreditControlSummary;
 }) {
   const metrics = normalizeUsageMetrics(params.metrics);
   const allocation = finite(params.monthlyAllocation);
@@ -230,6 +271,7 @@ export function buildNativeMonthlyUsage(params: {
       balance,
       monthly_allocation: allocation,
       percent_used: allocation > 0 ? metrics.spend / allocation * 100 : null,
+      ...(params.creditControl ?? DEFAULT_CREDIT_CONTROL),
     },
     requests: metrics.requests,
     tokens: {

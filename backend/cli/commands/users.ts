@@ -1,9 +1,10 @@
 import { USER_API_KEY_SCOPES } from "../../api-key-utils";
+import { MONTHLY_CREDIT_MODES } from "../../../shared/credit-control";
 import { call, type ManagementClient } from "../client";
 import { CliError, UsageError } from "../errors";
-import type { Command, CommandGroup } from "../framework";
+import type { Command, CommandContext, CommandGroup, OptionSpec } from "../framework";
 import {
-  choosePassword, confirm, expandScopes, listOption, optionalAmount, optionalBoolean, parseExpiry,
+  choosePassword, confirm, expandScopes, listOption, optionalAmount, optionalBoolean, optionalNullableAmount, parseExpiry,
   PASSWORD_OPTIONS, stringOption, YES_OPTION,
 } from "../inputs";
 import { formatCredits, formatTime, printJson, printList, renderDetails, type Column } from "../output";
@@ -14,6 +15,30 @@ import { getUser, parseChoice, report, requiredOption, revealSecret } from "./co
 
 const ROLES = ["user", "admin"] as const;
 
+/** Options for how a user's monthly credits work; users create/update and groups bulk-update take them. */
+export const CREDIT_CONTROL_OPTIONS: Record<string, OptionSpec> = {
+  "monthly-credit-mode": { type: "string", value: "<mode>", description: "What the monthly run does with the monthly credits: reset (replace the balance; unspent credits expire) or rollover (add them to the balance)" },
+  "rollover-cap": { type: "string", value: "<credits>", description: "Rollover: the balance the monthly credits may bring the user up to ('' or none: no cap)" },
+  "monthly-spend-limit": { type: "string", value: "<credits>", description: "The most the user can be charged in a UTC month, whatever the balance ('' or none: no limit)" },
+};
+
+/** The credit control fields the options set, for a create, update or bulk update body. */
+export function creditControlFields(context: CommandContext): { monthlyCreditMode?: string; rolloverCap?: number | null; monthlySpendLimit?: number | null } {
+  const fields: { monthlyCreditMode?: string; rolloverCap?: number | null; monthlySpendLimit?: number | null } = {};
+  const mode = parseChoice(context, "monthly-credit-mode", stringOption(context.options["monthly-credit-mode"]), MONTHLY_CREDIT_MODES);
+  if (mode) fields.monthlyCreditMode = mode;
+  const rolloverCap = optionalNullableAmount("rollover-cap", context.options["rollover-cap"]);
+  if (rolloverCap !== undefined) fields.rolloverCap = rolloverCap;
+  const monthlySpendLimit = optionalNullableAmount("monthly-spend-limit", context.options["monthly-spend-limit"]);
+  if (monthlySpendLimit !== undefined) fields.monthlySpendLimit = monthlySpendLimit;
+  return fields;
+}
+
+/** A cap or limit for tables and details: none when there is none. */
+export function formatOptionalCredits(value: number | null | undefined): string {
+  return value === null || value === undefined ? "none" : formatCredits(value);
+}
+
 export const USER_COLUMNS: Column<User>[] = [
   { header: "ID", value: (user) => user.id, wide: true },
   { header: "USERNAME", value: (user) => user.username },
@@ -23,6 +48,9 @@ export const USER_COLUMNS: Column<User>[] = [
   { header: "ENABLED", value: (user) => user.enabled },
   { header: "BALANCE", value: (user) => formatCredits(user.creditBalance), align: "right" },
   { header: "MONTHLY", value: (user) => formatCredits(user.defaultMonthlyCredits), align: "right" },
+  { header: "MODE", value: (user) => user.monthlyCreditMode },
+  { header: "ROLLOVER-CAP", value: (user) => formatOptionalCredits(user.rolloverCap), align: "right", wide: true },
+  { header: "SPEND-LIMIT", value: (user) => formatOptionalCredits(user.monthlySpendLimit), align: "right", wide: true },
   { header: "GROUPS", value: (user) => user.groups.map((group) => group.name), maxWidth: 40 },
   { header: "CHANGE-PASSWORD", value: (user) => user.mustChangePassword, wide: true },
   { header: "CREATED", value: (user) => formatTime(user.createdAt), wide: true },
@@ -39,6 +67,10 @@ export function userDetails(user: User): string {
     ["Must change password", user.mustChangePassword],
     ["Credit balance", formatCredits(user.creditBalance)],
     ["Monthly credits", formatCredits(user.defaultMonthlyCredits)],
+    ["Monthly credit mode", user.monthlyCreditMode === "rollover" ? "rollover (unspent credits carry over)" : "reset (unspent credits expire)"],
+    ["Rollover cap", user.monthlyCreditMode === "reset" && user.rolloverCap !== null ? `${formatCredits(user.rolloverCap)} (applies in rollover mode only)` : formatOptionalCredits(user.rolloverCap)],
+    ["Monthly spend limit", user.monthlySpendLimit === null ? "none" : `${formatCredits(user.monthlySpendLimit)} (${formatCredits(user.monthlySpendRemaining)} left this month)`],
+    ["Monthly credits applied", user.monthlyCreditsAppliedAt ? formatTime(user.monthlyCreditsAppliedAt) : "never"],
     ["Groups", user.groups.map((group) => `${group.name} (${group.role})`)],
     ["Created", formatTime(user.createdAt)],
   ]);
@@ -102,13 +134,15 @@ By default the user must change the password at the first sign-in.`,
     role: { type: "string", value: "<role>", description: "user (default) or admin" },
     disabled: { type: "boolean", description: "Create the account disabled: no sign-in and no API access" },
     balance: { type: "string", value: "<credits>", description: "Initial credit balance in dollars (default 0)" },
-    "monthly-credits": { type: "string", value: "<credits>", description: "Balance the monthly reset restores (default 0: no reset)" },
+    "monthly-credits": { type: "string", value: "<credits>", description: "Credits the monthly run gives the user (default 0: none)" },
+    ...CREDIT_CONTROL_OPTIONS,
     group: { type: "string", multiple: true, value: "<group>", description: "Add the user to this group (ID or name)" },
     "must-change-password": { type: "string", value: "<bool>", description: "Require a new password at the first sign-in (default true)" },
     ...PASSWORD_OPTIONS,
   },
   examples: [
     "aigctl users create --username alice --email alice@example.com --name 'Alice Smith' --monthly-credits 50",
+    "aigctl users create --username carol --email carol@example.com --monthly-credits 100 --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300",
     "aigctl users create --username ops --email ops@example.com --role admin --generate-password",
     "printf '%s' \"$PASSWORD\" | kubectl exec -i deploy/ai-gateway-ai-gateway -- aigctl users create --username bob --email bob@example.com --password-stdin",
   ],
@@ -119,6 +153,7 @@ By default the user must change the password at the first sign-in.`,
     const role = parseChoice(context, "role", stringOption(context.options.role), ROLES) ?? "user";
     const creditBalance = optionalAmount("balance", context.options.balance);
     const defaultMonthlyCredits = optionalAmount("monthly-credits", context.options["monthly-credits"]);
+    const creditControl = creditControlFields(context);
     const mustChangePassword = optionalBoolean("must-change-password", context.options["must-change-password"]) ?? true;
     const client = await context.client();
     await assertSetupClosed(client);
@@ -127,7 +162,7 @@ By default the user must change the password at the first sign-in.`,
     const { password, generated } = await choosePassword(context, username);
     const { data } = await call<{ data: User }>(client, "POST", "/users", { json: {
       username, email, name, password, role, enabled: context.options.disabled !== true, mustChangePassword,
-      creditBalance, defaultMonthlyCredits, groupIds: groups.map((group) => group.id),
+      creditBalance, defaultMonthlyCredits, ...creditControl, groupIds: groups.map((group) => group.id),
     } });
     const user = await getUser(client, data.id);
     const message = `Created ${user.role === "admin" ? "administrator" : "user"} ${user.username} (${user.id})${user.enabled ? "" : ", disabled"}.`;
@@ -142,6 +177,10 @@ const update: Command = {
   summary: "Change a user's details, role or credits",
   usage: "<user>",
   details: `Setting --balance records an administrator adjustment in the credit ledger.
+The monthly run (the first of each UTC month, or 'aigctl credits monthly-reset') gives users their monthly credits:
+in reset mode it replaces the balance with them, so unspent credits expire; in rollover mode it adds them to the
+balance, so unspent credits carry over, trimmed so the balance does not pass the rollover cap. A monthly spend limit
+caps what the user can be charged in a UTC month, in either mode.
 Use 'users enable' and 'users disable' for account access and 'users set-password' for passwords.`,
   options: {
     username: { type: "string", value: "<username>", description: "New sign-in name" },
@@ -149,10 +188,16 @@ Use 'users enable' and 'users disable' for account access and 'users set-passwor
     name: { type: "string", value: "<name>", description: "New display name" },
     role: { type: "string", value: "<role>", description: "user or admin" },
     balance: { type: "string", value: "<credits>", description: "Set the credit balance in dollars" },
-    "monthly-credits": { type: "string", value: "<credits>", description: "Balance the monthly reset restores (0: no reset)" },
+    "monthly-credits": { type: "string", value: "<credits>", description: "Credits the monthly run gives the user (0: none)" },
+    ...CREDIT_CONTROL_OPTIONS,
     "must-change-password": { type: "string", value: "<bool>", description: "Require a new password at the next sign-in" },
   },
-  examples: ["aigctl users update alice --role admin", "aigctl users update alice --balance 25 --monthly-credits 50"],
+  examples: [
+    "aigctl users update alice --role admin",
+    "aigctl users update alice --balance 25 --monthly-credits 50",
+    "aigctl users update alice --monthly-credits 100 --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300",
+    "aigctl users update alice --monthly-spend-limit none",
+  ],
   async run(context) {
     const patch: Record<string, unknown> = {};
     for (const field of ["username", "email", "name"] as const) {
@@ -165,6 +210,7 @@ Use 'users enable' and 'users disable' for account access and 'users set-passwor
     if (balance !== undefined) patch.creditBalance = balance;
     const monthly = optionalAmount("monthly-credits", context.options["monthly-credits"]);
     if (monthly !== undefined) patch.defaultMonthlyCredits = monthly;
+    Object.assign(patch, creditControlFields(context));
     const mustChangePassword = optionalBoolean("must-change-password", context.options["must-change-password"]);
     if (mustChangePassword !== undefined) patch.mustChangePassword = mustChangePassword;
     if (!Object.keys(patch).length) throw new UsageError("Nothing to change: pass at least one option", context.commandName);

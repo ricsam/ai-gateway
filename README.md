@@ -88,13 +88,19 @@ Enabled aliases and mapped app tiers appear in `/v1/models` (under their names: 
 
 In pinned mode, effort and thinking are independent where supported. Unsupported combinations—including thinking off on always-thinking models—are rejected, and pinned efforts must be supported rather than silently clamped. Native Converse supports aliases; pinned native Invoke alias rewriting supports Anthropic models only (use Converse or Chat Completions for other model families). Client-mode aliases and their app tier IDs route native Bedrock requests without overriding native reasoning options. Existing direct-model requests and pinned aliases are unchanged. Apply database migrations before running this version; no aliases or apps are seeded automatically.
 
+## Monthly credits
+
+Each user has a monthly quota (`defaultMonthlyCredits`) and a monthly credit mode. On the first day of each UTC month, **reset** (the default) sets the balance to the quota, so unspent credits expire; **rollover** adds the quota to the balance, so unspent credits carry over, trimmed so the balance does not pass an optional rollover cap (and skipped at or above it). A rollover account receives one month's quota once per UTC month, also when an administrator applies monthly credits by hand. An optional maximum monthly spend caps the metered usage an account can be charged in a UTC month, whatever its balance, in either mode: inference then returns `402 monthly_spend_limit_reached` until the next month, and the request that reaches the limit is charged only up to it.
+
+For example, a $100 quota with rollover, a $600 rollover cap and a $300 maximum monthly spend lets an account bank up to six months of credits but spend at most three months' worth in one month. Set them per user in Admin → Users (**Credit control**), for the members of groups in Admin → Groups, with `aigctl users update alice --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300` (or `aigctl groups bulk-update`), or with the management API's `monthlyCreditMode`, `rolloverCap` and `monthlySpendLimit`. `/v1/credits`, `/v1/usage` and the profile page report them, with what the spend limit leaves this month. Migration `0008_credit_rollover` adds the settings; existing accounts keep the monthly reset with no cap or limit. See [Monthly credits](docs/credits.mdx#monthly-credits).
+
 ## Authentication and groups
 
 Local username/password login is always the recovery path. Public registration is disabled after the atomic first-boot transaction. Administrators create local users, choose initial passwords, and may force password change on first login. Account enablement controls both login and API access. API requests still require a valid inference key with the required scopes, and inference requires sufficient credits. Disabling a user invalidates sessions and blocks their inference keys. Final enabled-administrator safeguards cover demotion, disablement, and deletion.
 
 The legacy per-user `apiEnabled` control has been removed. Enabled users previously blocked by that flag can now use their existing valid keys; disabled accounts stay disabled. Migration `0005_remove_user_api_enabled` drops only the obsolete column and preserves users, keys, and balances. Coordinate the migration with the application upgrade: older application versions still require that column.
 
-Groups organize membership and reporting; credits remain user-owned. The Groups screen can select multiple groups and apply monthly quota or account-enablement changes to the union of their members. External identities are anchored by provider and immutable subject. Implicit email-based account linking is disabled by default; a controlled migration option can reconcile exact existing email matches when the provider is the sole enabled OIDC integration.
+Groups organize membership and reporting; credits remain user-owned. The Groups screen can select multiple groups and apply monthly quota, credit control or account-enablement changes to the union of their members. External identities are anchored by provider and immutable subject. Implicit email-based account linking is disabled by default; a controlled migration option can reconcile exact existing email matches when the provider is the sole enabled OIDC integration.
 
 The Authentication screen and management API configure generic OIDC and trusted-header providers, encrypted secrets, discovery tests, claim/header mapping, provisioning policy, and no-restart revisions. Trusted-header authentication is an explicit advanced mode: the immediate TCP peer must match a configured CIDR, the proxy must strip client-supplied identity headers, and every request must carry the configured shared secret. Forwarded client-IP headers are never used as the trusted source address.
 
@@ -163,6 +169,7 @@ TIMESCALE_ADMIN_URL=postgres://... bun run ledger:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run throughput:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run reasoning:verify
 TIMESCALE_ADMIN_URL=postgres://... bun run cli:verify
+TIMESCALE_ADMIN_URL=postgres://... bun run credits:verify
 
 docker compose config
 helm lint charts/ai-gateway
