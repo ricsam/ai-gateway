@@ -47,6 +47,14 @@ Test restore procedures regularly.
 
 Use immutable image tags in production and run migrations before the application rollout. Do not deploy `latest` when rollback and auditability matter.
 
+## Speech to text
+
+The [speech-to-text endpoints](/docs/speech-to-text) decode every upload but PCM WAV with ffmpeg, which the container image includes. A gateway run from source needs `ffmpeg` on `PATH`; without it, those endpoints accept only PCM WAV files and answer others with `unsupported_audio_format`.
+
+- ffmpeg runs as a child process of the gateway for each decoding pass of a transcription, at most two per file. It reads the upload from a pipe, with the demuxer that the file's bytes name and no protocol but the pipe, so it cannot open other files or URLs, and it decodes only the first audio track. It is stopped when the request ends, or when it produces no audio for 2 minutes while the gateway waits for it.
+- A transcription holds its upload, up to 25 MB, in memory, with a few blocks of decoded audio and the chunks being transcribed. It writes no temporary files, so a read-only root filesystem works.
+- A transcription responds when its last chunk is transcribed, which takes longer for long files and for Voxtral Small. Give proxies in front of the gateway a response timeout to match.
+
 ## Security checklist
 
 - Terminate public traffic with HTTPS and set `BASE_URL` to that exact origin.
@@ -54,6 +62,7 @@ Use immutable image tags in production and run migrations before the application
 - Keep TimescaleDB private.
 - Use long random deployment secrets and a secret manager.
 - Restrict AWS credentials to required Bedrock actions and resources.
+- Deploy image updates: the image's ffmpeg decodes untrusted uploads for the speech-to-text endpoints.
 - Give automation management keys the smallest scope and an expiry.
 - Keep at least two enabled administrators.
 - Do not expose `/setup` before an operator can complete it; `aigctl setup init` completes it from inside the cluster.

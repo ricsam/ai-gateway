@@ -1,6 +1,6 @@
 ---
 title: "Models and AWS"
-description: "Configure encrypted Bedrock credentials, model IDs, regions, limits, pricing, and caching."
+description: "Configure encrypted Bedrock credentials, model IDs, regions, limits, pricing, caching, and speech models."
 ---
 
 The enabled model catalog is shared by the public API and the built-in playground. All inference is routed to AWS Bedrock.
@@ -101,6 +101,41 @@ Each request with thinking logs one line, for example:
 
 To measure the effect on a deployment, `bun run reasoning:ab` runs a multi-step tool task and sends every step twice: with the key of a user whose reasoning is replayed, and with the key of a second user, for whom nothing is stored. It reports output tokens, time and settled cost per step. Set `GATEWAY_URL`, `AI_GATEWAY_API_KEY` and `AI_GATEWAY_CONTROL_API_KEY`; it spends real credits, so cap it with `--max-cost`.
 
+## Speech models
+
+The [speech-to-text endpoints](/docs/speech-to-text) need a model that transcribes an audio file sent through Converse. On Bedrock, these are Mistral's Voxtral models:
+
+| Model | Bedrock model ID | Use for |
+| --- | --- | --- |
+| Voxtral Mini 3B | `mistral.voxtral-mini-3b-2507` | Fast and cheap transcription: an 8.5-minute recording took about 5 seconds |
+| Voxtral Small 24B | `mistral.voxtral-small-24b-2507` | Noisy audio and accents, which it transcribes better; about 2 to 3 times slower |
+
+Amazon Nova Sonic models are speech-to-speech models for bidirectional streaming and don't transcribe files.
+
+Bedrock lists both Voxtral models as Legacy, with an end-of-life date of March 30, 2027. They are offered in-Region only, without cross-Region inference profiles, so configure the plain model ID, and a **Region override** when the default AWS Region doesn't offer it. On November 27, 2026, audio requests worked in `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-1`, `eu-west-2`, `ap-northeast-1`, `ap-south-1`, `ap-southeast-2` and `sa-east-1`. In `eu-central-1`, `eu-north-1` and `eu-west-3`, Converse rejected the model IDs as invalid, although Bedrock's model cards list some of these Regions, so test the Region you choose.
+
+Add each model in **Admin → Models** with:
+
+- Input and output prices from the [Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/). The commands below use example prices, as listed for US Regions: $0.04 per million input and output tokens for Voxtral Mini, and $0.10 per million input and $0.30 per million output tokens for Voxtral Small. Verify them for your Region.
+- A context window of 32,000 tokens.
+- Max output tokens of at least 4,096. Each chunk of a transcription asks for at most about 1,000 output tokens, capped by this limit, so a much lower limit cuts the transcripts of long chunks short.
+- A region override where the default Region doesn't offer the model.
+
+```bash
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl models create \
+  --model-id mistral.voxtral-mini-3b-2507 --name "Voxtral Mini" --input-price 0.04 --output-price 0.04 \
+  --context-window 32000 --max-output-tokens 4096 --region eu-west-1
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl models create \
+  --model-id mistral.voxtral-small-24b-2507 --name "Voxtral Small" --input-price 0.1 --output-price 0.3 \
+  --context-window 32000 --max-output-tokens 4096 --region eu-west-1
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl aliases create voxtral-mini --upstream "Voxtral Mini"
+kubectl -n ai-gateway exec deploy/ai-gateway-ai-gateway -- aigctl aws test "Voxtral Mini"
+```
+
+An alias such as `voxtral-mini` gives clients a short model ID that stays the same when you move it to another upstream model. The AWS credentials need `bedrock:InvokeModel` on the models. **Test model before saving** and `aigctl aws test` send a short text prompt, which Voxtral answers too, so they check the model ID, Region, credentials and model access but not audio; transcribe a short file to check that.
+
+Each chunk of a transcription is a Bedrock request of its own, up to 6 at a time, while analytics count the transcription as one request; see [Throughput and Bedrock quotas](#throughput-and-bedrock-quotas).
+
 ## Region selection
 
 A model's region override wins over the default region. The runtime caches Bedrock clients by configuration revision and region. Saving AWS settings invalidates the client cache so new requests use the current credentials.
@@ -128,6 +163,7 @@ When you size a request, keep in mind that:
 - Only requests completed through this gateway are counted. Other Bedrock clients in the same AWS account and Region share its quotas.
 - Throttled requests aren't recorded, so traffic that already reaches a quota shows that quota as its peak. Ask for headroom above the observed peak.
 - Usage is recorded per upstream model ID, not per Region. A model with a region override uses that Region's quotas.
+- A [transcription](/docs/speech-to-text) counts as one request, but Bedrock receives one request per chunk of up to 59.5 seconds of speech, up to 6 at a time: an hour of speech makes about 60 or more. Allow for that when you ask for a Voxtral model's RPM.
 
 Automation can read the same values from the management API with the `usage.read` scope. Add `userId` and `groupId`, each repeatable, to limit the scope, and `start` and `end` instead of `timeRange` for a custom window (see [Custom windows](/docs/administration/management-api#custom-windows)):
 

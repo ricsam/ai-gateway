@@ -5,7 +5,7 @@ description: "Install AI Gateway from the hosted chart repository or a local che
 
 The project publishes `ai-gateway` as a conventional HTTPS Helm repository on GitHub Pages at `https://ricsam.github.io/ai-gateway`. GitHub Actions packages each chart release, updates the `gh-pages` branch, and deploys that branch with GitHub Pages.
 
-The chart pins a public, pre-built `ghcr.io/ricsam/ai-gateway:sha-<full-commit-sha>` image by default. The image supports Linux AMD64 and ARM64; chart `appVersion` identifies the pinned application build.
+The chart pins a public, pre-built `ghcr.io/ricsam/ai-gateway:sha-<full-commit-sha>` image by default. The image supports Linux AMD64 and ARM64; chart `appVersion` identifies the pinned application build. The image includes ffmpeg for the [speech-to-text endpoints](/docs/speech-to-text), which decode uploads in memory and through pipes and write no temporary files, so they work with the chart's read-only root filesystem.
 
 ## Install from the chart repository
 

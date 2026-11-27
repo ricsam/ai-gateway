@@ -46,6 +46,7 @@
             "pages": [
               "docs/api-keys",
               "docs/chat-completions",
+              "docs/speech-to-text",
               "docs/tool-calling",
               "docs/credits"
             ]

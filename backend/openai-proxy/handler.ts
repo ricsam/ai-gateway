@@ -43,7 +43,7 @@ import { fetchRemoteImages } from "./remote-image";
 import { addConverseCachePoints } from "./transform/cache-converse";
 import { extractConverseCacheUsage, extractStreamingCacheUsage, emptyCacheUsage } from "./transform/cache-usage";
 import type { CacheUsage } from "./transform/cache-usage";
-import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError, OpenAIErrorType } from "./transform/types";
+import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta, OpenAIChatCompletionRequest, OpenAIError } from "./transform/types";
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./transform/utils";
 import { getBedrockClient } from "../bedrock";
 import { isControllerClosedError } from "../stream-utils";
@@ -52,10 +52,9 @@ import {
   isUnreadableUpstreamResponse,
   isUpstreamAnswer,
   isUpstreamConnectionError,
-  isUpstreamGatewayStatus,
-  UPSTREAM_UNAVAILABLE_MESSAGE,
   upstreamMessage,
 } from "../upstream-errors";
+import { BEDROCK_ERRORS, errorResponse, logUpstreamError, mapUpstreamError } from "./errors";
 
 interface ModelInfo {
   modelId: string;
@@ -91,88 +90,12 @@ async function sendWithReplayFallback<T>(attempt: BedrockAttempt, send: (input: 
 }
 
 /**
- * Create an OpenAI-style error response
- */
-function errorResponse(
-  message: string,
-  type: OpenAIErrorType,
-  status: number,
-  code?: string,
-  param?: string | null,
-): Response {
-  const error: OpenAIError = {
-    error: {
-      message,
-      type,
-      code: code ?? null,
-      ...(param !== undefined && { param }),
-    },
-  };
-  return Response.json(error, { status });
-}
-
-/**
  * Warn when a response ended for a reason other than finishing its turn or
  * calling a tool, such as a content filter, guardrail or output limit.
  */
 function logAbnormalStopReason(reason: string | undefined, modelId: string, requestId: string, streaming: boolean): void {
   if (!reason || reason === "end_turn" || reason === "tool_use" || reason === "stop_sequence") return;
   console.warn(`[OpenAI Proxy] Stop reason: request=${requestId} model=${modelId} stream=${streaming} stop=${reason}`);
-}
-
-/** The OpenAI status, type and code of each Bedrock exception a client can act on. */
-const BEDROCK_ERRORS = new Map<string, { status: number; type: OpenAIErrorType; code: string }>([
-  ["AccessDeniedException", { status: 403, type: "permission_error", code: "access_denied" }],
-  ["ThrottlingException", { status: 429, type: "rate_limit_error", code: "rate_limit_exceeded" }],
-  ["ResourceNotFoundException", { status: 404, type: "not_found_error", code: "model_not_found" }],
-  ["ValidationException", { status: 400, type: "invalid_request_error", code: "invalid_request" }],
-  ["ModelTimeoutException", { status: 408, type: "timeout_error", code: "timeout" }],
-  ["ServiceUnavailableException", { status: 503, type: "server_error", code: "service_unavailable" }],
-]);
-
-interface MappedUpstreamError {
-  status: number;
-  type: OpenAIErrorType;
-  code: string;
-  message: string;
-  /** provider: an answer from Bedrock; unavailable: Bedrock could not be reached; unexpected: the gateway's own failure. */
-  kind: "provider" | "unavailable" | "unexpected";
-}
-
-/**
- * Map a failed upstream call to the error a client gets. Bedrock's exceptions
- * keep their message. A connection that could not be opened or broke, a
- * response cut off mid-body, and a 502/503/504 from in front of the upstream
- * become 503 service_unavailable with a neutral message: their own messages
- * name the upstream's address. The gateway's own failures keep their details
- * in the log.
- */
-function mapUpstreamError(error: unknown): MappedUpstreamError {
-  const name = error instanceof Error ? error.name : "";
-  if (name === "ProviderNotConfiguredError") {
-    return { status: 503, type: "server_error", code: "provider_not_configured", message: "AWS Bedrock is not configured", kind: "provider" };
-  }
-  const known = BEDROCK_ERRORS.get(name);
-  if (known) return { ...known, message: upstreamMessage(error) ?? name, kind: "provider" };
-  if (isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error) || isUpstreamGatewayStatus(error)) {
-    return { status: 503, type: "server_error", code: "service_unavailable", message: UPSTREAM_UNAVAILABLE_MESSAGE, kind: "unavailable" };
-  }
-  if (isUpstreamAnswer(error)) {
-    return { status: 500, type: "server_error", code: "internal_error", message: upstreamMessage(error) ?? (name || "Internal server error"), kind: "provider" };
-  }
-  return { status: 500, type: "server_error", code: "internal_error", message: "Internal server error", kind: "unexpected" };
-}
-
-/** Log a failed upstream call with the request it belongs to; upstream addresses stay here. */
-function logUpstreamError(mapped: MappedUpstreamError, error: unknown, requestId: string, modelId: string, streaming: boolean): void {
-  const context = `request=${requestId} model=${modelId} stream=${streaming} status=${mapped.status} code=${mapped.code}`;
-  if (mapped.kind === "unexpected") {
-    console.error(`[OpenAI Proxy] Request failed: ${context}`, error);
-  } else if (mapped.kind === "unavailable") {
-    console.error(`[OpenAI Proxy] Upstream unavailable: ${context} error=${describeError(error)}`);
-  } else {
-    (mapped.status >= 500 ? console.error : console.warn)(`[OpenAI Proxy] Upstream error: ${context} error=${describeError(error)}`);
-  }
 }
 
 /**
@@ -390,7 +313,7 @@ export async function handleOpenAIProxy(
       return errorResponse("Client request aborted", "invalid_request_error", 400, "request_aborted");
     }
     const mapped = mapUpstreamError(error);
-    logUpstreamError(mapped, error, requestId, modelInfo.modelId, streaming);
+    logUpstreamError(mapped, error, `request=${requestId} model=${modelInfo.modelId} stream=${streaming}`);
     return errorResponse(mapped.message, mapped.type, mapped.status, mapped.code);
   }
 }

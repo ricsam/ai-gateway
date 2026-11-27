@@ -10,6 +10,7 @@ import { handleManagementApi } from "./management-api";
 import { handleBrandingAsset } from "./config-service";
 import { handleTrustedHeaderSignIn } from "./trusted-header-auth";
 import { handleBedrockProxy, type BedrockProxyEndpoint } from "./bedrock-proxy";
+import { handleAudio } from "./audio/handler";
 import {
   handleCredits,
   handleHealth,
@@ -55,6 +56,12 @@ serve({
 
     if (url.pathname === "/v1/chat/completions" && request.method === "POST") {
       return handlePublicChatCompletions(request);
+    }
+    if (url.pathname === "/v1/audio/transcriptions" && request.method === "POST") {
+      return handleAudio(request, "transcriptions", { keepAlive: () => server.timeout(request, 0) });
+    }
+    if (url.pathname === "/v1/audio/subtitles" && request.method === "POST") {
+      return handleAudio(request, "subtitles", { keepAlive: () => server.timeout(request, 0) });
     }
     if (url.pathname === "/v1/models" && request.method === "GET") {
       return handleListModels(request);
