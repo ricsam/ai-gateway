@@ -122,7 +122,9 @@ function Playground() {
         for (const frame of frames) {
           const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
           if (!dataLine || dataLine === "data: [DONE]") continue;
-          const chunk = JSON.parse(dataLine.slice(6)) as { choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>; usage?: Usage; credit_usage?: CreditUsage };
+          const chunk = JSON.parse(dataLine.slice(6)) as { error?: { message?: string }; choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>; usage?: Usage; credit_usage?: CreditUsage };
+          // A response the upstream cut off ends with an error event instead of [DONE].
+          if (chunk.error) throw new Error(chunk.error.message ?? "The response ended before it was complete");
           const text = chunk.choices?.[0]?.delta?.content;
           const reasoning = chunk.choices?.[0]?.delta?.reasoning_content;
           if (text || reasoning) setMessages((current) => current.map((entry, index) => index === current.length - 1 ? { ...entry, content: entry.content + (text ?? ""), reasoning: (entry.reasoning ?? "") + (reasoning ?? "") } : entry));

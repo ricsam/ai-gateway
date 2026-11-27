@@ -48,6 +48,15 @@ import type { OpenAIChatCompletionChunk, OpenAICreditUsage, OpenAIToolCallDelta,
 import { generateChatCompletionId, unixTimestamp, mapStopReason } from "./transform/utils";
 import { getBedrockClient } from "../bedrock";
 import { isControllerClosedError } from "../stream-utils";
+import {
+  describeError,
+  isUnreadableUpstreamResponse,
+  isUpstreamAnswer,
+  isUpstreamConnectionError,
+  isUpstreamGatewayStatus,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+  upstreamMessage,
+} from "../upstream-errors";
 
 interface ModelInfo {
   modelId: string;
@@ -112,33 +121,86 @@ function logAbnormalStopReason(reason: string | undefined, modelId: string, requ
   console.warn(`[OpenAI Proxy] Stop reason: request=${requestId} model=${modelId} stream=${streaming} stop=${reason}`);
 }
 
+/** The OpenAI status, type and code of each Bedrock exception a client can act on. */
+const BEDROCK_ERRORS = new Map<string, { status: number; type: OpenAIErrorType; code: string }>([
+  ["AccessDeniedException", { status: 403, type: "permission_error", code: "access_denied" }],
+  ["ThrottlingException", { status: 429, type: "rate_limit_error", code: "rate_limit_exceeded" }],
+  ["ResourceNotFoundException", { status: 404, type: "not_found_error", code: "model_not_found" }],
+  ["ValidationException", { status: 400, type: "invalid_request_error", code: "invalid_request" }],
+  ["ModelTimeoutException", { status: 408, type: "timeout_error", code: "timeout" }],
+  ["ServiceUnavailableException", { status: 503, type: "server_error", code: "service_unavailable" }],
+]);
+
+interface MappedUpstreamError {
+  status: number;
+  type: OpenAIErrorType;
+  code: string;
+  message: string;
+  /** provider: an answer from Bedrock; unavailable: Bedrock could not be reached; unexpected: the gateway's own failure. */
+  kind: "provider" | "unavailable" | "unexpected";
+}
+
 /**
- * Map AWS SDK errors to OpenAI error format
+ * Map a failed upstream call to the error a client gets. Bedrock's exceptions
+ * keep their message. A connection that could not be opened or broke, a
+ * response cut off mid-body, and a 502/503/504 from in front of the upstream
+ * become 503 service_unavailable with a neutral message: their own messages
+ * name the upstream's address. The gateway's own failures keep their details
+ * in the log.
  */
-function mapAwsError(error: Error): Response {
-  const errorName = error.name || "";
-  if (errorName === "ProviderNotConfiguredError") {
-    return errorResponse("AWS Bedrock is not configured", "server_error", 503, "provider_not_configured");
+function mapUpstreamError(error: unknown): MappedUpstreamError {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "ProviderNotConfiguredError") {
+    return { status: 503, type: "server_error", code: "provider_not_configured", message: "AWS Bedrock is not configured", kind: "provider" };
   }
-  console.warn("[OpenAI Proxy] AWS error:", { name: error.name, message: error.message });
-  const message = error.message || "Unknown error";
-  
-  switch (errorName) {
-    case "AccessDeniedException":
-      return errorResponse(message, "permission_error", 403, "access_denied");
-    case "ThrottlingException":
-      return errorResponse(message, "rate_limit_error", 429, "rate_limit_exceeded");
-    case "ResourceNotFoundException":
-      return errorResponse(message, "not_found_error", 404, "model_not_found");
-    case "ValidationException":
-      return errorResponse(message, "invalid_request_error", 400, "invalid_request");
-    case "ModelTimeoutException":
-      return errorResponse(message, "timeout_error", 408, "timeout");
-    case "ServiceUnavailableException":
-      return errorResponse(message, "server_error", 503, "service_unavailable");
-    default:
-      return errorResponse(message, "server_error", 500, "internal_error");
+  const known = BEDROCK_ERRORS.get(name);
+  if (known) return { ...known, message: upstreamMessage(error) ?? name, kind: "provider" };
+  if (isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error) || isUpstreamGatewayStatus(error)) {
+    return { status: 503, type: "server_error", code: "service_unavailable", message: UPSTREAM_UNAVAILABLE_MESSAGE, kind: "unavailable" };
   }
+  if (isUpstreamAnswer(error)) {
+    return { status: 500, type: "server_error", code: "internal_error", message: upstreamMessage(error) ?? (name || "Internal server error"), kind: "provider" };
+  }
+  return { status: 500, type: "server_error", code: "internal_error", message: "Internal server error", kind: "unexpected" };
+}
+
+/** Log a failed upstream call with the request it belongs to; upstream addresses stay here. */
+function logUpstreamError(mapped: MappedUpstreamError, error: unknown, requestId: string, modelId: string, streaming: boolean): void {
+  const context = `request=${requestId} model=${modelId} stream=${streaming} status=${mapped.status} code=${mapped.code}`;
+  if (mapped.kind === "unexpected") {
+    console.error(`[OpenAI Proxy] Request failed: ${context}`, error);
+  } else if (mapped.kind === "unavailable") {
+    console.error(`[OpenAI Proxy] Upstream unavailable: ${context} error=${describeError(error)}`);
+  } else {
+    (mapped.status >= 500 ? console.error : console.warn)(`[OpenAI Proxy] Upstream error: ${context} error=${describeError(error)}`);
+  }
+}
+
+/**
+ * The upstream's own message for an error it sent: an exception event of the
+ * stream, which the SDK throws as the event's bare structure, or an answer.
+ */
+function upstreamExceptionMessage(error: unknown): string | undefined {
+  const fromEvent = !(error instanceof Error) && error !== null && typeof error === "object";
+  return fromEvent || isUpstreamAnswer(error) ? upstreamMessage(error) : undefined;
+}
+
+const STREAM_INTERRUPTED_MESSAGE = "The upstream model provider's stream ended before the response was complete";
+
+/**
+ * The error event that ends a stream the upstream cut off before messageStop:
+ * its connection broke or its stream ended (no error), it sent an exception,
+ * or handling its events failed.
+ */
+function streamFailureError(error: unknown): OpenAIError["error"] {
+  if (error === undefined || isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error)) {
+    return { message: STREAM_INTERRUPTED_MESSAGE, type: "server_error", code: "stream_interrupted", param: null };
+  }
+  const known = BEDROCK_ERRORS.get(error instanceof Error ? error.name : "");
+  if (known) return { message: upstreamMessage(error) ?? STREAM_INTERRUPTED_MESSAGE, type: known.type, code: known.code, param: null };
+  const message = upstreamExceptionMessage(error);
+  if (message) return { message, type: "server_error", code: "upstream_error", param: null };
+  return { message: "The response failed before it was complete", type: "server_error", code: "internal_error", param: null };
 }
 
 /**
@@ -322,11 +384,15 @@ export async function handleOpenAIProxy(
       return await handleNonStreamingRequest(attempt, modelInfo, principal, body.model, requestId, bedrockClient);
     }
   } catch (error) {
-    console.error("OpenAI proxy error:", error);
-    if (error instanceof Error) {
-      return mapAwsError(error);
+    const streaming = body.stream === true;
+    // The client left before the upstream answered: that is not an upstream failure.
+    if (request.signal.aborted) {
+      console.info(`[OpenAI Proxy] Request canceled: request=${requestId} model=${modelInfo.modelId} stream=${streaming} before the upstream answered`);
+      return errorResponse("Client request aborted", "invalid_request_error", 400, "request_aborted");
     }
-    return errorResponse("Unknown error", "server_error", 500, "internal_error");
+    const mapped = mapUpstreamError(error);
+    logUpstreamError(mapped, error, requestId, modelInfo.modelId, streaming);
+    return errorResponse(mapped.message, mapped.type, mapped.status, mapped.code);
   }
 }
 
@@ -468,6 +534,7 @@ async function handleStreamingRequest(
   requestSignal: AbortSignal
 ): Promise<Response> {
   const userId = principal.userId;
+  const startedAt = performance.now();
   const upstreamAbortController = new AbortController();
   const abortUpstream = (reason: unknown): void => {
     if (!upstreamAbortController.signal.aborted) {
@@ -505,8 +572,16 @@ async function handleStreamingRequest(
   let hasUsageMetadata = false;
   let finalUsage = transformUsage(undefined);
   let stopReason: string | undefined;
-  let sawUnexpectedError = false;
-  let streamCompleted = false;
+  // Only messageStop completes a response. Bedrock's event stream also ends
+  // without an error when the upstream connection drops between events.
+  let messageStopReceived = false;
+  let upstreamEnded = false;
+  /** What reading the upstream threw, other than the client going away. */
+  let upstreamFailure: { error: unknown } | undefined;
+  /** The response stream was errored; nothing more can be sent. */
+  let streamErrored = false;
+  /** How many events of each type arrived, for the log of a failed stream. */
+  const received = new Map<string, number>();
   let isCanceled = false;
   let isControllerClosed = false;
   let cancellationLogged = false;
@@ -651,9 +726,10 @@ async function handleStreamingRequest(
           }
           const { value: event, done } = next;
           if (done) {
-            streamCompleted = true;
+            upstreamEnded = true;
             break;
           }
+          for (const type of Object.keys(event)) received.set(type, (received.get(type) ?? 0) + 1);
 
           // Handle messageStart event
           if (event.messageStart) {
@@ -785,6 +861,7 @@ async function handleStreamingRequest(
 
           // Handle messageStop event
           if (event.messageStop) {
+            messageStopReceived = true;
             stopReason = event.messageStop.stopReason;
             logAbnormalStopReason(stopReason, model.modelId, requestId, true);
             const finishReason = mapStopReason(event.messageStop.stopReason);
@@ -841,26 +918,35 @@ async function handleStreamingRequest(
         if (isStreamCanceled() || isControllerClosedError(error)) {
           logCancellationOnce("downstream closed");
         } else {
-          sawUnexpectedError = true;
-          console.error("[OpenAI Proxy] Stream error:", error instanceof Error ? { name: error.name, message: error.message } : error);
-          safeError(error);
+          upstreamFailure = { error };
         }
       } finally {
         clearInterval(heartbeatInterval);
-        const streamCanceled = isStreamCanceled() && !streamCompleted;
         requestSignal.removeEventListener("abort", onRequestAbort);
+        // A response is complete once messageStop arrived, whatever happens after it;
+        // a stream that ends or fails before then was cut off by the upstream.
+        const outcome: "complete" | "canceled" | "failed" =
+          messageStopReceived && (upstreamEnded || !isStreamCanceled()) ? "complete"
+            : isStreamCanceled() ? "canceled"
+              : "failed";
 
-        if (streamCompleted && !streamCanceled) {
-          // Warn if stream completed without any usage metadata
-          if (inputTokens === 0 && outputTokens === 0) {
-            console.warn("[OpenAI Proxy] Stream completed with no usage metadata");
+        if (outcome === "complete") {
+          if (upstreamFailure) {
+            console.warn(`[OpenAI Proxy] Stream failed after messageStop, response kept: request=${requestId} model=${model.modelId} error=${describeError(upstreamFailure.error)}`);
           }
-        } else if (streamCanceled) {
+          if (!hasUsageMetadata) {
+            console.warn(`[OpenAI Proxy] Stream completed with no usage metadata: request=${requestId} model=${model.modelId} stop=${stopReason ?? "none"}`);
+          }
+        } else if (outcome === "canceled") {
           logCancellationOnce(hasUsageMetadata ? "billed using metadata" : "no usage metadata, not billed");
+        } else {
+          const events = [...received].map(([type, count]) => `${type}:${count}`).join(",") || "nothing";
+          const reason = upstreamFailure ? describeError(upstreamFailure.error) : "the upstream ended the stream before messageStop";
+          console.error(`[OpenAI Proxy] Stream failed: request=${requestId} model=${model.modelId} after=${Math.round(performance.now() - startedAt)}ms received=${events} usage=${hasUsageMetadata ? "reported" : "none"} error=${reason}`);
         }
 
-        const shouldBill = !sawUnexpectedError && hasUsageMetadata && (streamCompleted || streamCanceled);
-        if (shouldBill) {
+        // The upstream charges what it reported, so a cut-off or canceled stream is billed too.
+        if (hasUsageMetadata) {
           try {
             const costBreakdown = calculateCostBreakdown({
               inputTokens,
@@ -909,21 +995,22 @@ async function handleStreamingRequest(
             }
 
             // Log completion/cost for billed streams
+            const stop = stopReason ?? (outcome === "canceled" ? "canceled" : outcome === "failed" ? "interrupted" : "none");
             console.log(
-              `[OpenAI Proxy] Complete: request=${requestId} model=${model.modelId} stop=${stopReason ?? (streamCanceled ? "canceled" : "none")} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
+              `[OpenAI Proxy] Complete: request=${requestId} model=${model.modelId} stop=${stop} input=${inputTokens} output=${outputTokens} actualCost=${costBreakdown.total.toFixed(6)} charged=${(settlement?.creditsCharged ?? 0).toFixed(6)} balanceAfter=${settlement?.balanceAfter.toFixed(6) ?? "unchanged"} partial=${settlement?.partiallyCharged ?? false}`,
             );
           } catch (billingError) {
             console.error(
-              "[OpenAI Proxy] Stream billing error:",
+              `[OpenAI Proxy] Stream billing error: request=${requestId} model=${model.modelId}`,
               billingError instanceof Error ? { name: billingError.name, message: billingError.message } : billingError
             );
             if (!isStreamCanceled()) {
-              if (principal.credentialType === "session") {
-                sawUnexpectedError = true;
-                safeError(new Error("The response completed, but playground credits could not be settled"));
-              } else {
+              if (principal.credentialType !== "session") {
                 sendChunk({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [],
                   usage: { ...finalUsage, cost_details: { currency: "USD", status: "failed" } } });
+              } else if (outcome === "complete") {
+                streamErrored = true;
+                safeError(new Error("The response completed, but playground credits could not be settled"));
               }
             }
           }
@@ -932,14 +1019,19 @@ async function handleStreamingRequest(
         // Stored reasoning must be findable when the client sends its next request.
         await storedReasoning;
 
-        if (!sawUnexpectedError) {
-          // Final accounting always precedes DONE; missing metadata is not a zero charge.
-          if (streamCompleted && !isStreamCanceled()) {
+        if (!streamErrored) {
+          if (outcome === "complete" && !isStreamCanceled()) {
+            // Final accounting always precedes DONE; missing metadata is not a zero charge.
             if (!hasUsageMetadata) {
               sendChunk({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [],
                 usage: { ...finalUsage, cost_details: { currency: "USD", status: "unavailable" } } });
             }
             safeEnqueue(encoder.encode("data: [DONE]\n\n"));
+          } else if (outcome === "failed") {
+            // A cut-off response ends with an error event instead of DONE, so clients
+            // can tell it from a complete one. OpenAI's SDKs raise it as an APIError.
+            const failure: OpenAIError = { error: streamFailureError(upstreamFailure?.error) };
+            safeEnqueue(encoder.encode(`data: ${JSON.stringify(failure)}\n\n`));
           }
           safeClose();
         }
