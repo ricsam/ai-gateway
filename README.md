@@ -50,6 +50,8 @@ Commands cover first-boot setup, users and passwords, inference and management k
 | Method | Endpoint | Inference-key scope |
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | `ai.invoke` |
+| `POST` | `/v1/audio/transcriptions` | `ai.invoke` |
+| `POST` | `/v1/audio/subtitles` | `ai.invoke` |
 | `GET` | `/v1/models` | `models.read` |
 | `GET` | `/v1/credits` | `credits.read` |
 | `GET` | `/v1/usage` | `credits.read` |
@@ -62,6 +64,8 @@ Commands cover first-boot setup, users and passwords, inference and management k
 The four native compatibility endpoints retain Bedrock request/response shapes, managed prompt caching, raw NDJSON/binary streaming, cancellation, and metered settlement. Send a stable `X-Request-ID` when a client may retry a completed request; settlement receipts make the same request ID exactly-once. The OpenAI endpoint accepts the same header.
 
 The OpenAI endpoint accepts images as base64 data URLs or public `http(s)` URLs (downloaded under an SSRF-restricted policy that administrators can turn off in Admin → Brand & AWS → Inference), including images inside tool results. `reasoning_effort` (`none` through `max`) maps to Claude adaptive thinking with `output_config.effort`, Claude thinking budgets, Nova 2 `reasoningConfig`, or gpt-oss `reasoning_effort` according to each model's reasoning control, and models can define a default effort. See [Chat Completions](docs/chat-completions.mdx).
+
+`/v1/audio/transcriptions` is OpenAI's transcription API (`client.audio.transcriptions.create`): it returns the transcript as `json`, `text` or `verbose_json` with timed segments, or as `srt` or `vtt` subtitles. `/v1/audio/subtitles` returns SRT, WebVTT or JSON cues with the line length and lines per cue the client asks for. Both take a `multipart/form-data` upload of up to 25 MB (WAV, MP3, M4A, MP4, MOV, WebM, MKV, OGG, Opus, FLAC, AAC, AIFF, CAF, AMR or AVI, with up to 2 hours of audio) and a model that accepts audio: Mistral's Voxtral models on Bedrock. The gateway sends only the speech to the model, in chunks of up to 59.5 seconds, so silence costs nothing, and settles the tokens of all chunks as one usage event under the request ID. The container image includes ffmpeg; a gateway run from source needs `ffmpeg` on `PATH` for every format but PCM WAV. See [Speech to text](docs/speech-to-text.mdx).
 
 When the upstream model provider cannot be reached (a refused, reset or timed-out connection), inference endpoints return `503` with code `service_unavailable` and a message that names no upstream address; the gateway log has the details under the request ID. An OpenAI-format stream that the upstream breaks off before the model finished ends with an `error` event instead of `data: [DONE]`, and usage the upstream reported before that is still charged. See [When the upstream breaks off a stream](docs/chat-completions.mdx#when-the-upstream-breaks-off-a-stream).
 

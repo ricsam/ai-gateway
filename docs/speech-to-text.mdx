@@ -1,0 +1,347 @@
+---
+title: "Speech to text"
+description: "Transcribe audio and video files, make SRT and WebVTT subtitles, and understand timing and billing."
+---
+
+The gateway transcribes audio and video files with Bedrock speech models: Mistral's Voxtral models, which an administrator adds to the model catalog (see [Speech models](/docs/administration/models-and-aws#speech-models)). Two endpoints take the file as `multipart/form-data`:
+
+- `POST /v1/audio/transcriptions` is OpenAI's transcription API, so OpenAI's SDKs work with it. It returns the transcript as JSON or plain text, with timed segments, or as SRT or WebVTT subtitles.
+- `POST /v1/audio/subtitles` is the gateway's own subtitle endpoint. It returns SRT, WebVTT or JSON cues with the line length and lines per cue that the request asks for.
+
+Both take an inference key with the `ai.invoke` scope and need credits, as Chat Completions does.
+
+## Transcribe a file
+
+```bash
+curl https://gateway.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
+  -F file=@interview.mp3 \
+  -F model=voxtral-mini
+```
+
+```json
+{
+  "text": "Welcome to the quarterly review. We start with the numbers from the third quarter, then look at the roadmap.",
+  "usage": {
+    "type": "tokens",
+    "input_tokens": 391,
+    "output_tokens": 30,
+    "total_tokens": 421,
+    "seconds": 8.5,
+    "cost": 0.00001684,
+    "cost_details": {
+      "currency": "USD",
+      "status": "settled",
+      "calculated_cost": 0.00001684,
+      "input_cost": 0.00001564,
+      "output_cost": 0.0000012,
+      "partially_charged": false
+    }
+  }
+}
+```
+
+`model` is a model ID, alias or app tier from [`/v1/models`](/docs/chat-completions#listing-models) whose upstream model accepts audio, such as the Bedrock ID `mistral.voxtral-mini-3b-2507` or an alias like `voxtral-mini` that an administrator created for it. Pricing, the output limit and the AWS Region come from the upstream model. A model that does not accept audio returns Bedrock's validation error: HTTP `400` with code `invalid_request` and Bedrock's message.
+
+<CodeGroup>
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://gateway.example.com/v1",
+    api_key="aig_...",
+)
+
+with open("talk.mp4", "rb") as file:
+    subtitles = client.audio.transcriptions.create(
+        model="voxtral-mini",
+        file=file,
+        response_format="srt",
+    )
+print(subtitles)
+```
+
+```javascript JavaScript
+import fs from "node:fs";
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://gateway.example.com/v1",
+  apiKey: "aig_...",
+});
+
+const transcript = await client.audio.transcriptions.create({
+  model: "voxtral-mini",
+  file: fs.createReadStream("interview.mp3"),
+  response_format: "verbose_json",
+});
+for (const segment of transcript.segments ?? []) {
+  console.log(segment.start, segment.end, segment.text);
+}
+```
+
+</CodeGroup>
+
+### Request fields
+
+| Field | Value |
+| --- | --- |
+| `file` | Required. The audio or video file, at most 25 MB. See [Supported files](#supported-files). |
+| `model` | Required. A model ID, alias or app tier whose upstream model accepts audio. |
+| `response_format` | `json` (default), `text`, `verbose_json`, `srt` or `vtt`. |
+| `language` | The spoken language as an ISO 639-1 code, such as `en` or `de`. A BCP 47 tag such as `en-US` is accepted, and its language subtag is used. See [Languages and prompts](#languages-and-prompts). |
+| `prompt` | Up to 4,000 characters of context: the topic, names and terms, and their spelling. |
+| `temperature` | A number from 0 to 1. Default 0. |
+| `timestamp_granularities[]` | Only `segment` is accepted. `word` returns `400` with code `unsupported_value`: timing is per sentence or clause. |
+| `stream` | Streaming is not supported: `true` returns `400` with code `unsupported_parameter`. |
+
+Other fields are ignored.
+
+### Response formats
+
+| `response_format` | Response |
+| --- | --- |
+| `json` | `text` and [`usage`](#usage-and-billing), as above |
+| `text` | The transcript as `text/plain; charset=utf-8` |
+| `verbose_json` | The transcript with timed segments, the language and the duration |
+| `srt` | SRT subtitles as `application/x-subrip; charset=utf-8` |
+| `vtt` | WebVTT subtitles as `text/vtt; charset=utf-8` |
+
+`srt` and `vtt` have the cues that [`/v1/audio/subtitles`](#make-subtitles) makes with its defaults: at most two lines of 42 characters. Every successful response, whatever its format, also reports usage in [headers](#usage-and-billing).
+
+`verbose_json` follows OpenAI's shape:
+
+```json
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 8.5,
+  "text": "Welcome to the quarterly review. We start with the numbers from the third quarter, then look at the roadmap.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.48,
+      "end": 3.12,
+      "text": "Welcome to the quarterly review.",
+      "tokens": [],
+      "temperature": 0,
+      "avg_logprob": 0,
+      "compression_ratio": 0,
+      "no_speech_prob": 0
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.52,
+      "end": 7.94,
+      "text": "We start with the numbers from the third quarter, then look at the roadmap.",
+      "tokens": [],
+      "temperature": 0,
+      "avg_logprob": 0,
+      "compression_ratio": 0,
+      "no_speech_prob": 0
+    }
+  ],
+  "usage": {
+    "type": "tokens",
+    "input_tokens": 391,
+    "output_tokens": 52,
+    "total_tokens": 443,
+    "seconds": 8.5,
+    "cost": 0.00001772,
+    "cost_details": {
+      "currency": "USD",
+      "status": "settled",
+      "calculated_cost": 0.00001772,
+      "input_cost": 0.00001564,
+      "output_cost": 0.00000208,
+      "partially_charged": false
+    }
+  }
+}
+```
+
+- Each segment is a sentence. A sentence longer than 30 seconds is split between its clauses.
+- `start`, `end` and `duration` are seconds from the start of the file.
+- `language` is the requested language's English name in lowercase, as OpenAI reports it. Without `language`, it is guessed from the transcript's most common words for English, German, French, Spanish, Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish and Polish, and from its script for Hindi, and is `unknown` otherwise.
+- `seek` is always 0 and `temperature` is the request's. `tokens`, `avg_logprob`, `compression_ratio` and `no_speech_prob` are placeholders for OpenAI's Whisper fields: the gateway has no tokens or probabilities to report.
+
+## Make subtitles
+
+```bash
+curl https://gateway.example.com/v1/audio/subtitles \
+  -H "Authorization: Bearer $AI_GATEWAY_API_KEY" \
+  -F file=@talk.mp4 \
+  -F model=voxtral-mini \
+  -F language=en \
+  -o talk.srt
+```
+
+```text
+1
+00:00:00,480 --> 00:00:03,120
+Welcome to the quarterly review.
+
+2
+00:00:03,520 --> 00:00:07,940
+We start with the numbers from the third
+quarter, then look at the roadmap.
+```
+
+The endpoint takes `file`, `model`, `language`, `prompt` and `temperature` as [transcriptions](#request-fields) do, and:
+
+| Field | Value |
+| --- | --- |
+| `response_format` | `srt` (default), `vtt` or `json`. |
+| `max_line_length` | The longest line in characters, an integer from 16 to 120. Default 42. |
+| `max_lines` | The most lines in a cue, an integer from 1 to 4. Default 2. |
+
+Cues follow common subtitling practice:
+
+- A cue has at most `max_lines` lines of at most `max_line_length` characters, broken where the lines come out about even. Only a word longer than `max_line_length` makes a longer line.
+- A cue stays on screen for at most 7 seconds. A sentence or clause that does not fit in one cue is split into pieces of about even length.
+- A pause of 0.8 seconds or more starts a new cue, and so does the end of a sentence, unless the next sentence follows within 0.3 seconds and fits on the same line.
+- A cue shorter than 1 second stays on screen for up to 1 second when the next cue leaves room. Cues never overlap.
+
+`vtt` starts with `WEBVTT`, uses `.` before the milliseconds, and escapes `&`, `<` and `>` in cue text. `json` returns the cues with the transcript, the language and the duration, as `verbose_json` reports them:
+
+```json
+{
+  "language": "english",
+  "duration": 8.5,
+  "text": "Welcome to the quarterly review. We start with the numbers from the third quarter, then look at the roadmap.",
+  "cues": [
+    {
+      "start": 0.48,
+      "end": 3.12,
+      "text": "Welcome to the quarterly review.",
+      "lines": ["Welcome to the quarterly review."]
+    },
+    {
+      "start": 3.52,
+      "end": 7.94,
+      "text": "We start with the numbers from the third\nquarter, then look at the roadmap.",
+      "lines": ["We start with the numbers from the third", "quarter, then look at the roadmap."]
+    }
+  ],
+  "usage": {
+    "type": "tokens",
+    "input_tokens": 391,
+    "output_tokens": 52,
+    "total_tokens": 443,
+    "seconds": 8.5,
+    "cost": 0.00001772,
+    "cost_details": {
+      "currency": "USD",
+      "status": "settled",
+      "calculated_cost": 0.00001772,
+      "input_cost": 0.00001564,
+      "output_cost": 0.00000208,
+      "partially_charged": false
+    }
+  }
+}
+```
+
+A cue's `text` is its `lines` joined with `\n`.
+
+## Languages and prompts
+
+`language` tells the model which language is spoken. Without it, the model detects the language itself. Voxtral performs best in widely spoken languages; Mistral names English, Spanish, French, Portuguese, Hindi, German, Dutch and Italian. For other languages, send `language`: without it, Voxtral Mini may translate the speech, for example Swedish, into English. A value that is not a language code returns `400` with code `invalid_language`.
+
+`prompt` gives the model context, such as what the recording is about and how names and terms are spelled. The gateway adds it to its instruction to the model.
+
+## How transcription works
+
+The gateway does not send the file to the model as it is. Speech models invent text for silence and noise, so only speech is sent:
+
+<Steps>
+  <Step title="Decode">
+    The audio is decoded to 16 kHz mono, the input the speech models expect. See [Supported files](#supported-files).
+  </Step>
+  <Step title="Find the speech">
+    A loudness detector finds the speech, relative to the file's own noise floor. A file or a stretch of one without speech, such as silence, steady noise or a tone, is not sent to the model and costs nothing.
+  </Step>
+  <Step title="Cut chunks">
+    The speech is cut into chunks of at most 59.5 seconds, in pauses, or at the quietest moment of speech that runs on without one. A pause longer than 2 seconds ends a chunk, and the pause is not sent.
+  </Step>
+  <Step title="Transcribe">
+    Each chunk is one Bedrock Converse request with the audio and an instruction, and up to 6 chunks are transcribed at a time. For `json` and `text`, the model is asked for a verbatim transcript; for the timed formats (`verbose_json`, `srt`, `vtt` and the subtitles endpoint), for segment timestamps. A chunk whose answer runs into the output limit, which for speech means the model is repeating itself, is sent once more at a temperature of at least 0.5, and repetitions are cut off.
+  </Step>
+  <Step title="Time the transcript">
+    For the timed formats, the transcript is split into sentences and clauses, which are aligned to the pauses the gateway detected and to the speaking pace, with the model's timestamps as hints.
+  </Step>
+</Steps>
+
+Timing is per sentence or clause, not per word, and approximate: each boundary sits in a pause or between words, where the speaking pace and the model's timestamps put it.
+
+<Note>
+  There is no streaming: the response comes when the last chunk is transcribed. Once the upload is read, the gateway keeps the connection open for as long as that takes, past the server's idle timeout. In tests, Voxtral Mini took about 5 seconds for an 8.5-minute recording, and about 30 seconds for the transcript and 40 seconds for the subtitles of a 72-minute one; Voxtral Small took about 2 minutes for the same subtitles. Give clients, and proxies in front of the gateway, timeouts to match: Cloudflare, for example, ends requests that get no response within 100 seconds.
+</Note>
+
+## Supported files
+
+The gateway detects the format from the file's bytes, not from its name or `Content-Type`. It accepts WAV, MP3, M4A, MP4, MOV, WebM, MKV, OGG, Opus, FLAC, AAC, AIFF, CAF, AMR and AVI, with up to 2 hours of audio. For a video file, the first audio track is transcribed.
+
+- The gateway decodes WAV files with integer or float PCM itself, and every other file with ffmpeg. The container image includes ffmpeg. A gateway run from source needs `ffmpeg` on `PATH`; without it, only PCM WAV files work, and other files return `unsupported_audio_format`.
+- ffmpeg reads the upload from a pipe, with the demuxer that the file's bytes name and no protocol but the pipe, so a playlist or similar file cannot make it open other files or URLs. MP4, M4A and MOV files whose index is at the end are rearranged in memory first. The gateway writes no temporary files.
+
+## Usage and billing
+
+The JSON formats report `usage`:
+
+| Field | Value |
+| --- | --- |
+| `type` | `tokens` |
+| `input_tokens`, `output_tokens`, `total_tokens` | The tokens of all the model requests of the transcription |
+| `seconds` | The duration of the audio in seconds |
+| `cost` | The charged USD amount. Present only after successful settlement; a settled `0` is a known zero charge. |
+| `cost_details` | `currency` (`USD`) and `status`: `settled`, with `calculated_cost` (the metered cost before balance or spend-limit capping), `input_cost`, `output_cost` and `partially_charged`; or `failed` when settlement failed, without cost fields. As for [Chat Completions](/api-reference/overview#per-request-chat-completions-accounting), a failed status is not free usage. |
+
+Successful responses of every format also carry `Cache-Control: no-store` and these headers:
+
+| Header | Value |
+| --- | --- |
+| `x-request-id` | The request ID the usage is settled under |
+| `x-usage-input-tokens` | Input tokens |
+| `x-usage-output-tokens` | Output tokens |
+| `x-usage-cost-status` | `settled` or `failed` |
+| `x-usage-cost` | When settled, the charged USD amount as a decimal with up to 8 decimal places, such as `0.0000158` |
+
+An error response carries `x-request-id` when the request failed after the gateway chose the model and admitted the account, for example because the file cannot be decoded or Bedrock returned an error. When some chunks were answered and charged before the failure, it also carries the `x-usage-*` headers of that charge. Refusals before that point (authentication, invalid fields, an unknown model and `402`) have no `x-request-id`.
+
+A transcription is settled as one usage event, `Audio transcription using <model>` or `Subtitles using <model>` with the upstream model's ID, although a long file makes one Bedrock request per chunk:
+
+- The tokens of all its model requests, retries included, are added up and priced at the upstream model's input and output prices per million tokens.
+- The event's request ID is the `X-Request-ID` header, which makes the charge exactly-once when a client retries a request, as for [Chat Completions](/docs/credits#exactly-once-request-ids). Without a valid one, the gateway generates `audio-<uuid>`.
+- Voxtral counts audio in whole 30-second windows of 375 input tokens each, plus a few tokens of instruction, and pads every chunk to whole windows: 8 seconds of speech take about 391 input tokens, 50 seconds about 766. Speech broken up by pauses longer than 2 seconds is sent as more chunks, and so takes more windows than the same speech without the pauses. The timed formats take more output tokens than `json` and `text`, because the model also writes timestamps.
+- If a request fails after some chunks were answered, or the client disconnects, the answered chunks are still charged, as for a stream that breaks off.
+- Audio without speech makes no model request: its usage reports `cost: 0` with status `settled`, and no usage event is recorded.
+
+Analytics count a transcription as one request. See [Throughput and Bedrock quotas](/docs/administration/models-and-aws#throughput-and-bedrock-quotas).
+
+## Errors
+
+Errors are OpenAI-style `error` objects with `message`, `type`, `code` and `param`, as in Chat Completions.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| `400` | `invalid_content_type` | The body is not `multipart/form-data` |
+| `400` | `invalid_multipart` | The `multipart/form-data` body cannot be read |
+| `400` | `missing_required_parameter` | `file` or `model` is missing |
+| `400` | `invalid_request` | A field has an invalid value, such as an empty file or a `temperature` above 1; or Bedrock rejected the request, for example because the model does not accept audio |
+| `400` | `invalid_language` | `language` is not a language code |
+| `400` | `unsupported_value` | `timestamp_granularities[]` asks for `word` |
+| `400` | `unsupported_parameter` | `stream` is `true` |
+| `400` | `model_not_available` | The model is not an enabled model, alias or app tier |
+| `400` | `unsupported_audio_format` | The file is not one of the supported formats, or needs ffmpeg and the gateway has none |
+| `400` | `audio_decode_failed` | ffmpeg cannot decode the file, or produces no audio for 2 minutes while the gateway waits for it |
+| `400` | `audio_too_long` | The audio is longer than 2 hours |
+| `402` | `insufficient_credits` or `monthly_spend_limit_reached` | The account cannot start an inference request; see [Credits and usage](/docs/credits#request-admission-and-settlement) |
+| `413` | `file_too_large` | The file is larger than 25 MB |
+| `429` | `rate_limit_exceeded` | Bedrock throttled a chunk's request |
+| `503` | `service_unavailable` | Bedrock cannot be reached; retry with backoff |
+
+Other Bedrock errors map as they do for [Chat Completions](/api-reference/overview#errors).

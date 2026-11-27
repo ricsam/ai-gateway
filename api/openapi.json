@@ -3,7 +3,7 @@
   "info": {
     "title": "AI Gateway Inference API",
     "version": "1.0.0",
-    "description": "OpenAI-compatible and native AWS Bedrock inference endpoints with scoped API keys and credit settlement."
+    "description": "OpenAI-compatible inference and speech-to-text, and native AWS Bedrock inference endpoints, with scoped API keys and credit settlement."
   },
   "servers": [
     {
@@ -13,6 +13,7 @@
   ],
   "tags": [
     { "name": "OpenAI compatibility", "description": "OpenAI-compatible discovery and inference" },
+    { "name": "Audio", "description": "Speech-to-text transcription (OpenAI-compatible) and subtitles for audio and video files" },
     { "name": "Credits", "description": "Self-scoped user credit and usage information" },
     { "name": "Bedrock compatibility", "description": "Native Bedrock-shaped requests and responses" }
   ],
@@ -49,6 +50,95 @@
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "402": { "$ref": "#/components/responses/InsufficientCredits" },
           "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": ["Audio"],
+        "summary": "Transcribe audio",
+        "description": "OpenAI's transcription API (`client.audio.transcriptions.create` in OpenAI's SDKs). Transcribes an audio or video file with a model whose upstream model accepts audio, such as Mistral's Voxtral models on Bedrock, and returns the transcript as `response_format` asks: `json`, `text`, `verbose_json` with timed segments, `srt` or `vtt`. The gateway sends only the file's speech to the model, in chunks of up to 59.5 seconds, up to 6 at a time, and settles the tokens of all chunks as one usage event under the request ID. Every successful response reports that usage in the `x-usage-*` headers. Errors after the model is chosen and credits are admitted carry `x-request-id`, and also the `x-usage-*` headers when chunks answered before the failure were charged. Streaming and word timestamps are not supported. Requires `ai.invoke`.",
+        "operationId": "createTranscription",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": { "schema": { "$ref": "#/components/schemas/TranscriptionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The transcript in the requested `response_format`: `json` and `verbose_json` as JSON, `text` as plain text, `srt` as SRT and `vtt` as WebVTT subtitles.",
+            "headers": {
+              "x-request-id": { "$ref": "#/components/headers/AudioRequestId" },
+              "x-usage-input-tokens": { "$ref": "#/components/headers/UsageInputTokens" },
+              "x-usage-output-tokens": { "$ref": "#/components/headers/UsageOutputTokens" },
+              "x-usage-cost-status": { "$ref": "#/components/headers/UsageCostStatus" },
+              "x-usage-cost": { "$ref": "#/components/headers/UsageCost" },
+              "Cache-Control": { "schema": { "type": "string", "const": "no-store" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`json` returns `Transcription`, `verbose_json` returns `TranscriptionVerbose`",
+                  "anyOf": [
+                    { "$ref": "#/components/schemas/Transcription" },
+                    { "$ref": "#/components/schemas/TranscriptionVerbose" }
+                  ]
+                }
+              },
+              "text/plain": { "schema": { "type": "string", "description": "The transcript (`text`)" } },
+              "application/x-subrip": { "schema": { "type": "string", "description": "SRT subtitles (`srt`): at most two lines of 42 characters per cue" } },
+              "text/vtt": { "schema": { "type": "string", "description": "WebVTT subtitles (`vtt`): at most two lines of 42 characters per cue" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AudioBadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "413": { "$ref": "#/components/responses/FileTooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/audio/subtitles": {
+      "post": {
+        "tags": ["Audio"],
+        "summary": "Make subtitles",
+        "description": "The gateway's subtitle API. Makes subtitles for an audio or video file as SRT (the default), WebVTT, or JSON cues. A cue has at most `max_lines` lines of at most `max_line_length` characters, broken where the lines come out about even, and stays on screen for at most 7 seconds. A pause of 0.8 seconds or more starts a new cue, and so does the end of a sentence, unless the next sentence follows within 0.3 seconds and fits on the same line. A cue shorter than 1 second stays up to 1 second when the next cue leaves room; cues never overlap. Takes the `file`, `model`, `language`, `prompt` and `temperature` fields of `/v1/audio/transcriptions`, and settles usage and reports it in headers the same way. Requires `ai.invoke`.",
+        "operationId": "createSubtitles",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": { "schema": { "$ref": "#/components/schemas/SubtitleRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The subtitles in the requested `response_format`: `srt` as SRT, `vtt` as WebVTT, `json` as cues.",
+            "headers": {
+              "x-request-id": { "$ref": "#/components/headers/AudioRequestId" },
+              "x-usage-input-tokens": { "$ref": "#/components/headers/UsageInputTokens" },
+              "x-usage-output-tokens": { "$ref": "#/components/headers/UsageOutputTokens" },
+              "x-usage-cost-status": { "$ref": "#/components/headers/UsageCostStatus" },
+              "x-usage-cost": { "$ref": "#/components/headers/UsageCost" },
+              "Cache-Control": { "schema": { "type": "string", "const": "no-store" } }
+            },
+            "content": {
+              "application/x-subrip": { "schema": { "type": "string", "description": "SRT subtitles (`srt`)" } },
+              "text/vtt": { "schema": { "type": "string", "description": "WebVTT subtitles (`vtt`); `&`, `<` and `>` in cue text are escaped" } },
+              "application/json": { "schema": { "$ref": "#/components/schemas/Subtitles" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AudioBadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "413": { "$ref": "#/components/responses/FileTooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
           "503": { "$ref": "#/components/responses/Unavailable" }
         }
       }
@@ -207,6 +297,28 @@
         "schema": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" }
       }
     },
+    "headers": {
+      "AudioRequestId": {
+        "description": "The request ID the usage is settled under: the request's `X-Request-ID`, or a generated `audio-<uuid>` when it sent none or an invalid one.",
+        "schema": { "type": "string" }
+      },
+      "UsageInputTokens": {
+        "description": "Input tokens of all the model requests of the transcription",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      "UsageOutputTokens": {
+        "description": "Output tokens of all the model requests of the transcription",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      "UsageCostStatus": {
+        "description": "`settled`, or `failed` when ledger settlement failed. A failed status is not free usage.",
+        "schema": { "type": "string", "enum": ["settled", "failed"] }
+      },
+      "UsageCost": {
+        "description": "The charged USD amount, a decimal with up to 8 decimal places such as `0.0000158`. Only when `x-usage-cost-status` is `settled`; `0` for audio without speech.",
+        "schema": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,8})?$" }
+      }
+    },
     "requestBodies": {
       "BedrockRequest": {
         "required": true,
@@ -246,7 +358,10 @@
       "Unauthorized": { "description": "Missing or invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "InsufficientCredits": { "description": "The user has no available credits (code insufficient_credits) or has reached their monthly spend limit (code monthly_spend_limit_reached)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Forbidden": { "description": "Disabled access or insufficient scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Unavailable": { "description": "Bedrock is not configured (`provider_not_configured`), is unavailable, or cannot be reached (`service_unavailable`, with a message that names no upstream address)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "Unavailable": { "description": "Bedrock is not configured (`provider_not_configured`), is unavailable, or cannot be reached (`service_unavailable`, with a message that names no upstream address)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "AudioBadRequest": { "description": "An invalid request (`invalid_content_type`, `invalid_multipart`, `missing_required_parameter`, `invalid_request`, `invalid_language`, `unsupported_value` for word timestamps, `unsupported_parameter` for streaming), an unavailable model (`model_not_available`), or a file the gateway cannot read (`unsupported_audio_format`, `audio_decode_failed`, `audio_too_long`). Bedrock's validation errors, for example from a model that does not accept audio, are `invalid_request` with Bedrock's message.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "FileTooLarge": { "description": "The file is larger than 25 MB (`file_too_large`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "RateLimited": { "description": "Bedrock throttled a request (`rate_limit_exceeded`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     },
     "schemas": {
       "TextPart": {
@@ -634,6 +749,121 @@
               "has_more": { "const": false }
             }
           }
+        }
+      },
+      "TranscriptionRequest": {
+        "type": "object",
+        "required": ["file", "model"],
+        "properties": {
+          "file": { "type": "string", "format": "binary", "description": "The audio or video file, at most 25 MB, with up to 2 hours of audio: WAV, MP3, M4A, MP4, MOV, WebM, MKV, OGG, Opus, FLAC, AAC, AIFF, CAF, AMR or AVI. The format is detected from the file's bytes, not its name or type. For a video file, the first audio track is transcribed." },
+          "model": { "type": "string", "description": "A model ID, alias or app tier whose upstream model accepts audio, such as `mistral.voxtral-mini-3b-2507`", "examples": ["voxtral-mini"] },
+          "response_format": { "type": "string", "enum": ["json", "text", "verbose_json", "srt", "vtt"], "default": "json", "description": "`srt` and `vtt` have at most two lines of 42 characters per cue" },
+          "language": { "type": "string", "description": "The spoken language as an ISO 639-1 code, such as `en` or `de`; a BCP 47 tag such as `en-US` is accepted and its language subtag used. Without it, the model detects the language. Other values return `invalid_language`.", "examples": ["en"] },
+          "prompt": { "type": "string", "maxLength": 4000, "description": "Context for the model: the topic, names and terms, and their spelling" },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+          "timestamp_granularities[]": { "type": "array", "items": { "type": "string", "enum": ["segment"] }, "description": "Only `segment` is accepted: timing is per sentence or clause. `word` returns `unsupported_value`." },
+          "stream": { "type": "boolean", "default": false, "description": "Streaming is not supported: `true` returns `unsupported_parameter`." }
+        }
+      },
+      "SubtitleRequest": {
+        "type": "object",
+        "required": ["file", "model"],
+        "properties": {
+          "file": { "type": "string", "format": "binary", "description": "The audio or video file, at most 25 MB, with up to 2 hours of audio: WAV, MP3, M4A, MP4, MOV, WebM, MKV, OGG, Opus, FLAC, AAC, AIFF, CAF, AMR or AVI. The format is detected from the file's bytes, not its name or type. For a video file, the first audio track is transcribed." },
+          "model": { "type": "string", "description": "A model ID, alias or app tier whose upstream model accepts audio, such as `mistral.voxtral-mini-3b-2507`", "examples": ["voxtral-mini"] },
+          "response_format": { "type": "string", "enum": ["srt", "vtt", "json"], "default": "srt" },
+          "language": { "type": "string", "description": "The spoken language as an ISO 639-1 code, such as `en` or `de`; a BCP 47 tag such as `en-US` is accepted and its language subtag used. Without it, the model detects the language. Other values return `invalid_language`.", "examples": ["en"] },
+          "prompt": { "type": "string", "maxLength": 4000, "description": "Context for the model: the topic, names and terms, and their spelling" },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+          "max_line_length": { "type": "integer", "minimum": 16, "maximum": 120, "default": 42, "description": "The longest line in characters; only a longer word makes a longer line" },
+          "max_lines": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2, "description": "The most lines in a cue" }
+        }
+      },
+      "AudioUsage": {
+        "type": "object",
+        "description": "OpenAI's token usage for transcriptions with the gateway's accounting: the tokens of all the model requests of the file, settled as one usage event.",
+        "required": ["type", "input_tokens", "output_tokens", "total_tokens", "seconds", "cost_details"],
+        "properties": {
+          "type": { "const": "tokens" },
+          "input_tokens": { "type": "integer", "minimum": 0 },
+          "output_tokens": { "type": "integer", "minimum": 0 },
+          "total_tokens": { "type": "integer", "minimum": 0 },
+          "seconds": { "type": "number", "minimum": 0, "description": "Duration of the audio in seconds" },
+          "cost": { "type": "number", "minimum": 0, "description": "Actual settled ledger charge in USD. Present only after successful settlement; a known zero is valid, as for audio without speech." },
+          "cost_details": {
+            "type": "object",
+            "description": "Settled includes the calculated costs (before balance or spend-limit capping); failed (a settlement error) omits them and cost, and is not free usage.",
+            "required": ["currency", "status"],
+            "properties": {
+              "currency": { "const": "USD" },
+              "status": { "enum": ["settled", "failed"] },
+              "calculated_cost": { "type": "number" },
+              "input_cost": { "type": "number" },
+              "output_cost": { "type": "number" },
+              "partially_charged": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "Transcription": {
+        "type": "object",
+        "description": "The `json` response format",
+        "required": ["text", "usage"],
+        "properties": {
+          "text": { "type": "string", "description": "The transcript; empty when the file has no speech" },
+          "usage": { "$ref": "#/components/schemas/AudioUsage" }
+        }
+      },
+      "TranscriptionVerbose": {
+        "type": "object",
+        "description": "The `verbose_json` response format",
+        "required": ["task", "language", "duration", "text", "segments", "usage"],
+        "properties": {
+          "task": { "const": "transcribe" },
+          "language": { "type": "string", "description": "The requested language's English name in lowercase, such as `english`; without `language`, a guess from the transcript's most common words, or `unknown`" },
+          "duration": { "type": "number", "minimum": 0, "description": "Duration of the audio in seconds" },
+          "text": { "type": "string" },
+          "segments": { "type": "array", "items": { "$ref": "#/components/schemas/TranscriptionSegment" } },
+          "usage": { "$ref": "#/components/schemas/AudioUsage" }
+        }
+      },
+      "TranscriptionSegment": {
+        "type": "object",
+        "description": "A sentence, timed approximately; a sentence longer than 30 seconds is split between its clauses. `tokens`, `avg_logprob`, `compression_ratio` and `no_speech_prob` are placeholders for OpenAI's Whisper fields.",
+        "required": ["id", "seek", "start", "end", "text", "tokens", "temperature", "avg_logprob", "compression_ratio", "no_speech_prob"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 0 },
+          "seek": { "const": 0 },
+          "start": { "type": "number", "minimum": 0, "description": "Seconds from the start of the file" },
+          "end": { "type": "number", "minimum": 0, "description": "Seconds from the start of the file" },
+          "text": { "type": "string" },
+          "tokens": { "type": "array", "items": { "type": "integer" }, "maxItems": 0 },
+          "temperature": { "type": "number", "description": "The request's temperature" },
+          "avg_logprob": { "const": 0 },
+          "compression_ratio": { "const": 0 },
+          "no_speech_prob": { "const": 0 }
+        }
+      },
+      "Subtitles": {
+        "type": "object",
+        "description": "The subtitle endpoint's `json` response format",
+        "required": ["language", "duration", "text", "cues", "usage"],
+        "properties": {
+          "language": { "type": "string", "description": "The requested language's English name in lowercase, such as `english`; without `language`, a guess from the transcript's most common words, or `unknown`" },
+          "duration": { "type": "number", "minimum": 0, "description": "Duration of the audio in seconds" },
+          "text": { "type": "string", "description": "The whole transcript" },
+          "cues": { "type": "array", "items": { "$ref": "#/components/schemas/SubtitleCue" } },
+          "usage": { "$ref": "#/components/schemas/AudioUsage" }
+        }
+      },
+      "SubtitleCue": {
+        "type": "object",
+        "required": ["start", "end", "text", "lines"],
+        "properties": {
+          "start": { "type": "number", "minimum": 0, "description": "Seconds from the start of the file" },
+          "end": { "type": "number", "minimum": 0, "description": "Seconds from the start of the file; cues never overlap" },
+          "text": { "type": "string", "description": "The cue's lines joined with `\\n`" },
+          "lines": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "string" }, "description": "At most `max_lines` lines of at most `max_line_length` characters" }
         }
       },
       "Error": {

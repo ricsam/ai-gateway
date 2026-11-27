@@ -15,6 +15,8 @@ WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000
+# The audio endpoints decode everything but PCM WAV with ffmpeg (backend/audio/ffmpeg.ts).
+RUN apk add --no-cache ffmpeg
 COPY --from=build --chown=bun:bun /app /app
 # The management CLI: kubectl exec deploy/<release>-ai-gateway -- aigctl --help
 RUN chmod 0755 /app/bin/aigctl && ln -s /app/bin/aigctl /usr/local/bin/aigctl
