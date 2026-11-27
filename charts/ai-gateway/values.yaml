@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/ricsam/ai-gateway
-  tag: sha-5b07d426b0f0c99ad576e691a92067ae1613f471
+  tag: sha-5eac63c12341e0a0e9270dfd229e475ed5bd9e5c
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 nameOverride: ""
@@ -16,6 +16,11 @@ ingress:
   pathType: Prefix
 config:
   baseUrl: https://gateway.example.com
+  # Where the client's address is behind proxies, for sign-in rate limits and session records (docs/deployment/helm.mdx#client-ip-addresses).
+  # Headers that a proxy sets to the client's address alone, read in order, such as [cf-connecting-ip] (CLIENT_IP_HEADERS).
+  clientIpHeaders: []
+  # Addresses or CIDR ranges of the proxies that append to X-Forwarded-For (TRUSTED_PROXIES).
+  trustedProxies: []
 secrets:
   existingSecret: ""
   keys:

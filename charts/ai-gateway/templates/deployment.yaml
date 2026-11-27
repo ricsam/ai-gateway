@@ -11,10 +11,12 @@ spec:
       {{- include "ai-gateway.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        # Restart the pods when the configuration they read at startup changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "ai-gateway.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}

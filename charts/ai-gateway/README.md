@@ -15,7 +15,7 @@ helm search repo ai-gateway/ai-gateway
 The chart pins the public multi-platform image containing this release's application changes:
 
 ```text
-ghcr.io/ricsam/ai-gateway:sha-5b07d426b0f0c99ad576e691a92067ae1613f471
+ghcr.io/ricsam/ai-gateway:sha-5eac63c12341e0a0e9270dfd229e475ed5bd9e5c
 ```
 
 Every image publish creates an immutable `sha-<full-commit-sha>` tag. Git tags pushed directly to GitHub are published with the same name. Override `image.tag` only to select another build; chart `appVersion` identifies its default application build.
@@ -43,6 +43,13 @@ kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl setup init
 ```
 
 Inside the container aigctl uses the pod's own database access, so anyone allowed to exec into the gateway's pods can administer it. See [Management CLI](https://github.com/ricsam/ai-gateway/blob/main/docs/administration/cli.mdx).
+
+## Upgrading to 0.1.20
+
+This release adds no database migration; upgrading from 0.1.19 needs no special steps. From 0.1.10 through 0.1.18, the pre-upgrade migration Job still applies the 0.1.19 migration (and from 0.1.10 or 0.1.11 the 0.1.12 migration, from 0.1.13 or earlier the 0.1.14 migration), and from 0.1.18 or earlier, register the new OpenID Connect callback before upgrading, as described under 0.1.19. Upgrading from 0.1.9 or earlier still applies the 0.1.10 migration, so follow the 0.1.10 procedure below.
+
+- New values `config.clientIpHeaders` and `config.trustedProxies` (`CLIENT_IP_HEADERS` and `TRUSTED_PROXIES` outside Helm) tell the gateway where a request's client address is behind proxies, so that sign-in rate limits count each client separately and sessions record the client's address. Name a header that a proxy sets to the client's address alone, such as `cf-connecting-ip` behind Cloudflare, or list the addresses or CIDR ranges of the proxies that append to `X-Forwarded-For`. Unset, the gateway behaves as in 0.1.19. It refuses to start when an entry isn't a header name, an IP address or a CIDR range. See [Client IP addresses](https://github.com/ricsam/ai-gateway/blob/main/docs/deployment/helm.mdx#client-ip-addresses).
+- The pods now restart when the chart's ConfigMap changes, for example `config.baseUrl` or the new values. Before, a changed value took effect only at the pods' next restart.
 
 ## Upgrading to 0.1.19
 

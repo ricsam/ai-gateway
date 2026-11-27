@@ -6,3 +6,9 @@ metadata:
     {{- include "ai-gateway.labels" . | nindent 4 }}
 data:
   BASE_URL: {{ .Values.config.baseUrl | quote }}
+  {{- with .Values.config.clientIpHeaders }}
+  CLIENT_IP_HEADERS: {{ join "," . | quote }}
+  {{- end }}
+  {{- with .Values.config.trustedProxies }}
+  TRUSTED_PROXIES: {{ join "," . | quote }}
+  {{- end }}
