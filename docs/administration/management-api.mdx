@@ -110,6 +110,28 @@ Each day in a rolling window is exactly 24 elapsed hours, including across dayli
 
 Analytics include usage up to the time of the request, including the current day and hour. Interval buckets are aligned to UTC, for example 1-day buckets start at 00:00 UTC, so a window's first and last buckets are usually partial: with **Last 7 days** and a 1-day interval, the first day counts only usage after the window starts and the last day only usage until the request. Earlier releases omitted usage that a background refresh had not yet processed, such as the current day's, and usually showed the window's first bucket as empty.
 
+### Custom windows
+
+For a precise window, send `start` and `end` instead of `timeRange` (or together with `timeRange=custom`). Each is an ISO 8601 date, read as 00:00 UTC, or a date and time with `Z` or a UTC offset; times without an offset are refused, because they would be read in the server's time zone. The window includes `start` and excludes `end`, so `start=2026-10-01&end=2026-11-01` is October in UTC, and spans 1 minute to 10 years. Percent-encode a `+` offset (`%2B02:00`): an unencoded `+` in a query string reads as a space.
+
+```bash
+curl "https://gateway.example.com/management/v1/analytics/consumed?start=2026-10-01T09:00:00Z&end=2026-10-15T17:00:00Z&bucketSize=1h" \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY"
+```
+
+A custom window allows every interval (`bucketSize`) that is no longer than the window and gives at most 400 buckets, and defaults to the one closest to about 24 buckets; the rolling ranges keep their fixed intervals. A custom window ending in the past counts only usage before its end, also in its last bucket. Its balance burn-down ends at the balance at the window's end, and throughput treats a last hour that the window cuts short as that many minutes. In the dashboards, choose **Custom range** under **Range** and enter **From** and **To** in your browser's time zone.
+
+## Analytics for users and groups
+
+Analytics cover all users unless a request selects some. `userId` and `groupId` can each be repeated, and together they select the union of those users and the current members of those groups; each user counts once, also when selected directly and through a group or through several groups. At most 100 IDs can be selected in one request.
+
+```bash
+curl "https://gateway.example.com/management/v1/analytics/model-summary?timeRange=month&groupId=$ENGINEERING&groupId=$SUPPORT&userId=$ALICE" \
+  -H "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY"
+```
+
+`GET /analytics/users` lists the selected people, and `GET /analytics/groups` lists the selected groups, or with only `userId` the groups of those users, counting only the selected people's usage. Earlier releases accepted one `userId` or one `groupId` and refused both together. **Admin → Analytics** has the same selection as its **People** filter.
+
 ## Pagination and errors
 
 Collection endpoints generally accept `limit` and `offset`. Limits are clamped to 1–100. `GET /users?search=` matches a case-insensitive part of the username, email or display name (earlier releases matched the email only). Management errors have a stable envelope:

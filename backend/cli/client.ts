@@ -2,7 +2,8 @@ import type { ManagementPrincipal } from "../management-auth";
 import { apiErrorFromResponse, CliError, UsageError } from "./errors";
 import type { Io } from "./io";
 
-export type Query = Record<string, string | number | boolean | null | undefined>;
+/** Query parameters; an array repeats its parameter once per value. */
+export type Query = Record<string, string | number | boolean | readonly string[] | null | undefined>;
 
 export interface RequestOptions {
   query?: Query;
@@ -32,7 +33,8 @@ export function managementRequest(baseUrl: string, method: string, path: string,
   const relative = path.replace(/^\/?(management\/v1)?\/?/, "/");
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/management/v1${relative === "/" ? "" : relative}`);
   for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+    if (Array.isArray(value)) for (const entry of value) url.searchParams.append(key, entry);
+    else if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
   }
   const requestHeaders: Record<string, string> = { "user-agent": "aigctl", accept: "application/json", ...headers };
   let body: BodyInit | undefined;

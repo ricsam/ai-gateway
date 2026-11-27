@@ -33,13 +33,16 @@ const modelSchema = z.object({
 });
 
 const groupSummarySchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["owner", "admin", "member"]) });
-const timeRangeSchema = z.enum(["hour", "day", "week", "month", "quarter", "year"]);
+const timeRangeSchema = z.enum(["hour", "day", "week", "month", "quarter", "year", "custom"]);
 const bucketSizeSchema = z.enum(["15s", "1m", "5m", "30m", "1h", "1d", "1w", "1mo"]);
-const analyticsQuerySchema = z.object({ timeRange: timeRangeSchema, bucketSize: bucketSizeSchema.optional() });
-const adminAnalyticsQuerySchema = analyticsQuerySchema.extend({
-  scope: z.enum(["system", "user", "group"]),
-  scopeId: z.string().optional(),
-});
+// timeRange "custom" also takes start and end, ISO 8601 instants (see shared/analytics-time-ranges.ts).
+const analyticsWindowQuerySchema = z.object({ timeRange: timeRangeSchema, start: z.string().optional(), end: z.string().optional() });
+const analyticsQuerySchema = analyticsWindowQuerySchema.extend({ bucketSize: bucketSizeSchema.optional() });
+// A repeated query parameter arrives as an array, a single one as a string.
+const idsQuerySchema = z.union([z.string(), z.array(z.string())]).optional();
+// The selected users together with the current members of the selected groups; none selects everyone.
+const analyticsSelectionSchema = { userId: idsQuerySchema, groupId: idsQuerySchema };
+const adminAnalyticsQuerySchema = analyticsQuerySchema.extend(analyticsSelectionSchema);
 const modelSummarySchema = z.object({
   model: z.string(), totalCredits: z.number(), inputTokens: z.number(), outputTokens: z.number(),
   cacheReadTokens: z.number(), cacheWrite5mTokens: z.number(), cacheWrite1hTokens: z.number(), percentOfTotal: z.number(),
@@ -140,7 +143,7 @@ export const contract = defineContract({
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   getAnalyticsThroughput: {
-    type: "standard", method: "GET", path: "/analytics/throughput", query: z.object({ timeRange: timeRangeSchema }),
+    type: "standard", method: "GET", path: "/analytics/throughput", query: analyticsWindowQuerySchema,
     responses: { [Status.OK]: throughputSchema },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
@@ -243,18 +246,18 @@ export const contract = defineContract({
   },
   adminGetAnalyticsUserSummary: {
     type: "standard", method: "GET", path: "/admin/analytics/user-summary",
-    query: z.object({ timeRange: timeRangeSchema, groupId: z.string().optional() }),
+    query: analyticsWindowQuerySchema.extend(analyticsSelectionSchema),
     responses: { [Status.OK]: z.object({ users: z.array(userAnalyticsSummarySchema) }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   adminGetAnalyticsGroupSummary: {
-    type: "standard", method: "GET", path: "/admin/analytics/group-summary", query: z.object({ timeRange: timeRangeSchema }),
+    type: "standard", method: "GET", path: "/admin/analytics/group-summary", query: analyticsWindowQuerySchema.extend(analyticsSelectionSchema),
     responses: { [Status.OK]: z.object({ groups: z.array(z.object({ groupId: z.string(), groupName: z.string(), creditsUsed: z.number(), activeUsers: z.number(), avgCreditsPerUser: z.number() })) }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   adminGetGroupUserBurndowns: {
     type: "standard", method: "GET", path: "/admin/analytics/group-user-burndowns",
-    query: z.object({ timeRange: timeRangeSchema, bucketSize: bucketSizeSchema.optional(), groupId: z.string() }),
+    query: analyticsQuerySchema.extend({ groupId: z.string() }),
     responses: { [Status.OK]: z.object({ users: z.array(z.object({ userId: z.string(), username: z.string(), data: z.array(z.object({ time: z.string(), balance: z.number() })) })) }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },

@@ -1,14 +1,15 @@
 import { sql } from "drizzle-orm";
 import db from "./db";
-import { getTimeRangeBounds, type TimeRange } from "../shared/analytics-time-ranges";
+import { getWindowBounds, type AnalyticsWindow } from "../shared/analytics-time-ranges";
 import { METERED_USAGE_EVENT_TYPES } from "./usage-contract";
+import { scopeSql, type AnalyticsScope } from "./analytics-scope";
 import {
-  emptyThroughputStats, throughputPeriodCount, throughputStats,
+  activePeriodHours, emptyThroughputStats, throughputPeriods, throughputStats,
   type ModelThroughputStats, type ThroughputStats,
 } from "./throughput-stats";
 
 export type { ModelThroughputStats, ThroughputStats } from "./throughput-stats";
-export type ThroughputScope = { userId?: string; groupId?: string };
+export type ThroughputScope = AnalyticsScope;
 
 export interface ThroughputReport {
   start: string;
@@ -27,31 +28,28 @@ interface ThroughputRow {
   output_tokens: string | null;
   cache_read_tokens: string | null;
   active_hours: string;
+  latest_active_hour: Date | string | null;
   peak_requests: string | null;
   peak_requests_at: Date | string | null;
   peak_tokens: string | null;
   peak_tokens_at: Date | string | null;
 }
 
-function scopeSql(scope: ThroughputScope | undefined) {
-  if (scope?.userId) return sql`AND user_id = ${scope.userId}`;
-  if (scope?.groupId) return sql`AND user_id IN (SELECT user_id FROM group_members WHERE group_id = ${scope.groupId})`;
-  return sql``;
-}
-
 /**
  * Steady-state and peak tokens and requests per minute, and average tokens per
- * request, of metered inference in a rolling window, overall and per model.
+ * request, of metered inference in a window, overall and per model.
  *
  * Reads the raw ledger: peaks need one-minute resolution and the continuous
  * aggregates have neither that nor request counts. Minutes are UTC-aligned
  * calendar minutes. Steady state averages the window's one-hour periods,
  * counted from its start, that had at least one request, so idle hours (nights,
  * weekends) do not dilute it and the Last 60 minutes range is a single period.
+ * A custom window's last period can be shorter than an hour; it then counts its
+ * own length.
  */
-export async function getThroughput(timeRange: TimeRange, scope?: ThroughputScope, now = new Date()): Promise<ThroughputReport> {
-  const { start, end } = getTimeRangeBounds(timeRange, now);
-  throughputPeriodCount(start, end);
+export async function getThroughput(window: AnalyticsWindow, scope?: ThroughputScope, now = new Date()): Promise<ThroughputReport> {
+  const { start, end } = getWindowBounds(window, now);
+  const periods = throughputPeriods(start, end);
   const startAt = start.toISOString();
   const endAt = end.toISOString();
   const meteredTypes = sql.join(METERED_USAGE_EVENT_TYPES.map((type) => sql`${type}`), sql`, `);
@@ -94,16 +92,18 @@ export async function getThroughput(timeRange: TimeRange, scope?: ThroughputScop
       ),
       model_totals AS (
         SELECT model, sum(requests) AS requests, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens,
-          sum(cache_read_tokens) AS cache_read_tokens, count(*) AS active_hours
+          sum(cache_read_tokens) AS cache_read_tokens, count(*) AS active_hours, max(hour) AS latest_active_hour
         FROM hourly GROUP BY model
       )
       SELECT * FROM (
         SELECT false AS all_models, t.model, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.active_hours,
+          t.latest_active_hour,
           p.peak_requests[1] AS peak_requests, to_timestamp(p.peak_requests[2]) AS peak_requests_at,
           p.peak_tokens[1] AS peak_tokens, to_timestamp(p.peak_tokens[2]) AS peak_tokens_at
         FROM model_totals t JOIN model_peaks p ON p.model IS NOT DISTINCT FROM t.model
         UNION ALL
         SELECT true, NULL, sum(requests), sum(input_tokens), sum(output_tokens), sum(cache_read_tokens), count(DISTINCT hour),
+          max(hour),
           (SELECT peak_requests[1] FROM overall_peaks), (SELECT to_timestamp(peak_requests[2]) FROM overall_peaks),
           (SELECT peak_tokens[1] FROM overall_peaks), (SELECT to_timestamp(peak_tokens[2]) FROM overall_peaks)
         FROM hourly HAVING count(*) > 0
@@ -116,7 +116,7 @@ export async function getThroughput(timeRange: TimeRange, scope?: ThroughputScop
   for (const row of result.rows as unknown as ThroughputRow[]) {
     const stats = throughputStats({
       requests: row.requests, inputTokens: row.input_tokens, outputTokens: row.output_tokens,
-      cacheReadTokens: row.cache_read_tokens, activeHours: row.active_hours,
+      cacheReadTokens: row.cache_read_tokens, activeHours: activePeriodHours(row.active_hours, row.latest_active_hour, periods),
       peakRequests: row.peak_requests, peakRequestsAt: row.peak_requests_at,
       peakTokens: row.peak_tokens, peakTokensAt: row.peak_tokens_at,
     });

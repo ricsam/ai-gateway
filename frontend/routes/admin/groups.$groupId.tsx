@@ -44,18 +44,18 @@ function GroupPage() {
   const [groupForm, setGroupForm] = useState({ name: "", description: "" });
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const { timeRange, setTimeRange, bucketSize, setBucketSize } = useAnalyticsPreferences();
+  const analytics = useAnalyticsPreferences();
   const burndowns = api.adminGetGroupUserBurndowns.useQuery({
-    queryKey: ["admin-group-burndowns", groupId, timeRange, bucketSize],
-    queryData: { query: { groupId, timeRange, bucketSize } },
+    queryKey: ["admin-group-burndowns", groupId, analytics.query],
+    queryData: { query: { ...analytics.query, groupId } },
   });
   const summary = api.adminGetAnalyticsUserSummary.useQuery({
-    queryKey: ["admin-group-user-summary", groupId, timeRange],
-    queryData: { query: { groupId, timeRange } },
+    queryKey: ["admin-group-user-summary", groupId, analytics.windowQuery],
+    queryData: { query: { ...analytics.windowQuery, groupId: [groupId] } },
   });
   const throughput = api.adminGetAnalyticsThroughput.useQuery({
-    queryKey: ["admin-group-throughput", groupId, timeRange],
-    queryData: { query: { timeRange, scope: "group", scopeId: groupId } },
+    queryKey: ["admin-group-throughput", groupId, analytics.windowQuery],
+    queryData: { query: { ...analytics.windowQuery, groupId: [groupId] } },
   });
 
   const load = async () => {
@@ -114,8 +114,8 @@ function GroupPage() {
       {error && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {message && <p className="rounded-md bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">{message}</p>}
 
-      <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-5"><div><h2 className="text-xl font-semibold">Group analytics</h2><p className="text-sm text-muted-foreground">Current-membership user balances and usage attribution.</p></div><AnalyticsControls timeRange={timeRange} onTimeRangeChange={setTimeRange} bucketSize={bucketSize} onBucketSizeChange={setBucketSize} onRefresh={() => void queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith("admin-group") })} /></div>
-      <div className="grid gap-5 xl:grid-cols-2"><Card><CardHeader><CardTitle className="text-base">Per-user balance</CardTitle></CardHeader><CardContent><GroupUserBurndownChart users={burndowns.data?.payload.users ?? []} timeRange={timeRange} isLoading={burndowns.isLoading} /></CardContent></Card><Card><CardHeader><CardTitle className="text-base">Per-user usage summary</CardTitle></CardHeader><CardContent><UserSummaryTable users={summary.data?.payload.users ?? []} isLoading={summary.isLoading} /></CardContent></Card></div>
+      <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-5"><div><h2 className="text-xl font-semibold">Group analytics</h2><p className="text-sm text-muted-foreground">Current-membership user balances and usage attribution.</p></div><AnalyticsControls analytics={analytics} onRefresh={() => void queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith("admin-group") })} /></div>
+      <div className="grid gap-5 xl:grid-cols-2"><Card><CardHeader><CardTitle className="text-base">Per-user balance</CardTitle></CardHeader><CardContent><GroupUserBurndownChart users={burndowns.data?.payload.users ?? []} scale={analytics.scale} isLoading={burndowns.isLoading} /></CardContent></Card><Card><CardHeader><CardTitle className="text-base">Per-user usage summary</CardTitle></CardHeader><CardContent><UserSummaryTable users={summary.data?.payload.users ?? []} isLoading={summary.isLoading} /></CardContent></Card></div>
       <ThroughputCard data={throughput.data?.payload} isLoading={throughput.isLoading} isError={throughput.isError} />
 
       <Card>

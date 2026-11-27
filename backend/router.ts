@@ -15,6 +15,7 @@ import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
 import {
+  analyticsScope,
   getBalanceBurndown,
   getCreditsConsumed,
   getGroupSummary,
@@ -23,6 +24,7 @@ import {
   getTokensConsumed,
   getUsageByModel,
   getUserSummary,
+  parseAnalyticsWindow,
   type AnalyticsScope,
 } from "./analytics-service";
 import { getThroughput } from "./throughput-service";
@@ -69,11 +71,14 @@ async function usageLogs(userId: string, rawLimit?: string, rawOffset?: string) 
   };
 }
 
-function analyticsScope(scope: "system" | "user" | "group", scopeId?: string): AnalyticsScope {
-  if (scope === "system") return {};
-  if (!scopeId) throw new Error(`scopeId is required for ${scope} analytics`);
-  return scope === "user" ? { userId: scopeId } : { groupId: scopeId };
+/** The query's selection: repeated userId and groupId parameters arrive as arrays. */
+function selection(query: { userId?: string | string[]; groupId?: string | string[] }): AnalyticsScope {
+  const list = (value?: string | string[]) => (value === undefined ? [] : [value].flat());
+  return analyticsScope(list(query.userId), list(query.groupId));
 }
+
+const windowOf = parseAnalyticsWindow;
+const own = (context: RouterContext): AnalyticsScope => ({ userIds: [context.getUserId()] });
 
 function analyticsFailure(error: unknown) {
   return { status: Status.BadRequest, body: { error: error instanceof Error ? error.message : "Analytics query failed" } };
@@ -111,27 +116,27 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   }),
 
   getAnalyticsBurndown: async ({ query, context }) => {
-    try { return { status: Status.OK, body: await getBalanceBurndown(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    try { return { status: Status.OK, body: await getBalanceBurndown(windowOf(query), query.bucketSize, own(context)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   getAnalyticsConsumed: async ({ query, context }) => {
-    try { return { status: Status.OK, body: { data: await getCreditsConsumed(query.timeRange, query.bucketSize, { userId: context.getUserId() }) } }; }
+    try { return { status: Status.OK, body: { data: await getCreditsConsumed(windowOf(query), query.bucketSize, own(context)) } }; }
     catch (error) { return analyticsFailure(error); }
   },
   getAnalyticsByModel: async ({ query, context }) => {
-    try { return { status: Status.OK, body: await getUsageByModel(query.timeRange, query.bucketSize, { userId: context.getUserId() }, Number(query.topN ?? 5)) }; }
+    try { return { status: Status.OK, body: await getUsageByModel(windowOf(query), query.bucketSize, own(context), Number(query.topN ?? 5)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   getAnalyticsModelSummary: async ({ query, context }) => {
-    try { return { status: Status.OK, body: await getModelSummary(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    try { return { status: Status.OK, body: await getModelSummary(windowOf(query), query.bucketSize, own(context)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   getAnalyticsTokensConsumed: async ({ query, context }) => {
-    try { return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, { userId: context.getUserId() }) }; }
+    try { return { status: Status.OK, body: await getTokensConsumed(windowOf(query), query.bucketSize, own(context)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   getAnalyticsThroughput: async ({ query, context }) => {
-    try { return { status: Status.OK, body: await getThroughput(query.timeRange, { userId: context.getUserId() }) }; }
+    try { return { status: Status.OK, body: await getThroughput(windowOf(query), own(context)) }; }
     catch (error) { return analyticsFailure(error); }
   },
 
@@ -283,39 +288,39 @@ export const router = createRouter<typeof contract, RouterContext>(contract, {
   },
 
   adminGetAnalyticsBurndown: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getBalanceBurndown(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getBalanceBurndown(windowOf(query), query.bucketSize, selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsConsumed: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: { data: await getCreditsConsumed(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) } }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: { data: await getCreditsConsumed(windowOf(query), query.bucketSize, selection(query)) } }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsByModel: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getUsageByModel(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId), Number(query.topN ?? 5)) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getUsageByModel(windowOf(query), query.bucketSize, selection(query), Number(query.topN ?? 5)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsModelSummary: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getModelSummary(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getModelSummary(windowOf(query), query.bucketSize, selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsTokensConsumed: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getTokensConsumed(query.timeRange, query.bucketSize, analyticsScope(query.scope, query.scopeId)) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getTokensConsumed(windowOf(query), query.bucketSize, selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsThroughput: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getThroughput(query.timeRange, analyticsScope(query.scope, query.scopeId)) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getThroughput(windowOf(query), selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsUserSummary: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getUserSummary(query.timeRange, query.groupId) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getUserSummary(windowOf(query), selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetAnalyticsGroupSummary: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupSummary(query.timeRange) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupSummary(windowOf(query), selection(query)) }; }
     catch (error) { return analyticsFailure(error); }
   },
   adminGetGroupUserBurndowns: async ({ query, request }) => {
-    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupUserBurndowns(query.timeRange, query.bucketSize, query.groupId) }; }
+    try { await requireAdmin(request); return { status: Status.OK, body: await getGroupUserBurndowns(windowOf(query), query.bucketSize, query.groupId) }; }
     catch (error) { return analyticsFailure(error); }
   },
 

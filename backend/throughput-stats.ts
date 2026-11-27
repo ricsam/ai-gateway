@@ -17,7 +17,11 @@ export interface ThroughputStats {
   requests: number;
   /** Input, cache-write and output tokens of those requests. */
   tokens: number;
-  /** One-hour periods of the window, counted from its start, that had at least one request. */
+  /**
+   * Hours of the window's one-hour periods, counted from its start, that had at
+   * least one request. A custom window that does not span whole hours ends
+   * with a shorter period, which counts only its length.
+   */
   activeHours: number;
   /** tokens / (60 × activeHours): the average TPM across the hours with traffic. */
   steadyStateTpm: number;
@@ -59,14 +63,32 @@ export interface ThroughputAggregate {
 }
 
 /**
- * Number of one-hour periods in [start, end). Steady-state rates divide by the
- * periods that had traffic, so the window must consist of whole periods; every
- * analytics time range does.
+ * The one-hour periods of [start, end), counted from its start. Steady-state
+ * rates divide by the length of the periods that had traffic. Rolling time
+ * ranges consist of whole periods; a custom window can end with a shorter one.
  */
-export function throughputPeriodCount(start: Date, end: Date): number {
-  const hours = (end.getTime() - start.getTime()) / THROUGHPUT_HOUR_MS;
-  if (!Number.isInteger(hours) || hours < 1) throw new Error("Throughput windows must span a whole number of hours");
-  return hours;
+export function throughputPeriods(start: Date, end: Date): { count: number; lastPeriodStart: Date; lastPeriodHours: number } {
+  const durationMs = end.getTime() - start.getTime();
+  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error("Throughput windows must end after they start");
+  const count = Math.ceil(durationMs / THROUGHPUT_HOUR_MS);
+  const lastPeriodStart = new Date(start.getTime() + (count - 1) * THROUGHPUT_HOUR_MS);
+  return { count, lastPeriodStart, lastPeriodHours: (end.getTime() - lastPeriodStart.getTime()) / THROUGHPUT_HOUR_MS };
+}
+
+/**
+ * Active hours from the number of active periods and the start of the latest
+ * one: a whole hour per period, except a shorter last period, which counts its
+ * length when it is active.
+ */
+export function activePeriodHours(
+  activePeriods: unknown,
+  latestActivePeriod: Date | string | null | undefined,
+  periods: ReturnType<typeof throughputPeriods>,
+): number {
+  const active = count(activePeriods);
+  if (!active || periods.lastPeriodHours >= 1 || latestActivePeriod === null || latestActivePeriod === undefined) return active;
+  const latest = new Date(latestActivePeriod).getTime();
+  return latest === periods.lastPeriodStart.getTime() ? active - 1 + periods.lastPeriodHours : active;
 }
 
 function count(value: unknown): number {
