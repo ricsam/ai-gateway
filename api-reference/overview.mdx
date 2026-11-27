@@ -49,7 +49,7 @@ Inference endpoints accept `X-Request-ID`. Use a stable value for a retried logi
 ## Formats
 
 - Non-streaming Chat Completions return OpenAI-compatible JSON.
-- Streaming Chat Completions return server-sent events and terminate with `data: [DONE]`.
+- Streaming Chat Completions return server-sent events and terminate with `data: [DONE]`, or with an `error` event when the upstream breaks off the response before the model finished it (see [When the upstream breaks off a stream](/docs/chat-completions#when-the-upstream-breaks-off-a-stream)).
 - Native `converse-stream` returns newline-delimited JSON.
 - Native `invoke-stream` passes provider binary event bytes through as `application/octet-stream`.
 - `/v1/usage` and `/user/daily/activity` return `Cache-Control: no-store` and are always scoped to the owner of the presented inference key.
@@ -92,7 +92,7 @@ interface UsageAccounting {
 
 `settled` includes every field above. Category costs sum to `calculated_cost`, the gateway's metered cost before balance capping; `cost` is the actual ledger charge and can be smaller when `partially_charged` is true. A settled `cost: 0` is a known zero charge, not missing accounting. `failed` (ledger settlement error) and `unavailable` (no provider usage metadata) currently include only `currency` and `status`, with **no `cost` or numeric cost fields**. These states must not be displayed as free usage. API-key completed model responses remain available even when settlement fails. The existing session-authenticated playground instead retains its prior HTTP error (non-streaming) or stream error behavior on settlement failure, so its UI surfaces the error. Pre-inference/authentication and upstream failures retain their normal error behavior.
 
-For streaming, an early token-only usage chunk may be followed by a final `choices: []` usage chunk after settlement and before `[DONE]`. The final chunk repeats token totals and adds accounting. Upsert by completion `id`; **do not add repeated chunks as separate requests**. Read through `[DONE]`, not just the finish-reason chunk. A disconnected/error stream may never deliver final accounting: do not infer a charge. Non-streaming responses include final accounting in the JSON `usage`. Existing session-only `credit_usage` remains for successful playground settlements.
+For streaming, an early token-only usage chunk may be followed by a final `choices: []` usage chunk after settlement and before `[DONE]`. The final chunk repeats token totals and adds accounting. Upsert by completion `id`; **do not add repeated chunks as separate requests**. Read through `[DONE]`, not just the finish-reason chunk. A stream the upstream breaks off ends with an `error` event instead of `[DONE]`; usage the upstream reported before that is settled, and its final usage chunk comes before the error event. A disconnected stream may never deliver final accounting: do not infer a charge. Non-streaming responses include final accounting in the JSON `usage`. Existing session-only `credit_usage` remains for successful playground settlements.
 
 `prompt_tokens` includes uncached input, cache reads, and cache writes. When cache activity exists, `prompt_tokens_details` includes:
 
@@ -118,7 +118,9 @@ Common status codes include:
 | `403` | Disabled account or missing scope |
 | `408` | Upstream model timeout |
 | `429` | Bedrock throttling |
-| `503` | Bedrock is not configured or temporarily unavailable |
+| `503` | Bedrock is not configured, is temporarily unavailable, or cannot be reached |
+
+When the gateway cannot reach the upstream model provider (a refused, reset or timed-out connection, or a `502`/`503`/`504` from a proxy in front of it), it returns `503` with code `service_unavailable` and a message that names no upstream address. Retry with backoff; the gateway log has the details under the request ID. Other unexpected failures return `500` with code `internal_error`; Bedrock's own errors keep Bedrock's message.
 
 <Card title="OpenAPI specification" icon="download" href="/api/openapi.json">
   Download the OpenAPI 3.1 document used to generate this reference.

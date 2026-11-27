@@ -26,6 +26,13 @@ import {
   type CacheUsage,
 } from "./openai-proxy/transform/cache-usage";
 import { isControllerClosedError } from "./stream-utils";
+import {
+  describeError,
+  isServiceException,
+  isUpstreamConnectionError,
+  isUpstreamGatewayStatus,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+} from "./upstream-errors";
 
 export type BedrockProxyEndpoint = "invoke" | "invoke-stream" | "converse" | "converse-stream";
 
@@ -45,9 +52,15 @@ function failure(message: string, status: number, code: string): Response {
   return Response.json({ error: { message, code } }, { status });
 }
 
-function mapError(error: unknown): Response {
+function mapError(error: unknown, context: { requestId: string; modelId: string; endpoint: BedrockProxyEndpoint }): Response {
   if (error instanceof ReasoningConfigError) return failure(error.message, 400, error.code);
   if (error instanceof ProviderNotConfiguredError) return failure(error.message, 503, "provider_not_configured");
+  const where = `request=${context.requestId} model=${context.modelId} endpoint=${context.endpoint}`;
+  // A failed or broken connection names the upstream's address: keep it in the log.
+  if (isUpstreamConnectionError(error) || isUpstreamGatewayStatus(error)) {
+    console.error(`[Bedrock Proxy] Upstream unavailable: ${where} error=${describeError(error)}`);
+    return failure(UPSTREAM_UNAVAILABLE_MESSAGE, 503, "service_unavailable");
+  }
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message : "Bedrock request failed";
   const mapped: Record<string, [number, string]> = {
@@ -58,9 +71,11 @@ function mapError(error: unknown): Response {
     ModelTimeoutException: [408, "timeout"],
     ServiceUnavailableException: [503, "service_unavailable"],
   };
-  const [status, code] = mapped[name] ?? [500, "internal_error"];
-  if (status === 500) console.error("Bedrock compatibility proxy error", { name, message });
-  return failure(message, status, code);
+  const [status, code] = Object.hasOwn(mapped, name) ? mapped[name]! : [500, "internal_error"];
+  if (status !== 500) return failure(message, status, code);
+  console.error(`[Bedrock Proxy] Request failed: ${where} error=${describeError(error)}`);
+  // An error response from Bedrock keeps its message; the gateway's own errors don't leak theirs.
+  return failure(isServiceException(error) && message ? message : "Internal server error", status, code);
 }
 
 function bodyBytes(value: unknown): Uint8Array {
@@ -162,7 +177,7 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
       case "invoke-stream": return await handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal);
     }
   } catch (error) {
-    return mapError(error);
+    return mapError(error, { requestId, modelId: model.modelId, endpoint });
   }
 }
 

@@ -39,7 +39,7 @@
         },
         "responses": {
           "200": {
-            "description": "A completion or server-sent event stream",
+            "description": "A completion, or a server-sent event stream. A stream ends with `data: [DONE]`, or with an `error` event (`{\"error\": {\"message\", \"type\", \"code\", \"param\"}}`, code `stream_interrupted` or `upstream_error`) when the upstream breaks off the response before the model finished it.",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/ChatCompletionResponse" } },
               "text/event-stream": { "schema": { "type": "string" } }
@@ -246,7 +246,7 @@
       "Unauthorized": { "description": "Missing or invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "InsufficientCredits": { "description": "The user has no available credits", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Forbidden": { "description": "Disabled access or insufficient scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Unavailable": { "description": "Bedrock is not configured or unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "Unavailable": { "description": "Bedrock is not configured (`provider_not_configured`), is unavailable, or cannot be reached (`service_unavailable`, with a message that names no upstream address)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     },
     "schemas": {
       "TextPart": {
