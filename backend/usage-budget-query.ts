@@ -48,6 +48,8 @@ export function nativeMonthlyUsageQuery(userId: string) {
     )
     SELECT p.observed_at, p.period_start, p.period_end,
       u.credit_balance AS balance, u.default_monthly_credits AS monthly_allocation,
+      u.monthly_credit_mode, u.rollover_cap, u.monthly_spend_limit,
+      CASE WHEN u.monthly_spend_limit IS NULL THEN NULL ELSE GREATEST(u.monthly_spend_limit - f.spend, 0) END AS monthly_spend_remaining,
       f.*, opening_balance + net_funding AS effective_budget,
       CASE
         WHEN invalid_events > 0 THEN 'unsupported_ledger_event'

@@ -195,7 +195,10 @@ try {
     assert.equal(response.status, status);
   }
   const credits = await fetch(`${server.url}v1/credits`, { headers: { authorization: `Bearer ${zeroKey}` } }).then((r) => r.json());
-  assert.deepEqual(credits, { object: "credit_balance", dashboard_url: "http://localhost:3000/profile", currency: "USD", balance: 25, monthly_allocation: 0 });
+  assert.deepEqual(credits, {
+    object: "credit_balance", dashboard_url: "http://localhost:3000/profile", currency: "USD", balance: 25, monthly_allocation: 0,
+    monthly_credit_mode: "reset", rollover_cap: null, monthly_spend_limit: null, monthly_spend_remaining: null,
+  });
 
   // Deterministically pin the production SQL's statement snapshot behind a test
   // advisory gate, then commit both a top-up and a settlement before releasing it.

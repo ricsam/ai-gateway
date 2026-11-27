@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@richie-router/react";
 import { useEffect, useMemo, useState } from "react";
-import { IconKey, IconPencil, IconPlus, IconRefresh, IconTrash, IconUsersGroup } from "@tabler/icons-react";
+import { IconAdjustmentsDollar, IconKey, IconPencil, IconPlus, IconRefresh, IconTrash, IconUsersGroup } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { managementFetch, managementListAll } from "../../management-api";
+import { CreditControlDialog, CreditControlFields, CreditControlSummary } from "../../ui/credit-control";
+import {
+  creditControlDraft, DEFAULT_CREDIT_CONTROL_DRAFT, parseCreditControlDraft, type CreditControl, type CreditControlDraft,
+} from "../../lib/credit-control";
 
 type Group = { id: string; name: string; role?: string };
-type User = {
+type User = CreditControl & {
   id: string;
   username: string;
   name: string;
@@ -21,6 +25,7 @@ type User = {
   mustChangePassword: boolean;
   creditBalance: number;
   defaultMonthlyCredits: number;
+  monthlySpendRemaining: number | null;
   createdAt: string;
   groups: Group[];
 };
@@ -34,12 +39,13 @@ type UserForm = {
   mustChangePassword: boolean;
   creditBalance: string;
   defaultMonthlyCredits: string;
+  creditControl: CreditControlDraft;
   groupIds: string[];
 };
 
 const blankUser: UserForm = {
   username: "", email: "", name: "", password: "", role: "user", enabled: true,
-  mustChangePassword: true, creditBalance: "0", defaultMonthlyCredits: "0", groupIds: [],
+  mustChangePassword: true, creditBalance: "0", defaultMonthlyCredits: "0", creditControl: DEFAULT_CREDIT_CONTROL_DRAFT, groupIds: [],
 };
 
 export const Route = createFileRoute("/admin/users/")({ component: Users });
@@ -68,6 +74,7 @@ function Users() {
   const [passwordUser, setPasswordUser] = useState<User | null>(null);
   const [password, setPassword] = useState("");
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(true);
+  const [creditControlUser, setCreditControlUser] = useState<User | null>(null);
   const [creditDrafts, setCreditDrafts] = useState<Record<string, { balance: string; monthly: string }>>({});
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -92,20 +99,26 @@ function Users() {
     return query ? users.filter((user) => [user.username, user.name, user.email, ...user.groups.map((group) => group.name)].some((value) => value.toLowerCase().includes(query))) : users;
   }, [users, search]);
 
-  const run = async (action: () => Promise<void>, success: string) => {
+  /** Runs a change and reloads; the action may return a more specific success message. */
+  const run = async (action: () => Promise<string | void>, success: string) => {
     setSaving(true); setError(null); setMessage(null);
-    try { await action(); setMessage(success); await load(); }
+    try { setMessage((await action()) || success); await load(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Update failed"); }
     finally { setSaving(false); }
   };
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
+    let creditControl: CreditControl;
+    try { creditControl = parseCreditControlDraft(form.creditControl); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Invalid credit control"); return; }
     await run(async () => {
+      const { creditControl: _, ...fields } = form;
       await managementFetch("/users", { method: "POST", body: JSON.stringify({
-        ...form,
+        ...fields,
         creditBalance: Number(form.creditBalance),
         defaultMonthlyCredits: Number(form.defaultMonthlyCredits),
+        ...creditControl,
       }) });
       setForm(blankUser); setShowCreate(false);
     }, "User created");
@@ -116,7 +129,8 @@ function Users() {
     setEditForm({
       username: user.username, email: user.email, name: user.name, password: "", role: user.role,
       enabled: user.enabled, mustChangePassword: user.mustChangePassword,
-      creditBalance: String(user.creditBalance), defaultMonthlyCredits: String(user.defaultMonthlyCredits), groupIds: user.groups.map((group) => group.id),
+      creditBalance: String(user.creditBalance), defaultMonthlyCredits: String(user.defaultMonthlyCredits),
+      creditControl: creditControlDraft(user), groupIds: user.groups.map((group) => group.id),
     });
   };
 
@@ -146,18 +160,24 @@ function Users() {
     await managementFetch(`/users/${user.id}`, { method: "PATCH", body: JSON.stringify(updates) });
   }, `Access saved for @${user.username}`);
 
+  const saveCreditControl = (user: User, control: CreditControl) => run(async () => {
+    await managementFetch(`/users/${user.id}`, { method: "PATCH", body: JSON.stringify(control) });
+    setCreditControlUser(null);
+  }, `Credit control saved for @${user.username}`);
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap justify-between gap-4">
         <div><h1 className="text-2xl font-semibold">Users</h1><p className="text-sm text-muted-foreground">Manage identity, credits, passwords, and groups. Account enablement controls login and API access; API requests still require a valid key with the required scopes.</p></div>
         <div className="flex gap-2">
           <Button variant="outline" disabled={saving} onClick={() => {
-            if (!window.confirm("Reset every user with a monthly quota to that balance now?")) return;
+            if (!window.confirm("Apply monthly credits now? Users who reset monthly are reset to their monthly quota; users who roll over get this month's quota added, unless they already received it.")) return;
             void run(async () => {
-              const result = await managementFetch<{ data: { usersReset: number } }>("/users/monthly-reset", { method: "POST" });
-              setMessage(`Monthly credits reset for ${result.data.usersReset} users`);
-            }, "Monthly credit reset completed");
-          }}><IconRefresh />Run monthly reset</Button>
+              const result = await managementFetch<{ data: { usersReset: number; usersRolledOver: number; usersSkipped: number } }>("/users/monthly-reset", { method: "POST" });
+              const { usersReset, usersRolledOver, usersSkipped } = result.data;
+              return `Monthly credits applied: ${usersReset} reset, ${usersRolledOver} rolled over${usersSkipped ? `, ${usersSkipped} skipped (already received this month's)` : ""}`;
+            }, "Monthly credits applied");
+          }}><IconRefresh />Apply monthly credits</Button>
           <Button onClick={() => setShowCreate((value) => !value)}><IconPlus />New user</Button>
         </div>
       </div>
@@ -177,6 +197,7 @@ function Users() {
               <Toggle label="Force password change" checked={form.mustChangePassword} onChange={(value) => setForm({ ...form, mustChangePassword: value })} />
               <Toggle label="Account enabled" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
             </div>
+            <CreditControlFields draft={form.creditControl} onChange={(creditControl) => setForm({ ...form, creditControl })} idPrefix="create-credit-control" />
             <div className="space-y-1.5"><Label>Groups</Label><GroupChoices groups={groups} selected={form.groupIds} onChange={(groupIds) => setForm({ ...form, groupIds })} /></div>
             <Button disabled={saving}>Create user</Button>
           </form></CardContent>
@@ -185,8 +206,8 @@ function Users() {
 
       <Input className="max-w-md" placeholder="Filter by user, email, or group" value={search} onChange={(event) => setSearch(event.target.value)} />
       <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full min-w-[1180px] text-sm">
-          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th>Role</th><th>Groups</th><th>Balance</th><th>Monthly quota</th><th>Account enabled</th><th className="text-right">Actions</th></tr></thead>
+        <table className="w-full min-w-[1200px] text-sm">
+          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th>Role</th><th>Groups</th><th>Balance</th><th>Monthly quota</th><th>Credit control</th><th>Account enabled</th><th className="text-right">Actions</th></tr></thead>
           <tbody>
             {filteredUsers.map((user) => {
               const draft = creditDrafts[user.id] ?? { balance: String(user.creditBalance), monthly: String(user.defaultMonthlyCredits) };
@@ -197,6 +218,7 @@ function Users() {
                 <td className="p-3"><div className="flex max-w-64 flex-wrap justify-center gap-1">{user.groups.map((group) => <Badge variant="outline" key={group.id}>{group.name}</Badge>)}{!user.groups.length && <span className="text-xs text-muted-foreground">None</span>}</div></td>
                 <td className="p-3"><Input className="w-28" type="number" min="0" step="0.01" value={draft.balance} onChange={(event) => setCreditDrafts({ ...creditDrafts, [user.id]: { ...draft, balance: event.target.value } })} /></td>
                 <td className="p-3"><div className="flex items-center gap-1"><Input className="w-28" type="number" min="0" step="0.01" value={draft.monthly} onChange={(event) => setCreditDrafts({ ...creditDrafts, [user.id]: { ...draft, monthly: event.target.value } })} />{creditsChanged && <Button size="sm" onClick={() => void saveCredits(user)} disabled={saving}>Save</Button>}</div></td>
+                <td className="p-3"><div className="flex items-start justify-between gap-2"><CreditControlSummary control={user} monthlySpendRemaining={user.monthlySpendRemaining} /><Button variant="ghost" size="icon" title="Edit credit control" aria-label={`Edit credit control for @${user.username}`} onClick={() => setCreditControlUser(user)}><IconAdjustmentsDollar /></Button></div></td>
                 <td className="p-3 text-center"><Switch checked={user.enabled} disabled={saving} onCheckedChange={(enabled) => void changeAccess(user, { enabled })} /></td>
                 <td className="p-3"><div className="flex justify-end gap-1">
                   <Button variant="ghost" size="icon" title="Edit identity and groups" onClick={() => openEdit(user)}><IconPencil /></Button>
@@ -208,10 +230,21 @@ function Users() {
                 </div></td>
               </tr>;
             })}
-            {!filteredUsers.length && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No users found</td></tr>}
+            {!filteredUsers.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">No users found</td></tr>}
           </tbody>
         </table>
       </div>
+
+      <CreditControlDialog
+        open={!!creditControlUser}
+        title={`Credit control for @${creditControlUser?.username ?? ""}`}
+        description={creditControlUser ? `Monthly quota $${creditControlUser.defaultMonthlyCredits.toFixed(2)}, balance $${creditControlUser.creditBalance.toFixed(2)}. Change the quota and balance in the table.` : undefined}
+        initial={creditControlUser ? creditControlDraft(creditControlUser) : DEFAULT_CREDIT_CONTROL_DRAFT}
+        preview={creditControlUser ? { monthlyCredits: creditControlUser.defaultMonthlyCredits, balance: creditControlUser.creditBalance } : undefined}
+        saving={saving}
+        onCancel={() => setCreditControlUser(null)}
+        onSave={(control) => { if (creditControlUser) void saveCreditControl(creditControlUser, control); }}
+      />
 
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>Edit @{editing?.username}</DialogTitle></DialogHeader>

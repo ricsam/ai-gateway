@@ -6,7 +6,11 @@ export interface Page<T> { data: T[]; pagination: { limit: number; offset: numbe
 
 export interface User {
   id: string; username: string; name: string; email: string; role: "user" | "admin"; enabled: boolean;
-  mustChangePassword: boolean; creditBalance: number; defaultMonthlyCredits: number; createdAt: string;
+  mustChangePassword: boolean; creditBalance: number; defaultMonthlyCredits: number;
+  /** reset: the monthly run replaces the balance with the monthly credits; rollover: it adds them. */
+  monthlyCreditMode: "reset" | "rollover"; rolloverCap: number | null; monthlySpendLimit: number | null;
+  /** What the monthly spend limit leaves this UTC month; null without a limit. */
+  monthlySpendRemaining: number | null; monthlyCreditsAppliedAt: string | null; createdAt: string;
   groups: { id: string; name: string; role: string }[];
 }
 
@@ -15,6 +19,7 @@ export interface Group { id: string; name: string; description: string | null; c
 export interface GroupMember {
   userId: string; username: string; name: string; email: string; role: string; source: string; joinedAt: string;
   enabled: boolean; creditBalance: number; defaultMonthlyCredits: number;
+  monthlyCreditMode: "reset" | "rollover"; rolloverCap: number | null; monthlySpendLimit: number | null;
 }
 
 export interface GroupDetails extends Group { updatedAt?: string; members: GroupMember[] }

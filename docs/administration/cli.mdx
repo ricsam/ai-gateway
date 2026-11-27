@@ -10,9 +10,9 @@ kubectl -n ai-gateway exec -it deploy/ai-gateway-ai-gateway -- aigctl users list
 ```
 
 ```text
-USERNAME   NAME            EMAIL               ROLE    ENABLED   BALANCE   MONTHLY   GROUPS
-admin      Gateway Admin   admin@example.com   admin   yes         $0.00     $0.00   -
-alice      Alice Smith     alice@example.com   user    yes        $42.10    $50.00   engineering
+USERNAME   NAME            EMAIL               ROLE    ENABLED   BALANCE   MONTHLY   MODE       GROUPS
+admin      Gateway Admin   admin@example.com   admin   yes         $0.00     $0.00   reset      -
+alice      Alice Smith     alice@example.com   user    yes        $42.10    $50.00   rollover   engineering
 ```
 
 The Helm chart names the Deployment `<release>-ai-gateway`; `kubectl exec` picks one of its pods. Every command is an operation of the [management API](/docs/administration/management-api), with the same validation, safeguards (such as keeping the last enabled administrator) and audit events.
@@ -79,6 +79,8 @@ aigctl users get alice
 aigctl users create --username alice --email alice@example.com --name "Alice Smith" --monthly-credits 50
 aigctl users update alice --role admin
 aigctl users update alice --balance 25          # recorded as an administrator adjustment
+aigctl users update alice --monthly-credits 100 --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300
+aigctl users update alice --monthly-spend-limit none
 aigctl users disable alice                       # signs out, blocks sign-in and inference keys
 aigctl users enable alice
 aigctl users set-groups alice engineering research
@@ -97,8 +99,9 @@ aigctl groups create engineering --description "Product engineering"
 aigctl groups add-member engineering alice bob@example.com
 aigctl groups get engineering
 aigctl groups bulk-update engineering research --monthly-credits 100
+aigctl groups bulk-update engineering --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300
 aigctl groups bulk-update contractors --disable
-aigctl credits monthly-reset
+aigctl credits monthly-reset                    # applies monthly credits now; rollover users get them once a month
 ```
 
 ```bash Management keys
@@ -158,6 +161,12 @@ For anything without a dedicated command, `aigctl api` sends a request to the ma
 aigctl api GET '/analytics/tokens?timeRange=day'
 aigctl api PATCH /users/<id> -d '{"defaultMonthlyCredits": 100}'
 ```
+
+## Monthly credits
+
+`--monthly-credits` sets the allocation the monthly run applies on the first day of each UTC month, and `--monthly-credit-mode` what it does with it: `reset` (the default) sets the balance to it, so unspent credits expire, and `rollover` adds it to the balance, so unspent credits carry over, trimmed so the balance does not pass `--rollover-cap`. `--monthly-spend-limit` caps what a user can be charged in a UTC month, in either mode. `''` or `none` clears a cap or limit. `users create`, `users update` and `groups bulk-update` take all four.
+
+`users get` shows the mode, the cap, the limit with what it leaves this month, and when the monthly run last applied the user's credits; `-o wide` adds ROLLOVER-CAP and SPEND-LIMIT columns to `users list` and `groups get`. `aigctl credits monthly-reset` applies monthly credits now: it resets reset users again and skips rollover users who already received this month's credits. See [Monthly credits](/docs/credits#monthly-credits).
 
 ## Models, aliases and apps
 

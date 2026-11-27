@@ -384,18 +384,28 @@ Steady state averages the hours that had traffic; peaks are the busiest UTC minu
 
 export const creditsGroup: CommandGroup = {
   name: "credits",
-  summary: "Monthly credit reset",
-  details: `Set a user's balance with 'aigctl users update <user> --balance'. Monthly credits are set per user with
-'aigctl users update <user> --monthly-credits' and for every member of groups with 'aigctl groups bulk-update --monthly-credits'.`,
+  summary: "Monthly credit run",
+  details: `Set a user's balance with 'aigctl users update <user> --balance'. Monthly credits, their mode (reset or
+rollover), rollover cap and monthly spend limit are set per user with 'aigctl users update <user>' and for every
+member of groups with 'aigctl groups bulk-update'.`,
   commands: [{
     name: "monthly-reset",
-    summary: "Reset every user with monthly credits to that balance now",
-    details: "The gateway also runs this reset automatically on the first day of each month (UTC). Users with 0 monthly credits are skipped.",
+    summary: "Give every user with monthly credits this month's credits now",
+    details: `The gateway also does this automatically on the first day of each month (UTC). Users with 0 monthly credits are
+skipped. Users in reset mode get a balance of their monthly credits, whenever this runs. Users in rollover mode get
+their monthly credits added to their balance, up to their rollover cap, once per UTC month: a rollover user who
+already received this month's credits is skipped.`,
     options: { ...YES_OPTION },
     async run(context) {
-      await confirm(context, "Reset every user with monthly credits to that balance now");
-      const { data } = await call<{ data: { usersReset: number } }>(await context.client(), "POST", "/users/monthly-reset");
-      report(context, `Reset ${data.usersReset} user${data.usersReset === 1 ? "" : "s"} to their monthly credits.`, data);
+      await confirm(context, "Reset every reset-mode user with monthly credits to that balance and roll over this month's credits for rollover users now");
+      const { data } = await call<{ data: { usersReset: number; usersRolledOver?: number; usersSkipped?: number } }>(await context.client(), "POST", "/users/monthly-reset");
+      const users = (count: number) => `${count} user${count === 1 ? "" : "s"}`;
+      const rolledOver = data.usersRolledOver ?? 0;
+      const skipped = data.usersSkipped ?? 0;
+      const message = rolledOver || skipped
+        ? `Reset ${users(data.usersReset)} to their monthly credits and added this month's credits to ${users(rolledOver)} in rollover mode${skipped ? `; skipped ${users(skipped)} in rollover mode who already received them` : ""}.`
+        : `Reset ${users(data.usersReset)} to their monthly credits.`;
+      report(context, message, data);
     },
   }],
 };

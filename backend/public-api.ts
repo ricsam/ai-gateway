@@ -11,8 +11,9 @@ import {
 import { userTable } from "./schema";
 import { listAvailableModels } from "./model-catalog";
 import { listedModel } from "./model-routing";
-import { UsageValidationError } from "./usage-contract";
+import { creditControlSummary, UsageValidationError } from "./usage-contract";
 import { getLiteLLMDailyActivity, getNativeMonthlyUsage } from "./usage-service";
+import { monthlySpendRemainingQuery } from "./monthly-spend";
 
 function openAIError(result: Extract<ProxyAuthResult, { ok: false }>): Response {
   const headers = new Headers({ "cache-control": "no-store" });
@@ -51,6 +52,10 @@ async function authenticatedCreditUser(request: Request) {
     .select({
       balance: userTable.creditBalance,
       monthlyAllocation: userTable.defaultMonthlyCredits,
+      monthlyCreditMode: userTable.monthlyCreditMode,
+      rolloverCap: userTable.rolloverCap,
+      monthlySpendLimit: userTable.monthlySpendLimit,
+      monthlySpendRemaining: monthlySpendRemainingQuery(),
     })
     .from(userTable)
     .where(eq(userTable.id, auth.principal.userId))
@@ -81,6 +86,7 @@ export async function handleCredits(request: Request): Promise<Response> {
     currency: "USD",
     balance: result.user.balance,
     monthly_allocation: result.user.monthlyAllocation,
+    ...creditControlSummary(result.user),
   });
 }
 

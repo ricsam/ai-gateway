@@ -51,6 +51,18 @@ Each `data:` event contains a `chat.completion.chunk`. The stream ends with:
 
 The final JSON chunk includes usage when Bedrock reports it. The server sends heartbeat comments during quiet periods to keep intermediaries from closing a valid stream.
 
+### When the upstream breaks off a stream
+
+A response is complete only when the model finished it: its last choice chunk carries a `finish_reason`. If the connection to the upstream model provider breaks, or its stream ends before the model finished, the gateway ends the response with an error event instead of `[DONE]`:
+
+```text
+data: {"error":{"message":"The upstream model provider's stream ended before the response was complete","type":"server_error","code":"stream_interrupted","param":null}}
+```
+
+The text and tool-call fragments before it are only part of an answer. OpenAI's SDKs raise the event as an `APIError`, and the Vercel AI SDK reports it as an error with finish reason `error`. An error that the upstream sends in the middle of a stream ends it the same way, with the upstream's message and code `upstream_error`, or the code of a Bedrock exception the gateway recognizes, such as `rate_limit_exceeded`. Tokens the upstream reported before it broke off are charged, and their settled usage chunk comes before the error event. Send the request again, or continue from the partial answer.
+
+A request that cannot reach the upstream at all (a refused, reset or timed-out connection) gets HTTP `503` with code `service_unavailable` and a message that names no upstream address, so retry it with backoff. The gateway logs the details under the request ID.
+
 ## Token usage and context
 
 Both streamed and non-streamed responses report per-request OpenAI-compatible `usage`:

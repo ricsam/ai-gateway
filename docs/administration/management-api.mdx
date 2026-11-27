@@ -60,6 +60,26 @@ The operation is audited as `api_key.provisioned`. Disabled users can receive a 
 
 Use `enabled` in user creation, updates, and group bulk-user updates to control account access. The former `apiEnabled` field is no longer part of the API contract; historical client payloads containing it do not control access. Update those clients to use `enabled` instead.
 
+## Monthly credits and spend limits
+
+User creation, updates (`PATCH /users/{id}`) and group bulk-user updates take three credit control fields next to `defaultMonthlyCredits`:
+
+| Field | Values |
+| --- | --- |
+| `monthlyCreditMode` | `reset` (default): the monthly run sets the balance to `defaultMonthlyCredits`. `rollover`: it adds them to the balance |
+| `rolloverCap` | Rollover only: the balance the monthly credits may bring the user up to, in USD; `null` for no cap |
+| `monthlySpendLimit` | The most metered usage the user can be charged in a UTC month, in USD; `null` for no limit |
+
+```bash
+curl --fail-with-body --request PATCH \
+  --header "Authorization: Bearer $AI_GATEWAY_MANAGEMENT_KEY" \
+  --header 'Content-Type: application/json' \
+  --data '{"defaultMonthlyCredits":100,"monthlyCreditMode":"rollover","rolloverCap":600,"monthlySpendLimit":300}' \
+  "https://gateway.example.com/management/v1/users/$USER_ID"
+```
+
+Users also include `monthlySpendRemaining`, what the limit leaves this month (`null` without a limit), and `monthlyCreditsAppliedAt`, when the monthly run last applied their monthly credits. Group members (`GET /groups/{id}`) include the three fields. `POST /users/monthly-reset` applies monthly credits now and returns `usersReset`, `usersRolledOver` and `usersSkipped`: rollover users who already received this month's credits are skipped. See [Monthly credits](/docs/credits#monthly-credits).
+
 ## Models, aliases and apps
 
 The model catalog that API clients see at `/v1/models` has three collections, each with the same operations: list (`GET`), get (`GET /{id}`), create (`POST`), change the given fields (`PATCH /{id}`) and delete (`DELETE /{id}`). Reads need `models.read` and writes `models.write`. Changes apply to the next request.

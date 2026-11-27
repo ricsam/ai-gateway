@@ -11,6 +11,7 @@ import { authenticateRequest } from "./auth";
 import { updateUser } from "./user-service";
 import type { ManagementPrincipal } from "./management-auth";
 import { addCredits, calculateCost } from "./credit-service";
+import { monthlySpendRemainingQuery, numberOrNull } from "./monthly-spend";
 import { generateUserApiKey, hashApiKey } from "./api-key-utils";
 import resetCredits from "./jobs/reset-credits";
 import { getBedrockClient } from "./bedrock";
@@ -86,11 +87,15 @@ function analyticsFailure(error: unknown) {
 
 export const router = createRouter<typeof contract, RouterContext>(contract, {
   getProfile: async ({ context }) => {
-    const [user] = await db.select().from(userTable).where(eq(userTable.id, context.getUserId())).limit(1);
-    if (!user) return { status: Status.Unauthorized, body: { error: "User not found" } };
+    const [row] = await db.select({ user: userTable, monthlySpendRemaining: monthlySpendRemainingQuery() })
+      .from(userTable).where(eq(userTable.id, context.getUserId())).limit(1);
+    if (!row) return { status: Status.Unauthorized, body: { error: "User not found" } };
+    const { user } = row;
     return { status: Status.OK, body: {
       id: user.id, name: user.name, email: user.email, creditBalance: user.creditBalance,
       defaultMonthlyCredits: user.defaultMonthlyCredits, role: user.role as "user" | "admin",
+      monthlyCreditMode: user.monthlyCreditMode, rolloverCap: user.rolloverCap,
+      monthlySpendLimit: user.monthlySpendLimit, monthlySpendRemaining: user.monthlySpendLimit === null ? null : numberOrNull(row.monthlySpendRemaining),
     } };
   },
 

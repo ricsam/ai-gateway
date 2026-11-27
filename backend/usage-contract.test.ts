@@ -4,6 +4,7 @@ import {
   UsageValidationError,
   buildLiteLLMDailyActivity,
   buildNativeMonthlyUsage,
+  creditControlSummary,
   currentUtcMonthRange,
   isMeteredUsageEventType,
   parseUtcDailyRange,
@@ -78,7 +79,10 @@ describe("native monthly summary", () => {
       },
     });
     expect(summary.dashboard_url).toBe("https://gateway.example.com/profile");
-    expect(summary.credits).toEqual({ used: 2.5, balance: 7.5, monthly_allocation: 10, percent_used: 25 });
+    expect(summary.credits).toEqual({
+      used: 2.5, balance: 7.5, monthly_allocation: 10, percent_used: 25,
+      monthly_credit_mode: "reset", rollover_cap: null, monthly_spend_limit: null, monthly_spend_remaining: null,
+    });
     expect(summary.requests).toBe(4);
     expect(summary.tokens).toEqual({
       input: 100,
@@ -99,6 +103,29 @@ describe("native monthly summary", () => {
       metrics: { spend: 3, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, requests: 1 },
     });
     expect(summary.credits.percent_used).toBeNull();
+  });
+
+  test("reports the account's credit control next to its monthly allocation", () => {
+    const summary = buildNativeMonthlyUsage({
+      range,
+      balance: 900,
+      monthlyAllocation: 100,
+      metrics: { spend: 163.22, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, requests: 3 },
+      creditControl: creditControlSummary({ monthlyCreditMode: "rollover", rolloverCap: "600.00000000", monthlySpendLimit: "300.00000000", monthlySpendRemaining: "136.78000000" }),
+    });
+    expect(summary.credits).toEqual({
+      used: 163.22, balance: 900, monthly_allocation: 100, percent_used: 163.22,
+      monthly_credit_mode: "rollover", rollover_cap: 600, monthly_spend_limit: 300, monthly_spend_remaining: 136.78,
+    });
+  });
+
+  test("reports no remaining spend without a monthly spend limit", () => {
+    expect(creditControlSummary({ monthlyCreditMode: "reset", rolloverCap: null, monthlySpendLimit: null, monthlySpendRemaining: "5" })).toEqual({
+      monthly_credit_mode: "reset", rollover_cap: null, monthly_spend_limit: null, monthly_spend_remaining: null,
+    });
+    expect(creditControlSummary({ monthlyCreditMode: "rollover", rolloverCap: 0, monthlySpendLimit: 0, monthlySpendRemaining: 0 })).toEqual({
+      monthly_credit_mode: "rollover", rollover_cap: 0, monthly_spend_limit: 0, monthly_spend_remaining: 0,
+    });
   });
 });
 

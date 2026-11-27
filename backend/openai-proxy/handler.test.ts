@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { ConverseStreamCommand, InvokeModelWithResponseStreamCommand, type ConverseCommandInput } from "@aws-sdk/client-bedrock-runtime";
 import type { CapturedReasoning, ReplayEntry } from "./transform/reasoning-replay";
 
@@ -14,6 +14,7 @@ let remoteImagesEnabled = true;
 let settlementFails = false;
 let charged = 0.01;
 let settlementGate: Promise<void> | undefined;
+let admission: { ok: true } | { ok: false; code: string; message: string } = { ok: true };
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
@@ -21,6 +22,8 @@ let userId = "user-1234567890";
 /** Bedrock rejects a request (when sent, or as the stream's first event) if this returns an error. */
 let rejectRequest: ((input: ConverseCommandInput) => Error | undefined) | undefined;
 let rejectInStream = false;
+/** Thrown by the stream after its events, as a broken connection or an upstream exception event is. */
+let streamFailure: unknown;
 
 // In-memory reasoning replay store with the same user/model scoping as the database.
 type ReplayRow = ReplayEntry & { userId: string; modelId: string; requestId: string };
@@ -43,6 +46,7 @@ mock.module("../proxy-auth", () => {
 });
 mock.module("../credit-service", () => ({
   checkBalance: async () => 100,
+  checkCreditAdmission: async () => admission,
   calculateCostBreakdown: () => ({ total: 0.01, inputCost: 0.001, outputCost: 0.002, cacheReadCost: 0.003, cacheWrite5mCost: 0.0015, cacheWrite1hCost: 0.0025 }),
   deductCredits: async (input: Record<string, unknown>) => {
     settlements.push(input);
@@ -81,9 +85,11 @@ mock.module("../bedrock", () => ({
       if (rejection && !(streaming && rejectInStream)) throw rejection;
       if (!streaming) return converseOutput;
       const events = streamEvents;
+      const failure = streamFailure;
       return { stream: (async function* () {
         if (rejection) throw rejection;
         for (const event of events) yield event;
+        if (failure !== undefined) throw failure;
       })() };
     },
   }),
@@ -91,6 +97,7 @@ mock.module("../bedrock", () => ({
 
 const { handleOpenAIProxy } = await import("./handler");
 const { handleBedrockProxy } = await import("../bedrock-proxy");
+const { UPSTREAM_UNAVAILABLE_MESSAGE } = await import("../upstream-errors");
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
@@ -116,11 +123,14 @@ beforeEach(() => {
   aliases = []; apps = [];
   remoteImagesEnabled = true;
   sent = [];
-  streamEvents = [];
+  // A complete stream: only messageStop completes a response.
+  streamEvents = [{ messageStart: { role: "assistant" } }, { messageStop: { stopReason: "end_turn" } }];
+  streamFailure = undefined;
   settlements = [];
   settlementFails = false;
   charged = 0.01;
   settlementGate = undefined;
+  admission = { ok: true };
   userId = "user-1234567890";
   rejectRequest = undefined;
   rejectInStream = false;
@@ -139,10 +149,26 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible handler", () => {
+  for (const code of ["insufficient_credits", "monthly_spend_limit_reached"] as const) {
+    test(`refuses with 402 ${code} before calling Bedrock`, async () => {
+      const message = code === "insufficient_credits" ? "Insufficient credit balance" : "Monthly spend limit of $300.00 reached; it resets on 2026-12-01 (UTC)";
+      admission = { ok: false, code, message };
+      const response = await call({ model: "global.anthropic.claude-opus-4-7", messages: [{ role: "user", content: "Hi" }] });
+      expect(response.status).toBe(402);
+      expect((await response.json()).error).toEqual({ message, type: "invalid_request_error", code });
+      const native = await handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/converse", {
+        method: "POST", body: JSON.stringify({ modelId: "global.anthropic.claude-opus-4-7", messages: [{ role: "user", content: [{ text: "Hi" }] }] }),
+      }), "converse");
+      expect(native.status).toBe(402);
+      expect(await native.json()).toEqual({ error: { message, code } });
+      expect(sent).toHaveLength(0);
+      expect(settlements).toHaveLength(0);
+    });
+  }
   test("stream accounting waits for ledger completion and precedes DONE", async () => {
     let release!: () => void;
     settlementGate = new Promise<void>(resolve => { release = resolve; });
-    streamEvents = [{ metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } } }];
+    streamEvents = [{ messageStop: { stopReason: "end_turn" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } } }];
     const response = await call({ model: "global.anthropic.claude-opus-4-7", stream: true, messages: [{ role: "user", content: "Hi" }] });
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -160,7 +186,7 @@ describe("OpenAI-compatible handler", () => {
   test("stream TTL details and fallback buckets exactly match billed tokens", async () => {
     for (const cacheDetails of [undefined, [{ ttl: "5m", inputTokens: 7 }, { ttl: "1h", inputTokens: 5 }]]) {
       settlements = [];
-      streamEvents = [{ metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5,
+      streamEvents = [{ messageStop: { stopReason: "end_turn" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5,
         cacheReadInputTokens: 10, cacheWriteInputTokens: 12, cacheDetails } } }];
       const response = await call({ model: "global.anthropic.claude-opus-4-7", stream: true, messages: [{ role: "user", content: "Hi" }] });
       const frames = (await response.text()).split("\n\n").filter(f => f.startsWith("data: {")).map(f => JSON.parse(f.slice(6)));
@@ -296,7 +322,7 @@ describe("OpenAI-compatible handler", () => {
   });
   test("uses the alias policy for playground and streaming responses", async () => {
     configureAlias();
-    streamEvents = [{ messageStart: { role: "assistant" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
+    streamEvents = [{ messageStart: { role: "assistant" } }, { messageStop: { stopReason: "end_turn" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
     const response = await handleOpenAIProxy(new Request("https://gateway.test/api/playground/chat/completions", {
       method: "POST", body: JSON.stringify({ model: "opus-max-thinking", stream: true, reasoning_effort: "low", messages: [{ role: "user", content: "Hi" }] }),
     }), "session");
@@ -312,7 +338,7 @@ describe("OpenAI-compatible handler", () => {
         configureAlias();
         aliases[0]!.reasoningSource = "client";
         modelRow = model({ modelId: "anthropic.claude-opus-5", defaultReasoningEffort: "high" });
-        streamEvents = [{ messageStart: { role: "assistant" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
+        streamEvents = [{ messageStart: { role: "assistant" } }, { messageStop: { stopReason: "end_turn" } }, { metadata: { usage: { inputTokens: 2, outputTokens: 3 } } }];
         for (const effort of ["low", "none", undefined]) {
           sent = [];
           const response = await call({ model: publicId, stream, reasoning_effort: effort, messages: [{ role: "user", content: "Hi" }] });
@@ -689,5 +715,248 @@ describe("reasoning replay through the OpenAI-compatible handler", () => {
     while (true) { const part = await reader.read(); if (part.done) break; after += decoder.decode(part.value); }
     expect(after).toContain("[DONE]");
     expect(replayRows).toHaveLength(1);
+  });
+});
+
+describe("lost upstream connections", () => {
+  const MODEL = "global.anthropic.claude-opus-4-7";
+  const ADDRESS = "10.103.57.41:8080";
+  const levels = ["error", "warn", "info", "log"] as const;
+  let logs: Record<(typeof levels)[number], string[]>;
+  let spies: Array<{ mockRestore(): void }> = [];
+  beforeEach(() => {
+    logs = { error: [], warn: [], info: [], log: [] };
+    spies = levels.map((level) => spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      logs[level].push(args.map(String).join(" "));
+    }));
+  });
+  afterEach(() => { for (const spy of spies) spy.mockRestore(); });
+
+  /** What the AWS SDK throws, after its retries, when the upstream refuses the connection. */
+  const refused = () => Object.assign(new Error(`The pending stream has been canceled (caused by: connect ECONNREFUSED ${ADDRESS})`), {
+    code: "ERR_HTTP2_STREAM_CANCEL",
+    cause: Object.assign(new Error(`connect ECONNREFUSED ${ADDRESS}`), { code: "ECONNREFUSED", syscall: "connect", address: "10.103.57.41", port: 8080 }),
+    $metadata: { attempts: 3, totalRetryDelay: 184 },
+  });
+  const reset = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  /** The SDK appends this to errors it raises while reading a response, and records the response's status. */
+  const HINT = "\n  Deserialization error: to see the raw response, inspect the hidden field {error}.$response on this object.";
+  const whileReading = <T extends Error>(error: T) => Object.assign(error, { message: error.message + HINT, $metadata: { httpStatusCode: 200, attempts: 1, totalRetryDelay: 0 } });
+
+  function request(body: Record<string, unknown>, requestId: string, auth: "api_key" | "session" = "api_key") {
+    return handleOpenAIProxy(new Request("https://gateway.test/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": requestId },
+      body: JSON.stringify({ model: MODEL, messages: [{ role: "user", content: "Hi" }], ...body }),
+    }), auth);
+  }
+
+  /** A stream's parsed data events, and whether it ended with [DONE]. */
+  async function read(response: Response) {
+    const frames = (await response.text()).split("\n\n").filter((frame) => frame.startsWith("data: "));
+    return {
+      done: frames.at(-1) === "data: [DONE]",
+      data: frames.filter((frame) => frame !== "data: [DONE]").map((frame) => JSON.parse(frame.slice(6))),
+    };
+  }
+  const choices = (data: Array<{ choices?: Array<{ delta: { content?: string }; finish_reason: string | null }> }>) =>
+    data.flatMap((chunk) => chunk.choices ?? []);
+
+  const partial = [
+    { messageStart: { role: "assistant" } },
+    { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "The quick " } } },
+    { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "brown " } } },
+  ];
+  const usage = { inputTokens: 11, outputTokens: 7, totalTokens: 18 };
+  const interrupted = {
+    message: "The upstream model provider's stream ended before the response was complete",
+    type: "server_error",
+    code: "stream_interrupted",
+    param: null,
+  };
+
+  for (const stream of [false, true]) {
+    test(`a refused connection is 503 service_unavailable without the upstream's address (stream=${stream})`, async () => {
+      rejectRequest = () => refused();
+      const response = await request({ stream }, "request-refused");
+      expect(response.status).toBe(503);
+      const body = await response.json();
+      expect(body).toEqual({ error: { message: UPSTREAM_UNAVAILABLE_MESSAGE, type: "server_error", code: "service_unavailable" } });
+      expect(JSON.stringify(body)).not.toMatch(/10\.103|ECONNREFUSED|cancel/i);
+      expect(settlements).toHaveLength(0);
+      const line = logs.error.find((entry) => entry.includes("Upstream unavailable"));
+      expect(line).toContain(`request=request-refused model=${MODEL} stream=${stream} status=503 code=service_unavailable`);
+      // Operators still see what failed, and where.
+      expect(line).toContain(`ECONNREFUSED ${ADDRESS}`);
+      expect(line).toContain("attempts=3");
+    });
+  }
+
+  test("reset, timed-out and failed HTTP/2 connections, DNS failures and gateway statuses are 503 too", async () => {
+    const failures = [
+      reset(),
+      Object.assign(new Error(`connect ETIMEDOUT ${ADDRESS}`), { code: "ETIMEDOUT" }),
+      Object.assign(new Error("Socket timed out without establishing a connection within 1000 ms"), { name: "TimeoutError" }),
+      new Error("HTTP/2 stream is abnormally aborted in mid-communication with result code 2."),
+      new Error("Unexpected error: http2 request did not get a response"),
+      Object.assign(new Error("getaddrinfo ENOTFOUND shim.internal"), { code: "ENOTFOUND" }),
+      Object.assign(new Error("UnknownError"), { name: "UnknownError", $fault: "server", $metadata: { httpStatusCode: 502 } }),
+      // A non-streaming response cut off mid-body: the HTTP/2 stream ends cleanly and the JSON is incomplete.
+      whileReading(new SyntaxError("JSON Parse error: Expected '}'")),
+    ];
+    for (const stream of [false, true]) {
+      for (const failure of failures) {
+        rejectRequest = () => failure;
+        const response = await request({ stream }, "request-down");
+        expect(response.status).toBe(503);
+        expect((await response.json()).error).toEqual({ message: UPSTREAM_UNAVAILABLE_MESSAGE, type: "server_error", code: "service_unavailable" });
+      }
+    }
+    expect(logs.error.filter((entry) => entry.includes("Upstream unavailable: request=request-down"))).toHaveLength(failures.length * 2);
+  });
+
+  test("Bedrock's errors keep their status and message; the gateway's own errors keep theirs in the log", async () => {
+    const cases: Array<[Error, number, Record<string, unknown>]> = [
+      [Object.assign(new Error("Too many requests, please wait before trying again."), { name: "ThrottlingException", $fault: "client", $metadata: { httpStatusCode: 429 } }),
+        429, { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Too many requests, please wait before trying again." }],
+      [Object.assign(new Error("Bedrock is unable to process your request."), { name: "ServiceUnavailableException", $fault: "server", $metadata: { httpStatusCode: 503 } }),
+        503, { type: "server_error", code: "service_unavailable", message: "Bedrock is unable to process your request." }],
+      [Object.assign(new Error("The system encountered an unexpected error during processing."), { name: "InternalServerException", $fault: "server", $metadata: { httpStatusCode: 500 } }),
+        500, { type: "server_error", code: "internal_error", message: "The system encountered an unexpected error during processing." }],
+      // An exception event that opens the stream: the SDK raises it from send() without its type.
+      [whileReading(new Error("Too many requests, please wait before trying again.")),
+        500, { type: "server_error", code: "internal_error", message: "Too many requests, please wait before trying again." }],
+      [new TypeError("Cannot read properties of undefined (reading 'usage')"),
+        500, { type: "server_error", code: "internal_error", message: "Internal server error" }],
+    ];
+    for (const [failure, status, error] of cases) {
+      rejectRequest = () => failure;
+      const response = await request({}, "request-error");
+      expect(response.status).toBe(status);
+      expect((await response.json()).error).toEqual(error);
+    }
+    expect(logs.warn.some((entry) => entry.includes("Upstream error: request=request-error") && entry.includes("ThrottlingException"))).toBe(true);
+    expect(logs.error.some((entry) => entry.includes("Request failed: request=request-error") && entry.includes("reading 'usage'"))).toBe(true);
+  });
+
+  test("a client that leaves before the upstream answers is not an upstream failure", async () => {
+    const client = new AbortController();
+    rejectRequest = () => {
+      client.abort();
+      return Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    };
+    const response = await handleOpenAIProxy(new Request("https://gateway.test/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "request-left" },
+      body: JSON.stringify({ model: MODEL, stream: true, messages: [{ role: "user", content: "Hi" }] }),
+      signal: client.signal,
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("request_aborted");
+    expect(logs.error).toEqual([]);
+    expect(logs.info.some((entry) => entry.includes("Request canceled: request=request-left"))).toBe(true);
+  });
+
+  test("a stream that ends before messageStop ends with an error event instead of [DONE]", async () => {
+    streamEvents = partial;
+    const response = await request({ stream: true }, "request-cut");
+    expect(response.status).toBe(200);
+    const { data, done } = await read(response);
+    expect(done).toBe(false);
+    expect(choices(data).map((choice) => choice.delta.content).join("")).toBe("The quick brown ");
+    expect(choices(data).every((choice) => choice.finish_reason === null)).toBe(true);
+    // No usage chunk makes the cut-off response look finished: the error is the last event.
+    expect(data.filter((chunk) => chunk.usage)).toEqual([]);
+    expect(data.at(-1)).toEqual({ error: interrupted });
+    expect(settlements).toHaveLength(0);
+    const line = logs.error.find((entry) => entry.includes("Stream failed"));
+    expect(line).toContain(`Stream failed: request=request-cut model=${MODEL} after=`);
+    expect(line).toContain("received=messageStart:1,contentBlockDelta:2 usage=none error=the upstream ended the stream before messageStop");
+  });
+
+  test("a stream cut inside an event, or by a broken connection, ends with the same error event", async () => {
+    for (const failure of [new Error("Truncated event message received."), reset()]) {
+      streamEvents = partial;
+      streamFailure = failure;
+      const { data, done } = await read(await request({ stream: true }, "request-cut"));
+      expect(done).toBe(false);
+      expect(data.at(-1)).toEqual({ error: interrupted });
+    }
+    const lines = logs.error.filter((entry) => entry.includes("Stream failed: request=request-cut"));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("error=Error: Truncated event message received.");
+    expect(lines[1]).toContain("error=Error(ECONNRESET): read ECONNRESET");
+  });
+
+  test("usage that arrived before the stream was cut is charged, and settled before the error event", async () => {
+    streamEvents = [...partial, { metadata: { usage } }];
+    const { data, done } = await read(await request({ stream: true }, "request-cut-billed"));
+    expect(done).toBe(false);
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toMatchObject({ requestId: "request-cut-billed", inputTokens: 11, outputTokens: 7 });
+    expect(data.at(-2).usage).toMatchObject({ prompt_tokens: 11, completion_tokens: 7, cost: 0.01, cost_details: { status: "settled" } });
+    expect(data.at(-1)).toEqual({ error: interrupted });
+    expect(logs.error.find((entry) => entry.includes("Stream failed"))).toContain("usage=reported");
+    expect(logs.log.some((entry) => entry.includes("Complete: request=request-cut-billed") && entry.includes("stop=interrupted"))).toBe(true);
+  });
+
+  test("an exception the upstream sends mid-stream ends the response with its error", async () => {
+    const cases: Array<[unknown, Record<string, unknown>]> = [
+      // AWS SDK 3.1003 throws a stream's exception event as the event's bare structure.
+      [{ message: "Too many requests, please wait before trying again." },
+        { type: "server_error", code: "upstream_error", message: "Too many requests, please wait before trying again." }],
+      [Object.assign(new Error("Too many requests, please wait before trying again."), { name: "ThrottlingException", $fault: "client", $metadata: {} }),
+        { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Too many requests, please wait before trying again." }],
+      [new TypeError("Cannot read properties of undefined (reading 'text')"),
+        { type: "server_error", code: "internal_error", message: "The response failed before it was complete" }],
+    ];
+    for (const [failure, error] of cases) {
+      streamEvents = partial;
+      streamFailure = failure;
+      const { data, done } = await read(await request({ stream: true }, "request-exception"));
+      expect(done).toBe(false);
+      expect(data.at(-1)).toEqual({ error: { ...error, param: null } });
+    }
+  });
+
+  test("a failure after messageStop keeps the complete response", async () => {
+    streamEvents = [...partial, { messageStop: { stopReason: "end_turn" } }, { metadata: { usage } }];
+    streamFailure = reset();
+    const { data, done } = await read(await request({ stream: true }, "request-late"));
+    expect(done).toBe(true);
+    expect(data.some((chunk) => chunk.error)).toBe(false);
+    expect(choices(data).at(-1)?.finish_reason).toBe("stop");
+    expect(settlements).toHaveLength(1);
+    expect(logs.warn.some((entry) => entry.includes("Stream failed after messageStop, response kept: request=request-late"))).toBe(true);
+  });
+
+  test("a complete stream without usage still ends with [DONE] and logs its request", async () => {
+    const { data, done } = await read(await request({ stream: true }, "request-no-usage"));
+    expect(done).toBe(true);
+    expect(data.at(-1).usage.cost_details).toEqual({ currency: "USD", status: "unavailable" });
+    expect(logs.warn).toContain(`[OpenAI Proxy] Stream completed with no usage metadata: request=request-no-usage model=${MODEL} stop=end_turn`);
+  });
+
+  test("the playground gets the same error event", async () => {
+    streamEvents = partial;
+    const { data, done } = await read(await request({ stream: true }, "request-playground", "session"));
+    expect(done).toBe(false);
+    expect(data.at(-1)).toEqual({ error: interrupted });
+  });
+
+  test("native Bedrock endpoints answer a refused connection with 503 service_unavailable", async () => {
+    rejectRequest = () => refused();
+    for (const endpoint of ["converse", "converse-stream", "invoke"] as const) {
+      const response = await handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/" + endpoint, {
+        method: "POST",
+        headers: { "x-request-id": "request-native" },
+        body: JSON.stringify({ modelId: MODEL, messages: [{ role: "user", content: [{ text: "Hi" }] }], body: { messages: [{ role: "user", content: "Hi" }], max_tokens: 20 } }),
+      }), endpoint);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: { message: UPSTREAM_UNAVAILABLE_MESSAGE, code: "service_unavailable" } });
+    }
+    const lines = logs.error.filter((entry) => entry.includes("[Bedrock Proxy] Upstream unavailable: request=request-native"));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain(`ECONNREFUSED ${ADDRESS}`);
   });
 });

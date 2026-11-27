@@ -1,7 +1,11 @@
 import db from "@/db";
 import { userTable, creditEventsTable, usageRequestReceiptsTable } from "./schema";
 import { eq, sql } from "drizzle-orm";
-import { calculateCreditSettlement, type CreditSettlement } from "./credit-settlement";
+import {
+  calculateCreditSettlement, creditAdmission, type CreditAdmission, type CreditSettlement,
+} from "./credit-settlement";
+import { limitedMonthlySpendQuery, monthlySpendRemainingQuery, numberOrNull } from "./monthly-spend";
+import { currentUtcMonthRange } from "./usage-contract";
 
 export async function checkBalance(userId: string): Promise<number> {
   const user = await db
@@ -10,6 +14,21 @@ export async function checkBalance(userId: string): Promise<number> {
     .where(eq(userTable.id, userId))
     .then((rows) => rows[0]);
   return user?.creditBalance ?? 0;
+}
+
+/** Whether a user may start an inference request: a positive balance, and under their monthly spend limit. */
+export async function checkCreditAdmission(userId: string, now = new Date()): Promise<CreditAdmission> {
+  const [account] = await db.select({
+    balance: userTable.creditBalance,
+    monthlySpendLimit: userTable.monthlySpendLimit,
+    monthlySpend: limitedMonthlySpendQuery(now),
+  }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+  return creditAdmission({
+    balance: account?.balance ?? 0,
+    monthlySpendLimit: account?.monthlySpendLimit ?? null,
+    monthlySpend: numberOrNull(account?.monthlySpend) ?? 0,
+    periodEnd: currentUtcMonthRange(now).endExclusive,
+  });
 }
 
 export interface CostBreakdown {
@@ -71,9 +90,10 @@ export async function deductCredits(params: {
       };
     }
 
-    // Serialize settlements per user so concurrent completions see the latest balance.
+    // Serialize settlements per user so concurrent completions see the latest balance
+    // and, under a monthly spend limit, every earlier settlement of the month.
     const user = await tx
-      .select({ creditBalance: userTable.creditBalance })
+      .select({ creditBalance: userTable.creditBalance, monthlySpendLimit: userTable.monthlySpendLimit })
       .from(userTable)
       .where(eq(userTable.id, params.userId))
       .limit(1)
@@ -82,9 +102,16 @@ export async function deductCredits(params: {
 
     if (!user) throw new Error("User not found");
 
-    const settlement = calculateCreditSettlement(user.creditBalance, params.amount);
     const eventId = crypto.randomUUID();
     const eventTime = new Date();
+    let spendAllowance = Number.POSITIVE_INFINITY;
+    if (user.monthlySpendLimit !== null) {
+      // A statement after the lock, so its snapshot includes every settlement committed before it.
+      // The limit less the month's spend is computed in NUMERIC, then converted once.
+      const [row] = await tx.select({ remaining: monthlySpendRemainingQuery(eventTime) }).from(userTable).where(eq(userTable.id, params.userId)).limit(1);
+      spendAllowance = numberOrNull(row?.remaining) ?? Number.POSITIVE_INFINITY;
+    }
+    const settlement = calculateCreditSettlement(user.creditBalance, params.amount, spendAllowance);
 
     await tx.update(userTable).set({ creditBalance: settlement.balanceAfter }).where(eq(userTable.id, params.userId));
 

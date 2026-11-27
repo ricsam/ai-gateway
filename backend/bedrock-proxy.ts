@@ -11,8 +11,7 @@ import { resolveModel } from "./model-catalog";
 import { applyAliasConverse, applyAliasInvoke } from "./alias-reasoning";
 import { ReasoningConfigError } from "./openai-proxy/transform/reasoning";
 import { getBedrockClient, ProviderNotConfiguredError } from "./bedrock";
-import { calculateCostBreakdown, checkBalance, deductCredits, type CostBreakdown } from "./credit-service";
-import { hasAvailableCredits } from "./credit-settlement";
+import { calculateCostBreakdown, checkCreditAdmission, deductCredits, type CostBreakdown } from "./credit-service";
 import { authenticateApiKeyPrincipal, requireProxyScope, type ProxyPrincipal } from "./proxy-auth";
 import { addConverseCachePoints } from "./openai-proxy/transform/cache-converse";
 import { addInvokeCacheControl, type AnthropicInvokeBody } from "./openai-proxy/transform/cache-invoke";
@@ -26,6 +25,15 @@ import {
   type CacheUsage,
 } from "./openai-proxy/transform/cache-usage";
 import { isControllerClosedError } from "./stream-utils";
+import {
+  describeError,
+  isUnreadableUpstreamResponse,
+  isUpstreamAnswer,
+  isUpstreamConnectionError,
+  isUpstreamGatewayStatus,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+  upstreamMessage,
+} from "./upstream-errors";
 
 export type BedrockProxyEndpoint = "invoke" | "invoke-stream" | "converse" | "converse-stream";
 
@@ -45,11 +53,17 @@ function failure(message: string, status: number, code: string): Response {
   return Response.json({ error: { message, code } }, { status });
 }
 
-function mapError(error: unknown): Response {
+function mapError(error: unknown, context: { requestId: string; modelId: string; endpoint: BedrockProxyEndpoint }): Response {
   if (error instanceof ReasoningConfigError) return failure(error.message, 400, error.code);
   if (error instanceof ProviderNotConfiguredError) return failure(error.message, 503, "provider_not_configured");
+  const where = `request=${context.requestId} model=${context.modelId} endpoint=${context.endpoint}`;
+  // A failed or broken connection names the upstream's address: keep it in the log.
+  if (isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error) || isUpstreamGatewayStatus(error)) {
+    console.error(`[Bedrock Proxy] Upstream unavailable: ${where} error=${describeError(error)}`);
+    return failure(UPSTREAM_UNAVAILABLE_MESSAGE, 503, "service_unavailable");
+  }
   const name = error instanceof Error ? error.name : "";
-  const message = error instanceof Error ? error.message : "Bedrock request failed";
+  const message = upstreamMessage(error) ?? "Bedrock request failed";
   const mapped: Record<string, [number, string]> = {
     AccessDeniedException: [403, "access_denied"],
     ThrottlingException: [429, "rate_limit_exceeded"],
@@ -58,9 +72,11 @@ function mapError(error: unknown): Response {
     ModelTimeoutException: [408, "timeout"],
     ServiceUnavailableException: [503, "service_unavailable"],
   };
-  const [status, code] = mapped[name] ?? [500, "internal_error"];
-  if (status === 500) console.error("Bedrock compatibility proxy error", { name, message });
-  return failure(message, status, code);
+  const [status, code] = Object.hasOwn(mapped, name) ? mapped[name]! : [500, "internal_error"];
+  if (status !== 500) return failure(message, status, code);
+  console.error(`[Bedrock Proxy] Request failed: ${where} error=${describeError(error)}`);
+  // An answer from Bedrock keeps its message; the gateway's own errors don't leak theirs.
+  return failure(isUpstreamAnswer(error) ? message : "Internal server error", status, code);
 }
 
 function bodyBytes(value: unknown): Uint8Array {
@@ -132,7 +148,8 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
   const resolved = await resolveModel(body.modelId);
   const model = resolved?.upstream;
   if (!model) return failure(`Model "${body.modelId}" is not available for API access`, 400, "model_not_available");
-  if (!hasAvailableCredits(await checkBalance(auth.principal.userId))) return failure("Insufficient credit balance", 402, "insufficient_credits");
+  const admission = await checkCreditAdmission(auth.principal.userId);
+  if (!admission.ok) return failure(admission.message, 402, admission.code);
 
   const modelInfo: ModelInfo = {
     modelId: model.modelId,
@@ -162,7 +179,7 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
       case "invoke-stream": return await handleInvokeStream(body, modelInfo, auth.principal, requestId, client, request.signal);
     }
   } catch (error) {
-    return mapError(error);
+    return mapError(error, { requestId, modelId: model.modelId, endpoint });
   }
 }
 

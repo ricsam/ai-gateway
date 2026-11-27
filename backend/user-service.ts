@@ -4,11 +4,44 @@ import db from "./db";
 import { accountTable, auditEventsTable, creditEventsTable, groupMembersTable, groupsTable, sessionTable, userTable } from "./schema";
 import { normalizeEmail, normalizeUsername, validateLocalAccount } from "./setup";
 import type { ManagementPrincipal } from "./management-auth";
+import { isMonthlyCreditMode, MAX_CREDIT_AMOUNT, type MonthlyCreditMode } from "../shared/credit-control";
 
-export interface UserCreateInput {
+/** How an account's monthly credits work: its mode, rollover cap and monthly spend limit. */
+export interface CreditControlInput {
+  monthlyCreditMode?: MonthlyCreditMode;
+  /** Rollover mode: the balance the monthly credits may bring the account up to; null is no cap. */
+  rolloverCap?: number | null;
+  /** The most metered usage the account may be charged in a UTC month; null is no limit. */
+  monthlySpendLimit?: number | null;
+}
+
+export interface UserCreateInput extends CreditControlInput {
   username: string; email: string; name: string; password: string; role?: "user" | "admin";
   enabled?: boolean; mustChangePassword?: boolean; creditBalance?: number; defaultMonthlyCredits?: number;
   groupIds?: string[];
+}
+
+function validateCredits(value: unknown): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Credits cannot be negative or invalid");
+  if (value > MAX_CREDIT_AMOUNT) throw new Error(`Credits cannot exceed ${MAX_CREDIT_AMOUNT}`);
+}
+
+/** The given credit control fields, validated; absent fields are left out. */
+export function creditControlValues(input: { [K in keyof CreditControlInput]?: unknown }): CreditControlInput {
+  const values: CreditControlInput = {};
+  if (input.monthlyCreditMode !== undefined) {
+    if (!isMonthlyCreditMode(input.monthlyCreditMode)) throw new Error("monthlyCreditMode must be reset or rollover");
+    values.monthlyCreditMode = input.monthlyCreditMode;
+  }
+  for (const field of ["rolloverCap", "monthlySpendLimit"] as const) {
+    const value = input[field];
+    if (value === undefined) continue;
+    if (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > MAX_CREDIT_AMOUNT)) {
+      throw new Error(`${field} must be null or a non-negative amount of at most ${MAX_CREDIT_AMOUNT}`);
+    }
+    values[field] = value;
+  }
+  return values;
 }
 
 async function audit(tx: any, principal: ManagementPrincipal, action: string, targetId: string, requestId: string, metadata: Record<string, unknown> = {}) {
@@ -22,13 +55,15 @@ export async function createLocalUser(input: UserCreateInput, principal: Managem
   const defaultMonthlyCredits = input.defaultMonthlyCredits ?? 0;
   if (input.role !== undefined && !["user", "admin"].includes(input.role)) throw new Error("Role must be user or admin");
   for (const field of ["enabled", "mustChangePassword"] as const) if (input[field] !== undefined && typeof input[field] !== "boolean") throw new Error(`${field} must be a boolean`);
-  if (!Number.isFinite(creditBalance) || !Number.isFinite(defaultMonthlyCredits) || creditBalance < 0 || defaultMonthlyCredits < 0) throw new Error("Credits cannot be negative or invalid");
+  validateCredits(creditBalance);
+  validateCredits(defaultMonthlyCredits);
+  const creditControl = creditControlValues(input);
   return db.transaction(async (tx) => {
     const now = new Date(); const id = crypto.randomUUID();
     const [user] = await tx.insert(userTable).values({
       id, username: valid.username, displayUsername: input.username.trim(), email: valid.email, name: valid.name, emailVerified: true,
       role: input.role ?? "user", enabled: input.enabled ?? true,
-      mustChangePassword: input.mustChangePassword ?? true, creditBalance, defaultMonthlyCredits, createdAt: now, updatedAt: now,
+      mustChangePassword: input.mustChangePassword ?? true, creditBalance, defaultMonthlyCredits, ...creditControl, createdAt: now, updatedAt: now,
     }).returning();
     await tx.insert(accountTable).values({ id: crypto.randomUUID(), accountId: id, providerId: "credential", userId: id, password: passwordHash, createdAt: now, updatedAt: now });
     if (creditBalance > 0) await tx.insert(creditEventsTable).values({
@@ -71,10 +106,8 @@ export async function updateUser(id: string, updates: Partial<Omit<UserCreateInp
     if (updates.role !== undefined && !["user", "admin"].includes(updates.role)) throw new Error("Role must be user or admin");
     for (const field of ["enabled", "mustChangePassword"] as const) if (updates[field] !== undefined && typeof updates[field] !== "boolean") throw new Error(`${field} must be a boolean`);
     for (const field of ["name", "role", "enabled", "mustChangePassword", "creditBalance", "defaultMonthlyCredits"] as const) if (updates[field] !== undefined) values[field] = field === "name" ? String(updates[field]).trim() : updates[field];
-    for (const field of ["creditBalance", "defaultMonthlyCredits"] as const) {
-      const value = values[field] as number | undefined;
-      if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error("Credits cannot be negative or invalid");
-    }
+    for (const field of ["creditBalance", "defaultMonthlyCredits"] as const) if (values[field] !== undefined) validateCredits(values[field]);
+    Object.assign(values, creditControlValues(updates));
     const [changed] = await tx.update(userTable).set(values).where(eq(userTable.id, id)).returning();
     if (updates.creditBalance !== undefined && updates.creditBalance !== target.creditBalance) {
       const difference = updates.creditBalance - target.creditBalance;
@@ -113,19 +146,17 @@ export async function setUserGroups(id: string, groupIds: string[], principal: M
 
 export async function bulkUpdateUsersByGroups(
   groupIds: string[],
-  updates: { enabled?: boolean; defaultMonthlyCredits?: number },
+  updates: { enabled?: boolean; defaultMonthlyCredits?: number } & CreditControlInput,
   principal: ManagementPrincipal,
   requestId: string,
 ) {
   const selectedGroups = [...new Set(groupIds)];
   if (!selectedGroups.length) throw new Error("Select at least one group");
-  const fields = (["enabled", "defaultMonthlyCredits"] as const).filter((key) => updates[key] !== undefined);
+  const fields = (["enabled", "defaultMonthlyCredits", "monthlyCreditMode", "rolloverCap", "monthlySpendLimit"] as const).filter((key) => updates[key] !== undefined);
   if (!fields.length) throw new Error("At least one bulk update is required");
   if (updates.enabled !== undefined && typeof updates.enabled !== "boolean") throw new Error("enabled must be a boolean");
-  const values = Object.fromEntries(fields.map((field) => [field, updates[field]]));
-  if (updates.defaultMonthlyCredits !== undefined && (!Number.isFinite(updates.defaultMonthlyCredits) || updates.defaultMonthlyCredits < 0)) {
-    throw new Error("Credits cannot be negative or invalid");
-  }
+  if (updates.defaultMonthlyCredits !== undefined) validateCredits(updates.defaultMonthlyCredits);
+  const values = { ...Object.fromEntries((["enabled", "defaultMonthlyCredits"] as const).filter((key) => updates[key] !== undefined).map((field) => [field, updates[field]])), ...creditControlValues(updates) };
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('ai-gateway:admin-updates'))`);
     const targets = await tx.selectDistinct({ id: userTable.id, role: userTable.role, enabled: userTable.enabled })

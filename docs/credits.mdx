@@ -1,6 +1,6 @@
 ---
 title: "Credits and usage"
-description: "Understand balances, model pricing, monthly allocations, and request settlement."
+description: "Understand balances, model pricing, monthly credits, spend limits, and request settlement."
 ---
 
 Credits are denominated in USD and owned by users. Every model has separate prices per million input and output tokens, with optional prices for cache reads and 5-minute or 1-hour cache writes.
@@ -18,11 +18,15 @@ curl https://gateway.example.com/v1/credits \
   "dashboard_url": "https://gateway.example.com/profile",
   "currency": "USD",
   "balance": 18.42,
-  "monthly_allocation": 25
+  "monthly_allocation": 25,
+  "monthly_credit_mode": "rollover",
+  "rollover_cap": 150,
+  "monthly_spend_limit": 75,
+  "monthly_spend_remaining": 31.5
 }
 ```
 
-The key requires `credits.read`.
+The key requires `credits.read`. `monthly_credit_mode`, `rollover_cap`, `monthly_spend_limit` and `monthly_spend_remaining` describe how the account's [monthly credits](#monthly-credits) work; `rollover_cap` and `monthly_spend_limit` are `null` when the account has none, and `monthly_spend_remaining` is `null` without a limit. The account can spend the lesser of `balance` and `monthly_spend_remaining` this month. Gateways from before these fields omit them: treat that as the reset mode without a cap or limit.
 
 ## Current-month usage summary
 
@@ -47,7 +51,11 @@ curl https://gateway.example.com/v1/usage \
     "used": 163.22,
     "balance": 86.78,
     "monthly_allocation": 150,
-    "percent_used": 108.81333333333333
+    "percent_used": 108.81333333333333,
+    "monthly_credit_mode": "reset",
+    "rollover_cap": null,
+    "monthly_spend_limit": null,
+    "monthly_spend_remaining": null
   },
   "observed_at": "2025-03-27T12:00:00.000Z",
   "budget": {
@@ -78,7 +86,7 @@ curl https://gateway.example.com/v1/usage \
 }
 ```
 
-The period is the current UTC calendar month. `period.end` is exclusive. `credits.used` is the metered USD value charged during that period, while `credits.balance` is the current balance. `percent_used` is `used / monthly_allocation × 100`, is not capped at 100, and is `null` when the monthly allocation is zero. The token `total` includes input, output, cache-read, and cache-write tokens.
+The period is the current UTC calendar month. `period.end` is exclusive. `credits.used` is the metered USD value charged during that period, the spend that a monthly spend limit counts, while `credits.balance` is the current balance. `percent_used` is `used / monthly_allocation × 100`, is not capped at 100, and is `null` when the monthly allocation is zero. `credits` also carries the four credit control fields of `/v1/credits`, from the same database snapshot. The token `total` includes input, output, cache-read, and cache-write tokens.
 
 ### Authoritative period budget
 
@@ -89,15 +97,15 @@ The additive `budget` object has `version: 1`, `status: "available" | "unavailab
 | `opening_balance` | Sum of all ledger additions minus consumption before the UTC month starts: carry-in funds, not a fresh recurring grant. |
 | `top_ups` | Current-month administrator additions, including initial administrator funding created within this month. |
 | `adjustment_removals` | Current-month administrator removals, expressed positively. |
-| `reset_additions` | Sum of positive current-month monthly-reset deltas. |
-| `reset_removals` | Sum of negative current-month monthly-reset deltas, expressed positively. |
+| `reset_additions` | Sum of positive current-month monthly-run deltas: replacement resets and rollover additions. |
+| `reset_removals` | Sum of negative current-month monthly-reset deltas, expressed positively. A rollover never removes credits. |
 | `net_funding` | `top_ups - adjustment_removals + reset_additions - reset_removals`; can be negative. |
 | `effective_budget` | `opening_balance + net_funding`. |
 | `metered_spend` | Current-month charged inference usage (`usage`, `chat`, `api`, `embedding`), excluding funding events. |
 | `remaining` | Current account balance; when available, exactly reconciles with `effective_budget - metered_spend` in database arithmetic. |
 | `percent_used` | `metered_spend / effective_budget × 100`; uncapped, and `null` for a zero denominator or unavailable budget. Exhaustion of a positive budget is 100%. |
 
-For example, $150 opening funds plus a $100 top-up gives a $250 budget. Spending $163.22 leaves $86.78 and uses **65.288%**, regardless of the current recurring allocation setting. Editing that setting mid-month changes the legacy allocation fields but grants no new funds. A reset **replaces** balance with the allocation rather than adding it: it can add or remove funds. All reset deltas, including repeated manual resets, are summed.
+For example, $150 opening funds plus a $100 top-up gives a $250 budget. Spending $163.22 leaves $86.78 and uses **65.288%**, regardless of the current recurring allocation setting. Editing that setting mid-month changes the legacy allocation fields but grants no new funds. A reset **replaces** balance with the allocation rather than adding it: it can add or remove funds. A rollover adds the allocation, trimmed by any rollover cap. Both are `monthly_reset` ledger events, and all their deltas, including repeated manual resets, are summed.
 
 The top-level `observed_at` is the database `statement_timestamp()` labeling the single MVCC snapshot used to read both account and ledger. It is not a historical replay cutoff or a promise that later calls reproduce that state. A visible committed event timestamp later than this observation makes the budget unavailable; such events are not silently omitted.
 
@@ -145,13 +153,13 @@ Both usage endpoints require `credits.read` and return `Cache-Control: no-store`
 
 ## Request admission and settlement
 
-- A user needs a positive balance when inference begins.
+- A user needs a positive balance when inference begins, and, with a [monthly spend limit](#monthly-spend-limit), to have been charged less than the limit in the current UTC month.
 - Actual provider usage is priced after the response.
 - The ledger records input, output, cache-read, cache-write, total cost, source, model, and request ID.
-- A response can cost more than the balance that was available when it began. Settlement records a partial charge rather than making the ledger negative.
+- A response can cost more than the balance that was available when it began. Settlement records a partial charge rather than making the ledger negative. Likewise, it never charges more than a monthly spend limit has left: the rest is a partial charge too.
 - A zero-priced model produces no debit.
 
-An exhausted balance causes subsequent inference calls to return HTTP `402` with code `insufficient_credits`.
+An exhausted balance causes subsequent inference calls to return HTTP `402` with code `insufficient_credits`. A reached monthly spend limit returns HTTP `402` with code `monthly_spend_limit_reached` until the next UTC month, whatever the balance; its message names the date the limit resets.
 
 ## Exactly-once request IDs
 
@@ -171,10 +179,27 @@ Request IDs may contain letters, numbers, `.`, `_`, `:`, and `-`, up to 128 char
   A repeated request ID protects credit settlement; it does not turn inference into a response cache. Avoid concurrently sending different logical requests with the same ID.
 </Warning>
 
-## Monthly allocations
+## Monthly credits
 
-Administrators can set `defaultMonthlyCredits` per user or apply the value to the union of selected groups. On the first day of each UTC month, the built-in scheduler resets users with a nonzero allocation to that amount. An administrator can also trigger a reset manually.
+Each account has a monthly allocation (`defaultMonthlyCredits`, the **monthly quota** in the admin screens) and a **monthly credit mode** that says what happens to unspent credits. On the first day of each UTC month, the built-in scheduler applies every nonzero allocation by its account's mode:
 
-Users can review balance history, consumption, model mix, token details, throughput, and ledger events in **Profile, API & usage**.
+| Mode | The monthly run | Unspent credits |
+| --- | --- | --- |
+| `reset` (default) | Replaces the balance with the allocation | Expire |
+| `rollover` | Adds the allocation to the balance, trimmed so the balance does not pass the rollover cap | Carry over |
+
+A **rollover cap** is the most a rollover account can bank. An allocation that would take the balance past the cap is trimmed: with a $100 allocation, a $600 cap and $550 banked, the run adds $50. At or above the cap it adds nothing, and it never takes away credits above the cap that an administrator top-up gave the account. Without a cap, rollover accounts bank without limit. The cap means nothing in reset mode.
+
+Each run is a `monthly_reset` ledger event with a description of what it did, for example `Monthly rollover of 100.00, trimmed to 50.00 by the 600.00 rollover cap`; a run that adds nothing records a zero event. A rollover account receives one month's allocation once per UTC month: when an administrator applies monthly credits by hand (**Admin → Users → Apply monthly credits**, `aigctl credits monthly-reset`, or `POST /management/v1/users/monthly-reset`), reset accounts are reset again, as before, but rollover accounts that already received this month's allocation are skipped. A rollover account that has not, for example one created or switched to rollover after the scheduled run, receives it. The run reports `usersReset`, `usersRolledOver` and `usersSkipped`.
+
+### Monthly spend limit
+
+A **maximum monthly spend** caps the metered usage an account can be charged in a UTC calendar month, whatever its balance, in either mode. It counts the same spend as `credits.used` in `/v1/usage`; top-ups, removals and monthly runs are not spend. Once the month's charges reach the limit, inference returns `402 monthly_spend_limit_reached` until the next month, and the request that reaches it is charged only up to the limit.
+
+Together, these let an account accrue credits without spending them all at once. With a $100 monthly allocation, rollover, a $600 rollover cap and a $300 maximum monthly spend, an account can bank up to six months of credits but spend at most three months' worth in one month.
+
+Set them per user in **Admin → Users** (the **Credit control** column) or when creating a user, for the members of groups in **Admin → Groups → Set credit control**, with `aigctl users update` and `aigctl groups bulk-update` (`--monthly-credit-mode`, `--rollover-cap`, `--monthly-spend-limit`), or with the management API's `monthlyCreditMode`, `rolloverCap` and `monthlySpendLimit` fields (`null` clears a cap or limit). Accounts that existed before these settings keep the monthly reset, with no cap and no limit.
+
+Users can review balance history, consumption, model mix, token details, throughput, and ledger events in **Profile, API & usage**, which also explains their monthly credits and shows what a monthly spend limit leaves them this month.
 
 In **Admin → Ledger**, consumption and request totals (including the user and model breakdowns) count only inference events. Administrator balance changes and monthly resets remain in the credit ledger and affect balances, but are not consumption or inference requests. The ledger’s **Deducted** column includes all balance reductions, including adjustments.
