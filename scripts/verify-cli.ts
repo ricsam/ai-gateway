@@ -93,7 +93,7 @@ try {
   await ok(["users", "create", "--username", "testxuser2", "--email", "t2@example.test", "--name", "Builder Two", "--generate-password"]);
   assert.deepEqual((await json(["users", "list", "--search", "test_"])).map((user: { username: string }) => user.username), ["test_user1"], "LIKE wildcards in a search are literal");
   assert.deepEqual((await json(["users", "list", "--search", "builder"])).map((user: { username: string }) => user.username), ["bob", "testxuser2"], "search covers display names");
-  assert.match((await ok(["users", "list"])).out, /^bob\s+Bob Builder\s+bob@example\.test\s+user\s+yes\s+\$12\.50\s+\$50\.00\s+engineering$/m);
+  assert.match((await ok(["users", "list"])).out, /^bob\s+Bob Builder\s+bob@example\.test\s+user\s+yes\s+\$12\.50\s+\$50\.00\s+reset\s+engineering$/m);
   await ok(["users", "update", "bob", "--balance", "20", "--role", "admin", "--must-change-password", "false"]);
   assert.deepEqual(await json(["users", "get", "bob"]).then((user) => [user.role, user.creditBalance, user.mustChangePassword]), ["admin", 20, false]);
   await ok(["users", "update", "bob", "--role", "user"]);
@@ -141,6 +141,19 @@ try {
   // Credits and reporting.
   assert.equal((await json(["credits", "monthly-reset", "--yes"])).usersReset, 2);
   assert.equal((await json(["users", "get", "bob"])).creditBalance, 75);
+  // Rollover: monthly credits carry over up to the rollover cap, once per UTC month.
+  await ok(["users", "update", "bob", "--monthly-credit-mode", "rollover", "--rollover-cap", "100", "--monthly-spend-limit", "40"]);
+  const rollover = await json(["users", "get", "bob"]);
+  assert.deepEqual([rollover.monthlyCreditMode, rollover.rolloverCap, rollover.monthlySpendLimit, rollover.monthlySpendRemaining], ["rollover", 100, 40, 40]);
+  assert.ok((await ok(["users", "get", "bob"])).out.includes("$40.00 ($40.00 left this month)"));
+  assert.deepEqual(await json(["credits", "monthly-reset", "--yes"]), { usersReset: 1, usersRolledOver: 0, usersSkipped: 1 }, "bob already received this month's credits");
+  assert.equal((await json(["users", "get", "bob"])).creditBalance, 75);
+  await ok(["users", "update", "test_user1", "--monthly-credits", "30", "--monthly-credit-mode", "rollover", "--rollover-cap", "40", "--balance", "25"]);
+  assert.match((await ok(["credits", "monthly-reset", "--yes"])).out, /added this month's credits to 1 user in rollover mode; skipped 1 user/);
+  assert.equal((await json(["users", "get", "test_user1"])).creditBalance, 40, "25 + 30 trimmed to the 40 cap");
+  await fails(["users", "update", "test_user1", "--monthly-credit-mode", "bank"], 2, "--monthly-credit-mode must be one of reset, rollover");
+  assert.equal((await json(["groups", "bulk-update", "engineering", "--monthly-credit-mode", "reset", "--monthly-spend-limit", "none"])).usersUpdated, 2);
+  assert.deepEqual(await json(["users", "get", "bob"]).then((user) => [user.monthlyCreditMode, user.rolloverCap, user.monthlySpendLimit]), ["reset", 100, null]);
   const events = await json(["usage", "events", "--user", "bob"]);
   assert.ok(events.some((event: { type: string }) => event.type === "monthly_reset"));
   assert.equal((await json(["usage", "summary", "--days", "7"])).requests, 0);

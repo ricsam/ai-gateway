@@ -4,6 +4,7 @@ import { aliasContract } from "./alias-contract";
 import { modelCreateSchema, modelUpdateSchema } from "./model-contract";
 const catalogErrors = { [Status.BadRequest]: z.object({ error: z.string() }), [Status.NotFound]: z.object({ error: z.string() }), [Status.Conflict]: z.object({ error: z.string() }) };
 import { EFFORT_LEVELS, REASONING_EFFORT_VALUES, REASONING_MODES } from "./reasoning";
+import { MONTHLY_CREDIT_MODES } from "./credit-control";
 
 const reasoningModeSchema = z.enum(REASONING_MODES);
 const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
@@ -93,6 +94,8 @@ export const contract = defineContract({
     responses: { [Status.OK]: z.object({
       id: z.string(), name: z.string(), email: z.string(), creditBalance: z.number(),
       defaultMonthlyCredits: z.number(), role: z.enum(["user", "admin"]),
+      monthlyCreditMode: z.enum(MONTHLY_CREDIT_MODES), rolloverCap: z.number().nullable(),
+      monthlySpendLimit: z.number().nullable(), monthlySpendRemaining: z.number().nullable(),
     }) },
     errorResponses: { [Status.Unauthorized]: z.object({ error: z.string() }) },
   },
@@ -272,7 +275,7 @@ export const contract = defineContract({
   },
   adminRunMonthlyReset: {
     type: "standard", method: "POST", path: "/admin/monthly-reset",
-    responses: { [Status.OK]: z.object({ usersReset: z.number() }) },
+    responses: { [Status.OK]: z.object({ usersReset: z.number(), usersRolledOver: z.number(), usersSkipped: z.number() }) },
     errorResponses: { [Status.BadRequest]: z.object({ error: z.string() }) },
   },
   adminListGroups: {

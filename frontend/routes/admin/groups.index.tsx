@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { managementFetch, managementListAll } from "../../management-api";
+import { CreditControlDialog } from "../../ui/credit-control";
+import { DEFAULT_CREDIT_CONTROL_DRAFT, type CreditControl } from "../../lib/credit-control";
 
 type Group = {
   id: string;
@@ -24,7 +26,7 @@ type Group = {
 
 type Notice = { kind: "success" | "error"; text: string };
 
-type BulkUpdates = {
+type BulkUpdates = Partial<CreditControl> & {
   enabled?: boolean;
   defaultMonthlyCredits?: number;
 };
@@ -65,6 +67,7 @@ function Groups() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [quota, setQuota] = useState("");
+  const [creditControlOpen, setCreditControlOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -132,6 +135,7 @@ function Groups() {
       setNotice({ kind: "success", text: `Updated ${result.data.usersUpdated} distinct user${result.data.usersUpdated === 1 ? "" : "s"}` });
       setSelected(new Set());
       setQuota("");
+      setCreditControlOpen(false);
     } catch (reason) {
       setNotice({ kind: "error", text: reason instanceof Error ? reason.message : "Bulk update failed" });
     } finally {
@@ -165,7 +169,7 @@ function Groups() {
       <div>
         <h1 className="text-2xl font-semibold">Groups</h1>
         <p className="text-sm text-muted-foreground">
-          Organize membership and apply quota or access changes to every distinct user in selected groups.
+          Organize membership and apply quota, credit control or access changes to every distinct user in selected groups.
         </p>
       </div>
 
@@ -215,10 +219,21 @@ function Groups() {
                 <Button variant="outline" onClick={applyQuota} disabled={!selected.size || !quota || saving}>Set quota</Button>
               </div>
             </div>
+            <Button variant="outline" onClick={() => setCreditControlOpen(true)} disabled={!selected.size || saving}>Set credit control</Button>
             <Button variant="outline" onClick={() => void applyBulk({ enabled: true })} disabled={!selected.size || saving}>Enable users</Button>
             <Button variant="destructive" onClick={() => void applyBulk({ enabled: false })} disabled={!selected.size || saving}>Disable users</Button>
             {saving && <IconLoader2 className="animate-spin" />}
           </div>
+
+          <CreditControlDialog
+            open={creditControlOpen}
+            title={`Credit control for ${selected.size} group${selected.size === 1 ? "" : "s"}`}
+            description="Sets the monthly credit mode, rollover cap and max monthly spend of every distinct member of the selected groups. Their monthly quotas and balances are kept."
+            initial={DEFAULT_CREDIT_CONTROL_DRAFT}
+            saving={saving}
+            onCancel={() => setCreditControlOpen(false)}
+            onSave={(control) => void applyBulk(control)}
+          />
 
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full min-w-[680px] text-sm">

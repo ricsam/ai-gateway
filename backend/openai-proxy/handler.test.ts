@@ -14,6 +14,7 @@ let remoteImagesEnabled = true;
 let settlementFails = false;
 let charged = 0.01;
 let settlementGate: Promise<void> | undefined;
+let admission: { ok: true } | { ok: false; code: string; message: string } = { ok: true };
 let sent: Array<{ streaming: boolean; input: ConverseCommandInput }> = [];
 let converseOutput: unknown;
 let streamEvents: unknown[] = [];
@@ -43,6 +44,7 @@ mock.module("../proxy-auth", () => {
 });
 mock.module("../credit-service", () => ({
   checkBalance: async () => 100,
+  checkCreditAdmission: async () => admission,
   calculateCostBreakdown: () => ({ total: 0.01, inputCost: 0.001, outputCost: 0.002, cacheReadCost: 0.003, cacheWrite5mCost: 0.0015, cacheWrite1hCost: 0.0025 }),
   deductCredits: async (input: Record<string, unknown>) => {
     settlements.push(input);
@@ -121,6 +123,7 @@ beforeEach(() => {
   settlementFails = false;
   charged = 0.01;
   settlementGate = undefined;
+  admission = { ok: true };
   userId = "user-1234567890";
   rejectRequest = undefined;
   rejectInStream = false;
@@ -139,6 +142,22 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible handler", () => {
+  for (const code of ["insufficient_credits", "monthly_spend_limit_reached"] as const) {
+    test(`refuses with 402 ${code} before calling Bedrock`, async () => {
+      const message = code === "insufficient_credits" ? "Insufficient credit balance" : "Monthly spend limit of $300.00 reached; it resets on 2026-12-01 (UTC)";
+      admission = { ok: false, code, message };
+      const response = await call({ model: "global.anthropic.claude-opus-4-7", messages: [{ role: "user", content: "Hi" }] });
+      expect(response.status).toBe(402);
+      expect((await response.json()).error).toEqual({ message, type: "invalid_request_error", code });
+      const native = await handleBedrockProxy(new Request("https://gateway.test/api/gateway/bedrock/converse", {
+        method: "POST", body: JSON.stringify({ modelId: "global.anthropic.claude-opus-4-7", messages: [{ role: "user", content: [{ text: "Hi" }] }] }),
+      }), "converse");
+      expect(native.status).toBe(402);
+      expect(await native.json()).toEqual({ error: { message, code } });
+      expect(sent).toHaveLength(0);
+      expect(settlements).toHaveLength(0);
+    });
+  }
   test("stream accounting waits for ledger completion and precedes DONE", async () => {
     let release!: () => void;
     settlementGate = new Promise<void>(resolve => { release = resolve; });

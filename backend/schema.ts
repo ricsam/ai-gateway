@@ -31,6 +31,14 @@ export const userTable = pgTable("user", {
   role: text("role").notNull().default("user"),
   creditBalance: numeric("credit_balance", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
   defaultMonthlyCredits: numeric("default_monthly_credits", { precision: 20, scale: 8, mode: "number" }).notNull().default(0),
+  /** How the monthly run applies defaultMonthlyCredits; see shared/credit-control.ts. */
+  monthlyCreditMode: text("monthly_credit_mode").$type<import("../shared/credit-control").MonthlyCreditMode>().notNull().default("reset"),
+  /** Rollover mode: the balance the monthly credits may bring the account up to; null is no cap. */
+  rolloverCap: numeric("rollover_cap", { precision: 20, scale: 8, mode: "number" }),
+  /** The most metered usage the account may be charged in a UTC calendar month; null is no limit. */
+  monthlySpendLimit: numeric("monthly_spend_limit", { precision: 20, scale: 8, mode: "number" }),
+  /** When the monthly run last applied the account's monthly credits; rollover applies them once a month. */
+  monthlyCreditsAppliedAt: timestamp("monthly_credits_applied_at", { withTimezone: true }),
   enabled: boolean("enabled").notNull().default(true),
   mustChangePassword: boolean("must_change_password").notNull().default(false),
 }, (table) => [
@@ -38,6 +46,9 @@ export const userTable = pgTable("user", {
   uniqueIndex("user_email_normalized_unique").on(sql`lower(${table.email})`),
   check("user_role_check", sql`${table.role} in ('user', 'admin')`),
   check("user_credit_balance_check", sql`${table.creditBalance} >= 0`),
+  check("user_monthly_credit_mode_check", sql`${table.monthlyCreditMode} in ('reset', 'rollover')`),
+  check("user_rollover_cap_check", sql`${table.rolloverCap} >= 0`),
+  check("user_monthly_spend_limit_check", sql`${table.monthlySpendLimit} >= 0`),
 ]);
 
 export const sessionTable = pgTable("session", {

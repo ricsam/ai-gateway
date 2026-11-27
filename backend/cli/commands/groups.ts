@@ -8,6 +8,7 @@ import {
   type Group, type GroupDetails, type GroupMember,
 } from "../resources";
 import { parseChoice, report } from "./common";
+import { CREDIT_CONTROL_OPTIONS, creditControlFields, formatOptionalCredits } from "./users";
 
 const MEMBER_ROLES = ["member", "admin", "owner"] as const;
 
@@ -29,6 +30,9 @@ const MEMBER_COLUMNS: Column<GroupMember>[] = [
   { header: "ENABLED", value: (member) => member.enabled },
   { header: "BALANCE", value: (member) => formatCredits(member.creditBalance), align: "right" },
   { header: "MONTHLY", value: (member) => formatCredits(member.defaultMonthlyCredits), align: "right", wide: true },
+  { header: "MODE", value: (member) => member.monthlyCreditMode, wide: true },
+  { header: "ROLLOVER-CAP", value: (member) => formatOptionalCredits(member.rolloverCap), align: "right", wide: true },
+  { header: "SPEND-LIMIT", value: (member) => formatOptionalCredits(member.monthlySpendLimit), align: "right", wide: true },
   { header: "JOINED", value: (member) => formatTime(member.joinedAt), wide: true },
 ];
 
@@ -170,15 +174,23 @@ const bulkUpdate: Command = {
   options: {
     enable: { type: "boolean", description: "Enable the accounts" },
     disable: { type: "boolean", description: "Disable the accounts (signs the users out)" },
-    "monthly-credits": { type: "string", value: "<credits>", description: "Balance the monthly reset restores (0: no reset)" },
+    "monthly-credits": { type: "string", value: "<credits>", description: "Credits the monthly run gives each user (0: none)" },
+    ...CREDIT_CONTROL_OPTIONS,
     ...YES_OPTION,
   },
-  examples: ["aigctl groups bulk-update contractors --disable", "aigctl groups bulk-update engineering research --monthly-credits 100"],
+  examples: [
+    "aigctl groups bulk-update contractors --disable",
+    "aigctl groups bulk-update engineering research --monthly-credits 100",
+    "aigctl groups bulk-update engineering --monthly-credit-mode rollover --rollover-cap 600 --monthly-spend-limit 300",
+  ],
   async run(context) {
     if (context.options.enable === true && context.options.disable === true) throw new UsageError("Choose either --enable or --disable", context.commandName);
     const enabled = context.options.enable === true ? true : context.options.disable === true ? false : undefined;
     const defaultMonthlyCredits = optionalAmount("monthly-credits", context.options["monthly-credits"]);
-    if (enabled === undefined && defaultMonthlyCredits === undefined) throw new UsageError("Nothing to change: pass --enable, --disable or --monthly-credits", context.commandName);
+    const creditControl = creditControlFields(context);
+    if (enabled === undefined && defaultMonthlyCredits === undefined && !Object.keys(creditControl).length) {
+      throw new UsageError("Nothing to change: pass --enable, --disable, --monthly-credits, --monthly-credit-mode, --rollover-cap or --monthly-spend-limit", context.commandName);
+    }
     const client = await context.client();
     const groups = await resolveGroups(client, context.args);
     if (enabled === false) {
@@ -189,13 +201,17 @@ const bulkUpdate: Command = {
       await confirm(context, `Disable ${who} of ${groups.map((group) => group.name).join(", ")}`, "Disabled users are signed out and their inference keys are refused.");
     }
     const { data } = await call<{ data: { usersUpdated: number } }>(client, "POST", "/groups/bulk-user-update", {
-      json: { groupIds: groups.map((group) => group.id), enabled, defaultMonthlyCredits },
+      json: { groupIds: groups.map((group) => group.id), enabled, defaultMonthlyCredits, ...creditControl },
     });
     const changes = [
       enabled === undefined ? "" : enabled ? "enabled" : "disabled",
       defaultMonthlyCredits === undefined ? "" : `set monthly credits to ${formatCredits(defaultMonthlyCredits)}`,
-    ].filter(Boolean).join(" and ");
-    report(context, `Updated ${data.usersUpdated} user${data.usersUpdated === 1 ? "" : "s"} in ${groups.map((group) => group.name).join(", ")}: ${changes}.`, data);
+      creditControl.monthlyCreditMode === undefined ? "" : `set the monthly credit mode to ${creditControl.monthlyCreditMode}`,
+      creditControl.rolloverCap === undefined ? "" : `set the rollover cap to ${formatOptionalCredits(creditControl.rolloverCap)}`,
+      creditControl.monthlySpendLimit === undefined ? "" : `set the monthly spend limit to ${formatOptionalCredits(creditControl.monthlySpendLimit)}`,
+    ].filter(Boolean);
+    const described = changes.length > 1 ? `${changes.slice(0, -1).join(", ")} and ${changes.at(-1)}` : changes[0];
+    report(context, `Updated ${data.usersUpdated} user${data.usersUpdated === 1 ? "" : "s"} in ${groups.map((group) => group.name).join(", ")}: ${described}.`, data);
   },
 };
 

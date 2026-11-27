@@ -11,8 +11,7 @@ import { resolveModel } from "./model-catalog";
 import { applyAliasConverse, applyAliasInvoke } from "./alias-reasoning";
 import { ReasoningConfigError } from "./openai-proxy/transform/reasoning";
 import { getBedrockClient, ProviderNotConfiguredError } from "./bedrock";
-import { calculateCostBreakdown, checkBalance, deductCredits, type CostBreakdown } from "./credit-service";
-import { hasAvailableCredits } from "./credit-settlement";
+import { calculateCostBreakdown, checkCreditAdmission, deductCredits, type CostBreakdown } from "./credit-service";
 import { authenticateApiKeyPrincipal, requireProxyScope, type ProxyPrincipal } from "./proxy-auth";
 import { addConverseCachePoints } from "./openai-proxy/transform/cache-converse";
 import { addInvokeCacheControl, type AnthropicInvokeBody } from "./openai-proxy/transform/cache-invoke";
@@ -132,7 +131,8 @@ export async function handleBedrockProxy(request: Request, endpoint: BedrockProx
   const resolved = await resolveModel(body.modelId);
   const model = resolved?.upstream;
   if (!model) return failure(`Model "${body.modelId}" is not available for API access`, 400, "model_not_available");
-  if (!hasAvailableCredits(await checkBalance(auth.principal.userId))) return failure("Insufficient credit balance", 402, "insufficient_credits");
+  const admission = await checkCreditAdmission(auth.principal.userId);
+  if (!admission.ok) return failure(admission.message, 402, admission.code);
 
   const modelInfo: ModelInfo = {
     modelId: model.modelId,

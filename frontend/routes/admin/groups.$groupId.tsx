@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { managementFetch, managementListAll } from "../../management-api";
+import { CreditControlSummary } from "../../ui/credit-control";
 
 type Member = {
   userId: string;
@@ -27,6 +28,9 @@ type Member = {
   enabled: boolean;
   creditBalance: number;
   defaultMonthlyCredits: number;
+  monthlyCreditMode: "reset" | "rollover";
+  rolloverCap: number | null;
+  monthlySpendLimit: number | null;
   joinedAt: string;
 };
 type Group = { id: string; name: string; description: string | null; members: Member[] };
@@ -139,7 +143,7 @@ function GroupPage() {
       <p className="text-sm text-muted-foreground">Account enablement controls login and API access; API requests still require a valid key with the required scopes.</p>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[940px] text-sm">
-          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th className="p-3 text-left">Membership</th><th>Balance</th><th>Monthly</th><th>Account enabled</th><th /></tr></thead>
+          <thead className="bg-muted/50"><tr><th className="p-3 text-left">User</th><th className="p-3 text-left">Membership</th><th>Balance</th><th>Monthly</th><th>Credit control</th><th>Account enabled</th><th /></tr></thead>
           <tbody>
             {group.members.map((member) => (
               <tr key={member.userId} className="border-t">
@@ -149,13 +153,14 @@ function GroupPage() {
                 }, "Membership role saved")}><SelectTrigger className="w-32"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="owner">Owner</SelectItem><SelectItem value="admin">Admin</SelectItem><SelectItem value="member">Member</SelectItem></SelectContent></Select>{member.source !== "manual" && <Badge variant="outline">{member.source}</Badge>}</div></td>
                 <td className="text-center font-mono">${member.creditBalance.toFixed(2)}</td>
                 <td className="text-center font-mono">${member.defaultMonthlyCredits.toFixed(2)}</td>
+                <td className="p-3"><CreditControlSummary control={member} /></td>
                 <td className="text-center"><Switch checked={member.enabled} onCheckedChange={(enabled) => void run(async () => { await managementFetch(`/users/${member.userId}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }, "User access saved")} /></td>
                 <td className="p-2"><Button variant="ghost" size="icon" disabled={member.source !== "manual"} title={member.source === "manual" ? "Remove member" : "Externally synchronized memberships cannot be removed here"} onClick={() => void run(async () => {
                   await managementFetch(`/groups/${groupId}/members/${member.userId}`, { method: "DELETE" });
                 }, "Member removed")}><IconTrash /></Button></td>
               </tr>
             ))}
-            {!group.members.length && <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No members</td></tr>}
+            {!group.members.length && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No members</td></tr>}
           </tbody>
         </table>
       </div>

@@ -57,6 +57,13 @@
       "when": 1794598383706,
       "tag": "0007_reasoning_replay",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795767287558,
+      "tag": "0008_credit_rollover",
+      "breakpoints": true
     }
   ]
 }

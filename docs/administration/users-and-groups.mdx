@@ -1,13 +1,13 @@
 ---
 title: "Users, groups, and quotas"
-description: "Manage local accounts, membership, API access, credits, and monthly allocations."
+description: "Manage local accounts, membership, API access, credits, monthly allocations, rollover, and spend limits."
 ---
 
 Users own sessions, inference keys, credit balances, monthly allocations, and usage history. Groups organize membership, bulk operations, and reporting; credits remain user-owned.
 
 ## Local users
 
-Administrators can create users with a username, email, role, initial password, starting balance, monthly allocation, and group membership. New users can be required to change their password on first login.
+Administrators can create users with a username, email, role, initial password, starting balance, monthly allocation, credit control, and group membership. New users can be required to change their password on first login.
 
 Account controls have distinct effects:
 
@@ -16,7 +16,12 @@ Account controls have distinct effects:
 | Account enabled | Allows login and API access with valid, appropriately scoped `aig_` keys |
 | Role | Grants user or administrator dashboard permissions |
 | Credit balance | Amount currently available for inference |
-| Monthly credits | Balance assigned on the first day of each UTC month |
+| Monthly credits | The allocation the monthly run applies on the first day of each UTC month |
+| Monthly credit mode | **Reset** (default): the monthly run sets the balance to the allocation, so unspent credits expire. **Rollover**: it adds the allocation to the balance, so unspent credits carry over |
+| Rollover cap | Rollover only: the most the balance can bank; allocation that would pass it is trimmed, and skipped at or above it |
+| Max monthly spend | The most an account can be charged in a UTC month, whatever its balance; inference then returns `402 monthly_spend_limit_reached` until the next month |
+
+In **Admin → Users**, the **Credit control** column shows each account's mode, rollover cap and monthly spend limit with what it leaves this month; its button edits them and previews what the next monthly run would do with the current balance. See [Monthly credits](/docs/credits#monthly-credits) for how the run and the limit work.
 
 Account enablement is the single control for login and API access. API requests still require a valid key with the required scopes, and inference requires sufficient credits. Disabling an account invalidates sessions and blocks all of its inference keys. The control plane prevents deleting, disabling, or demoting the final enabled administrator.
 
@@ -33,6 +38,7 @@ OIDC authentication does not import identity-provider groups or create group mem
 Select one or more groups and apply a change to the union of their members:
 
 - Set a monthly allocation.
+- Set credit control: the monthly credit mode, rollover cap and max monthly spend, together.
 - Enable or disable accounts, controlling login and API access together.
 
 A user in multiple selected groups is updated once.
@@ -41,6 +47,6 @@ A user in multiple selected groups is updated once.
 
 Current group analytics use current membership. A user in multiple groups contributes to each applicable group summary. Moving a user changes how historical usage appears in group-level views, while the underlying user-owned ledger remains unchanged.
 
-## Monthly reset
+## Monthly credit run
 
-The scheduler checks every minute and runs once on the first day of each UTC month. A PostgreSQL advisory lock and audit event make the reset safe when more than one application replica is running. Users with a monthly allocation of zero are skipped.
+The scheduler checks every minute and runs once on the first day of each UTC month. A PostgreSQL advisory lock and audit event make the run safe when more than one application replica is running. Users with a monthly allocation of zero are skipped. Reset accounts are reset to their allocation; rollover accounts get it added, up to their rollover cap. An administrator can also apply monthly credits by hand with **Apply monthly credits**: reset accounts are reset again, and rollover accounts that already received this month's allocation are skipped, so a rollover account never receives a month's credits twice.
