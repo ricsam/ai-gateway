@@ -30,6 +30,8 @@ Core resources include users and passwords, groups/memberships and bulk user con
 
 The analytics dashboards and `GET /management/v1/analytics/throughput` report the values a Bedrock quota increase request asks for: steady-state and peak tokens and requests per minute, and average input and output tokens per request, overall and per upstream model. Tokens follow Bedrock's quota accounting (input, cache writes and output; no cache reads or output burndown). See [Throughput and Bedrock quotas](docs/administration/models-and-aws.mdx#throughput-and-bedrock-quotas).
 
+Analytics cover a rolling window (`timeRange`) or a custom one (`start` to `end`), for all users or for selected users and groups together (repeatable `userId` and `groupId`). The dashboards offer the same as **Custom range** and, on **Admin → Analytics**, the **People** filter. See [Custom windows](docs/administration/management-api.mdx#custom-windows) and [Analytics for users and groups](docs/administration/management-api.mdx#analytics-for-users-and-groups).
+
 ## Management CLI
 
 The container image includes `aigctl`, a command-line client for every management API operation. Inside the gateway container it works on the gateway's database directly, so cluster operators manage the gateway with `kubectl exec` and no management key; changes are audited as `cli aigctl@<pod>`:

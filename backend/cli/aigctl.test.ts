@@ -7,7 +7,7 @@ import { formatValue, printJson, renderDetails, renderTable, terminalSafe } from
 import { program } from "./program";
 import { findKey, keyStatus, type Alias, type App, type Model, type User } from "./resources";
 
-interface RecordedRequest { method: string; path: string; query: Record<string, string>; json: unknown; contentType: string | null; bytes?: Uint8Array }
+interface RecordedRequest { method: string; path: string; query: Record<string, string>; search: URLSearchParams; json: unknown; contentType: string | null; bytes?: Uint8Array }
 type Handler = (request: RecordedRequest) => { status?: number; body?: unknown } | undefined;
 
 /** A management API double: routes are "METHOD /path" (without the query string). */
@@ -22,7 +22,7 @@ class FakeClient implements ManagementClient {
     const url = new URL(request.url);
     const contentType = request.headers.get("content-type");
     const recorded: RecordedRequest = {
-      method, path: url.pathname.replace(/^\/management\/v1/, ""), query: Object.fromEntries(url.searchParams),
+      method, path: url.pathname.replace(/^\/management\/v1/, ""), query: Object.fromEntries(url.searchParams), search: url.searchParams,
       json: options?.json ?? (options?.bytes && contentType === "application/json" ? JSON.parse(new TextDecoder().decode(options.bytes)) : undefined),
       contentType, bytes: options?.bytes,
     };
@@ -583,6 +583,60 @@ describe("model catalog commands", () => {
     const result = await run(["aws", "test"], noRead);
     expect(result.code).toBe(2);
     expect(result.err).toContain("finding a configured model needs a key with models.read");
+  });
+});
+
+describe("analytics commands", () => {
+  const throughput = { start: "2026-10-01T00:00:00.000Z", end: "2026-11-01T00:00:00.000Z", summary: { requests: 3, tokens: 30, activeHours: 2.5, steadyStateTpm: 0.2, steadyStateRpm: 0.02, peakTpm: 20, peakTpmAt: null, peakRpm: 2, peakRpmAt: null, avgInputTokensPerRequest: 8, avgOutputTokensPerRequest: 2, avgCacheReadTokensPerRequest: 0 }, models: [] };
+  const routes = (): Record<string, Handler> => ({
+    ...userRoutes(),
+    ...userRoutes(user({ id: "u-alice", username: "alice", email: "alice@example.com" })),
+    "GET /users": (request) => page([user(), user({ id: "u-alice", username: "alice", email: "alice@example.com" })].filter((candidate) => candidate.username === request.query.search)),
+    "GET /groups": () => page([{ id: "g-eng", name: "engineering" }, { id: "g-ops", name: "Sales, EMEA" }]),
+    "GET /analytics/throughput": () => ({ body: { data: throughput } }),
+    "GET /analytics/users": () => ({ body: { data: { users: [] } } }),
+    "GET /analytics/groups": () => ({ body: { data: { groups: [] } } }),
+  });
+
+  test("select several users and groups, and keep names with commas whole", async () => {
+    const client = new FakeClient(routes());
+    const result = await run(["analytics", "throughput", "--user", "bob", "--user", "alice", "--user", "bob", "--group", "engineering", "--group", "Sales, EMEA"], client);
+    expect(result.code).toBe(0);
+    const request = client.requests.at(-1)!;
+    expect(request.path).toBe("/analytics/throughput");
+    expect(request.search.getAll("userId")).toEqual(["u-bob", "u-alice"]);
+    expect(request.search.getAll("groupId")).toEqual(["g-eng", "g-ops"]);
+    expect(request.search.get("timeRange")).toBe("month");
+    expect(result.out).toStartWith("Last 30 days (2026-10-01T00:00:00Z to 2026-11-01T00:00:00Z), users bob, alice and groups engineering, Sales, EMEA (current members)\n");
+    expect(result.out).toContain("2.50");
+  });
+
+  test("send a custom window from --from and --to, or until now", async () => {
+    const client = new FakeClient(routes());
+    const custom = await run(["analytics", "users", "--from", "2026-10-01", "--to", "2026-10-15T12:00:00+02:00"], client);
+    expect(custom.code).toBe(0);
+    expect(Object.fromEntries(client.requests.at(-1)!.search)).toEqual({ start: "2026-10-01T00:00:00.000Z", end: "2026-10-15T10:00:00.000Z" });
+    expect(custom.err).toBe("No usage from 2026-10-01T00:00:00Z to 2026-10-15T10:00:00Z.\n");
+    const open = await run(["analytics", "groups", "--from", "2026-10-01T00:00:00Z", "--user", "bob"], client);
+    expect(open.code).toBe(0);
+    const query = client.requests.at(-1)!.search;
+    expect(query.get("start")).toBe("2026-10-01T00:00:00.000Z");
+    expect(Date.now() - Date.parse(query.get("end")!)).toBeLessThan(60_000);
+    expect(query.getAll("userId")).toEqual(["u-bob"]);
+    expect(query.has("timeRange")).toBe(false);
+  });
+
+  test.each([
+    [["--range", "week", "--from", "2026-10-01"], "Choose either --range or --from and --to"],
+    [["--to", "2026-10-01"], "--to needs --from"],
+    [["--from", "2026-10-01T09:30"], "--from must be an ISO 8601 date"],
+    [["--from", "2026-10-02", "--to", "2026-10-01"], "start must be before end"],
+  ])("refuses %j before sending anything", async (options, message) => {
+    const client = new FakeClient(routes());
+    const result = await run(["analytics", "throughput", ...options], client);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain(message);
+    expect(client.requests.filter((request) => request.path.startsWith("/analytics"))).toHaveLength(0);
   });
 });
 

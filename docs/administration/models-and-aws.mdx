@@ -109,14 +109,14 @@ A model's region override wins over the default region. The runtime caches Bedro
 
 Amazon Bedrock limits the tokens and requests per minute of each model in each Region. A quota increase request asks for steady-state and peak tokens per minute (TPM) and requests per minute (RPM), and for the average input and output tokens per request. The **Throughput** card shows these values for the gateway's metered requests:
 
-- **Admin → Analytics** for all users, and the user and group pages for one user or the current members of a group.
+- **Admin → Analytics** for all users or the users and groups selected in its **People** filter, and the user and group pages for one user or the current members of a group.
 - **Profile, API & usage** for the signed-in user's own requests.
 
-The card summarizes all models together and lists each upstream model separately. Quotas apply per model, so use the model's row in a request. Requests to aliases and app tiers count toward their upstream model. The selected **Range** sets the window; the **Interval** control doesn't change these values.
+The card summarizes all models together and lists each upstream model separately. Quotas apply per model, so use the model's row in a request. Requests to aliases and app tiers count toward their upstream model. The selected **Range**, a rolling window or a custom range, sets the window; the **Interval** control doesn't change these values.
 
 | Value | Definition |
 | --- | --- |
-| Steady state TPM / RPM | Tokens or requests divided by the minutes of the window's active hours. The window is split into one-hour periods counted from its start, and a period is active if it had at least one request. Idle nights and weekends don't lower the value, and **Last 60 minutes** is a single period. |
+| Steady state TPM / RPM | Tokens or requests divided by the minutes of the window's active hours. The window is split into one-hour periods counted from its start, and a period is active if it had at least one request. Idle nights and weekends don't lower the value, and **Last 60 minutes** is a single period. A custom range that doesn't span whole hours ends with a shorter period, which counts only its minutes, so `activeHours` can have a fraction. |
 | Peak TPM / RPM | Tokens or requests in the busiest calendar minute, with the time it started. For all models together, it's the busiest minute of their combined traffic. |
 | Avg input tokens / request | Uncached input plus cache-write tokens, divided by requests. The card also shows the cache-read tokens per request, which aren't included. |
 | Avg output tokens / request | Output tokens, including reasoning tokens, divided by requests. |
@@ -129,7 +129,7 @@ When you size a request, keep in mind that:
 - Throttled requests aren't recorded, so traffic that already reaches a quota shows that quota as its peak. Ask for headroom above the observed peak.
 - Usage is recorded per upstream model ID, not per Region. A model with a region override uses that Region's quotas.
 
-Automation can read the same values from the management API with the `usage.read` scope. Add `userId` or `groupId` to limit the scope:
+Automation can read the same values from the management API with the `usage.read` scope. Add `userId` and `groupId`, each repeatable, to limit the scope, and `start` and `end` instead of `timeRange` for a custom window (see [Custom windows](/docs/administration/management-api#custom-windows)):
 
 ```bash
 curl "https://gateway.example.com/management/v1/analytics/throughput?timeRange=month" \

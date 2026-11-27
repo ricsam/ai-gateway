@@ -141,8 +141,11 @@ aigctl usage summary --days 7 --group engineering
 aigctl usage events --user alice
 aigctl analytics throughput --range week
 aigctl analytics users --range month
+aigctl analytics models --from 2026-10-01 --to 2026-11-01 --group engineering --group support
 ```
 </CodeGroup>
+
+The `analytics` commands take a rolling `--range`, or a custom window from `--from` to `--to` (excluded; default now): a date, read as 00:00 UTC, or a date and time with `Z` or a UTC offset. `--user` and `--group` can be repeated; together they cover the selected users and the current members of the selected groups, each user once.
 
 `aigctl <command> --help` lists a command's subcommands and options. To recover an administrator who is locked out:
 

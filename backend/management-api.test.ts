@@ -87,3 +87,42 @@ describe("model catalog endpoints", () => {
     expect(Object.keys(document.paths["/model-apps/{id}"])).toEqual(["get", "patch", "delete"]);
   });
 });
+
+describe("analytics endpoints", () => {
+  const get = async (path: string) => {
+    const response = await handleManagementApi(request("GET", path), { principal: operator(["usage.read"]) });
+    return { status: response.status, error: (await response.json()).error };
+  };
+
+  test.each([
+    ["/analytics/consumed?timeRange=decade", 'Invalid time range "decade"'],
+    ["/analytics/consumed?timeRange=constructor", 'Invalid time range "constructor"'],
+    ["/analytics/consumed?timeRange=custom", "A custom time range requires both start and end"],
+    ["/analytics/consumed?start=2026-10-01", "A custom time range requires both start and end"],
+    ["/analytics/consumed?timeRange=week&start=2026-10-01&end=2026-10-08", "Use either timeRange or start and end, not both"],
+    ["/analytics/consumed?start=2026-10-08&end=2026-10-01", "start must be before end"],
+    ["/analytics/consumed?start=2026-10-01T09:30&end=2026-10-08", "start must be an ISO 8601 date"],
+    ["/analytics/consumed?start=2016-01-01&end=2026-10-08", "A custom time range can span at most 10 years"],
+    ["/analytics/consumed?start=2026-10-01&end=2026-10-04&bucketSize=5m", 'Invalid bucket size "5m" for this custom time range. Allowed: 30m, 1h, 1d'],
+    ["/analytics/throughput?start=2026-10-01T00:00:00Z&end=2026-10-01T00:00:30Z", "A custom time range must span at least 1 minute"],
+    [`/analytics/users?timeRange=day${Array.from({ length: 101 }, (_, index) => `&userId=u${index}`).join("")}`, "Select at most 100 users and groups together"],
+  ])("refuses %s before touching the database", async (path, message) => {
+    const { status, error } = await get(path);
+    expect(status).toBe(400);
+    expect(error.code).toBe("validation_error");
+    expect(error.message).toStartWith(message);
+  });
+
+  test("documents custom windows and selections of several users and groups", async () => {
+    const document = await (await handleManagementApi(request("GET", "/openapi.json"))).json();
+    const names = (path: string) => document.paths[path].get.parameters.map((parameter: { $ref?: string; name?: string }) => parameter.$ref?.split("/").at(-1) ?? parameter.name);
+    for (const path of ["/analytics/burndown", "/analytics/consumed", "/analytics/by-model", "/analytics/model-summary", "/analytics/tokens"])
+      expect(names(path)).toEqual(expect.arrayContaining(["TimeRange", "Start", "End", "BucketSize", "UserId", "GroupId"]));
+    for (const path of ["/analytics/throughput", "/analytics/users", "/analytics/groups"])
+      expect(names(path)).toEqual(["TimeRange", "Start", "End", "UserId", "GroupId"]);
+    const { UserId, GroupId, TimeRange } = document.components.parameters;
+    for (const parameter of [UserId, GroupId]) expect(parameter).toMatchObject({ style: "form", explode: true, schema: { type: "array", items: { type: "string" } } });
+    expect(TimeRange.schema.enum).toContain("custom");
+    expect(document.components.schemas.ThroughputStats.properties.activeHours.type).toBe("number");
+  });
+});

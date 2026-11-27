@@ -15,10 +15,11 @@ import {
 import { applySecretWrite, maskAccessKey, secretStatus, type SecretWrite } from "./settings-crypto";
 import resetCredits from "./jobs/reset-credits";
 import {
-  getBalanceBurndown, getCreditsConsumed, getGroupSummary, getGroupUserBurndowns,
+  analyticsScope, getBalanceBurndown, getCreditsConsumed, getGroupSummary, getGroupUserBurndowns,
   getModelSummary, getTokensConsumed, getUsageByModel, getUserSummary,
-  validateBucketSize, validateTimeRange, type AnalyticsScope,
+  parseAnalyticsWindow, validateBucketSize,
 } from "./analytics-service";
+import { AnalyticsQueryError } from "../shared/analytics-time-ranges";
 import { getThroughput } from "./throughput-service";
 import {
   CatalogError, createAlias, createApp, createModel, deleteCatalogEntry, deleteModel, loadCatalogView, patchAlias, patchApp, updateModel,
@@ -48,14 +49,13 @@ function pagination(url: URL) {
 function containsPattern(value: string): string {
   return `%${value.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
+/** An analytics request's window, interval and people: repeated userId and groupId select their union. */
 function analyticsInput(url: URL) {
-  const timeRange = validateTimeRange(url.searchParams.get("timeRange"));
-  const bucketSize = validateBucketSize(timeRange, url.searchParams.get("bucketSize"));
-  const userId = url.searchParams.get("userId")?.trim();
-  const groupId = url.searchParams.get("groupId")?.trim();
-  if (userId && groupId) throw new Error("Select either userId or groupId, not both");
-  const scope: AnalyticsScope = userId ? { userId } : groupId ? { groupId } : {};
-  return { timeRange, bucketSize, scope, userId, groupId };
+  const query = url.searchParams;
+  const window = parseAnalyticsWindow({ timeRange: query.get("timeRange"), start: query.get("start"), end: query.get("end") });
+  const bucketSize = validateBucketSize(window, query.get("bucketSize"));
+  const scope = analyticsScope(query.getAll("userId"), query.getAll("groupId"));
+  return { window, bucketSize, scope };
 }
 function userDto(user: typeof userTable.$inferSelect, groups: { id: string; name: string; role: string }[] = [], monthlySpendRemaining: number | null = null) {
   return { id: user.id, username: user.username, name: user.name, email: user.email, role: user.role, enabled: user.enabled,
@@ -89,6 +89,11 @@ function jsonBody(schema: z.ZodType) {
   const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
   return { required: true, content: { "application/json": { schema: jsonSchema } } };
 }
+const parameter = (name: string) => ({ $ref: `#/components/parameters/${name}` });
+// A rolling timeRange, or a custom window from start and end.
+const ANALYTICS_WINDOW = [parameter("TimeRange"), parameter("Start"), parameter("End")];
+const BUCKET = parameter("BucketSize");
+const ANALYTICS_SELECTION = [parameter("UserId"), parameter("GroupId")];
 const OPENAPI = {
   openapi: "3.1.0", info: { title: "AI Gateway Management API", version: "1.0.0" },
   servers: [{ url: "/management/v1" }], security: managementSecurity,
@@ -105,7 +110,7 @@ const OPENAPI = {
         properties: {
           requests: { type: "integer", description: "Metered inference requests" },
           tokens: { type: "integer", description: "Input, cache-write and output tokens" },
-          activeHours: { type: "integer", description: "One-hour periods of the window, counted from its start, with at least one request" },
+          activeHours: { type: "number", description: "Hours of the window's one-hour periods, counted from its start, with at least one request. A custom window that does not span whole hours ends with a shorter period, which counts only its length." },
           steadyStateTpm: { type: "number", description: "tokens / (60 × activeHours): average tokens per minute across the hours with traffic" },
           steadyStateRpm: { type: "number", description: "requests / (60 × activeHours): average requests per minute across the hours with traffic" },
           peakTpm: { type: "integer", description: "Tokens in the busiest UTC calendar minute" },
@@ -119,10 +124,12 @@ const OPENAPI = {
       },
     },
     parameters: {
-      TimeRange: { name: "timeRange", in: "query", description: "Rolling window ending now: hour = 60 minutes, day = 24 hours, week = 7 days, month = 30 days, quarter = 90 days, year = 365 days. Days are exactly 24 hours, not calendar periods.", schema: { type: "string", enum: ["hour", "day", "week", "month", "quarter", "year"], default: "month" } },
-      BucketSize: { name: "bucketSize", in: "query", schema: { type: "string", enum: ["15s", "1m", "5m", "30m", "1h", "1d", "1w", "1mo"] } },
-      UserId: { name: "userId", in: "query", schema: { type: "string" }, description: "Optional user scope; mutually exclusive with groupId" },
-      GroupId: { name: "groupId", in: "query", schema: { type: "string" }, description: "Optional current-membership group scope; mutually exclusive with userId" },
+      TimeRange: { name: "timeRange", in: "query", description: "Rolling window ending now: hour = 60 minutes, day = 24 hours, week = 7 days, month = 30 days, quarter = 90 days, year = 365 days. Days are exactly 24 hours, not calendar periods. For a custom window, send start and end instead (or with timeRange=custom).", schema: { type: "string", enum: ["hour", "day", "week", "month", "quarter", "year", "custom"], default: "month" } },
+      Start: { name: "start", in: "query", description: "Start of a custom window, included: an ISO 8601 date (00:00 UTC), such as 2026-10-01, or a date and time with Z or a UTC offset, such as 2026-10-01T09:30:00Z. Requires end; the window spans 1 minute to 10 years.", schema: { type: "string" } },
+      End: { name: "end", in: "query", description: "End of a custom window, excluded, in the same format as start: end=2026-11-01 ends the window at the end of 31 October UTC.", schema: { type: "string" } },
+      BucketSize: { name: "bucketSize", in: "query", description: "Chart interval. Each rolling range allows a fixed set; a custom window allows every interval no longer than the window that gives at most 400 buckets. The default suits the window.", schema: { type: "string", enum: ["15s", "1m", "5m", "30m", "1h", "1d", "1w", "1mo"] } },
+      UserId: { name: "userId", in: "query", style: "form", explode: true, schema: { type: "array", items: { type: "string" } }, description: "Only these users. Repeat to select several; with groupId, analytics cover the selected users and groups together, each user once. At most 100 IDs in all." },
+      GroupId: { name: "groupId", in: "query", style: "form", explode: true, schema: { type: "array", items: { type: "string" } }, description: "Only the current members of these groups. Repeat to select several; combines with userId like it." },
     },
   },
   paths: {
@@ -182,14 +189,14 @@ const OPENAPI = {
     "/audit-events": { get: { summary: "List audit events" } },
     "/usage/summary": { get: { summary: "Summarize usage over a period" } },
     "/usage/events": { get: { summary: "List metered usage ledger events" } },
-    "/analytics/burndown": { get: { summary: "Gap-filled balance burndown", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }, { $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/GroupId" }], responses: { "200": { description: "Balance points and current balance" } } } },
-    "/analytics/consumed": { get: { summary: "Gap-filled credits consumed", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }, { $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/GroupId" }], responses: { "200": { description: "Consumed credit points" } } } },
-    "/analytics/by-model": { get: { summary: "Top-N model time series with Other", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }, { name: "topN", in: "query", schema: { type: "integer", minimum: 1, maximum: 20, default: 5 } }], responses: { "200": { description: "Model time series" } } } },
-    "/analytics/model-summary": { get: { summary: "Model token and credit summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Per-model summary" } } } },
-    "/analytics/tokens": { get: { summary: "Stacked token time series and totals", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Token points and summary" } } } },
+    "/analytics/burndown": { get: { summary: "Gap-filled balance burndown", parameters: [...ANALYTICS_WINDOW, BUCKET, ...ANALYTICS_SELECTION], responses: { "200": { description: "Balance after each bucket (the last one: at the window's end) and the current balance" } } } },
+    "/analytics/consumed": { get: { summary: "Gap-filled credits consumed", parameters: [...ANALYTICS_WINDOW, BUCKET, ...ANALYTICS_SELECTION], responses: { "200": { description: "Consumed credit points" } } } },
+    "/analytics/by-model": { get: { summary: "Top-N model time series with Other", parameters: [...ANALYTICS_WINDOW, BUCKET, ...ANALYTICS_SELECTION, { name: "topN", in: "query", schema: { type: "integer", minimum: 1, maximum: 20, default: 5 } }], responses: { "200": { description: "Model time series" } } } },
+    "/analytics/model-summary": { get: { summary: "Model token and credit summary", parameters: [...ANALYTICS_WINDOW, BUCKET, ...ANALYTICS_SELECTION], responses: { "200": { description: "Per-model summary" } } } },
+    "/analytics/tokens": { get: { summary: "Stacked token time series and totals", parameters: [...ANALYTICS_WINDOW, BUCKET, ...ANALYTICS_SELECTION], responses: { "200": { description: "Token points and summary" } } } },
     "/analytics/throughput": { get: {
       summary: "Steady-state and peak tokens and requests per minute, and average tokens per request, overall and per model",
-      parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/GroupId" }],
+      parameters: [...ANALYTICS_WINDOW, ...ANALYTICS_SELECTION],
       responses: { "200": { description: "Throughput of all models together (`summary`; its peaks are the busiest minutes across models) and per upstream model, ordered by tokens", content: { "application/json": { schema: {
         type: "object", required: ["data"], properties: { data: { type: "object", required: ["start", "end", "summary", "models"], properties: {
           start: { type: "string", format: "date-time" }, end: { type: "string", format: "date-time" },
@@ -198,9 +205,9 @@ const OPENAPI = {
         } } },
       } } } } },
     } },
-    "/analytics/users": { get: { summary: "Per-user usage summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/GroupId" }], responses: { "200": { description: "User summaries" } } } },
-    "/analytics/groups": { get: { summary: "Current-membership group summary", parameters: [{ $ref: "#/components/parameters/TimeRange" }], responses: { "200": { description: "Group summaries" } } } },
-    "/analytics/groups/{groupId}/user-burndowns": { get: { summary: "Per-user balance trajectories for a group", parameters: [{ name: "groupId", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/TimeRange" }, { $ref: "#/components/parameters/BucketSize" }], responses: { "200": { description: "Per-user balance series" } } } },
+    "/analytics/users": { get: { summary: "Per-user usage summary", parameters: [...ANALYTICS_WINDOW, ...ANALYTICS_SELECTION], responses: { "200": { description: "User summaries" } } } },
+    "/analytics/groups": { get: { summary: "Current-membership group summary", description: "With groupId, only those groups; with userId alone, the groups of those users. Only the usage of the selected people counts.", parameters: [...ANALYTICS_WINDOW, ...ANALYTICS_SELECTION], responses: { "200": { description: "Group summaries" } } } },
+    "/analytics/groups/{groupId}/user-burndowns": { get: { summary: "Per-user balance trajectories for a group", parameters: [{ name: "groupId", in: "path", required: true, schema: { type: "string" } }, ...ANALYTICS_WINDOW, BUCKET], responses: { "200": { description: "Per-user balance series" } } } },
   },
 };
 
@@ -615,20 +622,20 @@ export async function handleManagementApi(request: Request, options: ManagementA
     if (path.startsWith("/analytics/") && request.method === "GET") {
       await authorize("usage.read");
       const input = analyticsInput(url);
-      if (path === "/analytics/burndown") return response(requestId, { data: await getBalanceBurndown(input.timeRange, input.bucketSize, input.scope) });
-      if (path === "/analytics/consumed") return response(requestId, { data: await getCreditsConsumed(input.timeRange, input.bucketSize, input.scope) });
+      if (path === "/analytics/burndown") return response(requestId, { data: await getBalanceBurndown(input.window, input.bucketSize, input.scope) });
+      if (path === "/analytics/consumed") return response(requestId, { data: await getCreditsConsumed(input.window, input.bucketSize, input.scope) });
       if (path === "/analytics/by-model") {
         const topN = Number(url.searchParams.get("topN") || 5);
         if (!Number.isInteger(topN) || topN < 1 || topN > 20) return failure(requestId, 400, "validation_error", "topN must be an integer from 1 to 20");
-        return response(requestId, { data: await getUsageByModel(input.timeRange, input.bucketSize, input.scope, topN) });
+        return response(requestId, { data: await getUsageByModel(input.window, input.bucketSize, input.scope, topN) });
       }
-      if (path === "/analytics/model-summary") return response(requestId, { data: await getModelSummary(input.timeRange, input.bucketSize, input.scope) });
-      if (path === "/analytics/tokens") return response(requestId, { data: await getTokensConsumed(input.timeRange, input.bucketSize, input.scope) });
-      if (path === "/analytics/throughput") return response(requestId, { data: await getThroughput(input.timeRange, input.scope) });
-      if (path === "/analytics/users") return response(requestId, { data: await getUserSummary(input.timeRange, input.groupId) });
-      if (path === "/analytics/groups") return response(requestId, { data: await getGroupSummary(input.timeRange) });
+      if (path === "/analytics/model-summary") return response(requestId, { data: await getModelSummary(input.window, input.bucketSize, input.scope) });
+      if (path === "/analytics/tokens") return response(requestId, { data: await getTokensConsumed(input.window, input.bucketSize, input.scope) });
+      if (path === "/analytics/throughput") return response(requestId, { data: await getThroughput(input.window, input.scope) });
+      if (path === "/analytics/users") return response(requestId, { data: await getUserSummary(input.window, input.scope) });
+      if (path === "/analytics/groups") return response(requestId, { data: await getGroupSummary(input.window, input.scope) });
       const groupBurndown = path.match(/^\/analytics\/groups\/([^/]+)\/user-burndowns$/);
-      if (groupBurndown) return response(requestId, { data: await getGroupUserBurndowns(input.timeRange, input.bucketSize, decodeURIComponent(groupBurndown[1]!)) });
+      if (groupBurndown) return response(requestId, { data: await getGroupUserBurndowns(input.window, input.bucketSize, decodeURIComponent(groupBurndown[1]!)) });
     }
     if (path === "/usage/summary" && request.method === "GET") {
       await authorize("usage.read");
@@ -672,12 +679,13 @@ export async function handleManagementApi(request: Request, options: ManagementA
     if (error instanceof CatalogError) return failure(requestId, error.status, error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : "validation_error", error.message);
     if (error instanceof SyntaxError) return failure(requestId, 400, "invalid_json", "Request body must be valid JSON");
     if (error instanceof URIError) return failure(requestId, 400, "invalid_path", "The request path is not valid percent-encoding");
+    if (error instanceof AnalyticsQueryError) return failure(requestId, 400, "validation_error", error.message);
     // Drizzle wraps database errors: its message holds the query and its parameters,
     // which must not reach logs or clients; the cause has the database's reason.
     const databaseError = error instanceof Error && error.cause && typeof error.cause === "object" ? error.cause as { code?: unknown; message?: unknown } : undefined;
     const message = (typeof databaseError?.message === "string" ? databaseError.message : error instanceof Error ? error.message : "Request failed").replace(/\nparams:[\s\S]*$/, "");
     if (databaseError?.code === "23505" || /unique|duplicate/i.test(message)) return failure(requestId, 409, "conflict", "A resource with that normalized identifier already exists");
-    if (!databaseError && /final enabled administrator|Credits cannot|Password must|Username must|email address|required|Invalid secret|Select at least|bulk update|selected groups do not exist|Display name|must be a boolean|Role must|must be reset or rollover|must be null or a non-negative amount|Invalid time range|Invalid bucket size|either userId|scopeId/i.test(message)) return failure(requestId, 400, "validation_error", message);
+    if (!databaseError && /final enabled administrator|Credits cannot|Password must|Username must|email address|required|Invalid secret|Select at least|bulk update|selected groups do not exist|Display name|must be a boolean|Role must|must be reset or rollover|must be null or a non-negative amount|Invalid time range|Invalid bucket size/i.test(message)) return failure(requestId, 400, "validation_error", message);
     // aigctl in the gateway container already has the database: tell its operator
     // what failed instead of logging it into their terminal.
     if (trusted) return failure(requestId, 500, "internal_error", `Internal server error: ${message}`);

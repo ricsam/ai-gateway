@@ -37,7 +37,7 @@ type Stats = {
 };
 type Report = { start: string; end: string; summary: Stats; models: Array<Stats & { model: string | null }> };
 
-function expectedStats(rows: Fixture[], start: Date): Stats {
+function expectedStats(rows: Fixture[], start: Date, end: Date): Stats {
   let input = 0, output = 0, cacheRead = 0;
   const periods = new Set<number>();
   const minutes = new Map<number, { requests: number; tokens: number }>();
@@ -57,9 +57,10 @@ function expectedStats(rows: Fixture[], start: Date): Stats {
     if (entry.tokens >= peakTpm) { peakTpm = entry.tokens; peakTpmAt = minute; }
   }
   const requests = rows.length;
-  const activeMinutes = periods.size * 60;
+  // One-hour periods from the start; a custom window's last period can be shorter.
+  const activeMinutes = [...periods].reduce((total, period) => total + Math.min(HOUR, end.getTime() - start.getTime() - period * HOUR) / MINUTE, 0);
   return {
-    requests, tokens: input + output, activeHours: periods.size,
+    requests, tokens: input + output, activeHours: activeMinutes / 60,
     steadyStateTpm: activeMinutes ? (input + output) / activeMinutes : 0,
     steadyStateRpm: activeMinutes ? requests / activeMinutes : 0,
     peakTpm, peakTpmAt: peakTpm && peakTpmAt !== null ? new Date(peakTpmAt).toISOString() : null,
@@ -75,8 +76,8 @@ function expectedReport(fixtures: Fixture[], start: Date, end: Date, inScope: (r
   const byModel = new Map<string | null, Fixture[]>();
   for (const row of rows) byModel.set(row.model, [...(byModel.get(row.model) ?? []), row]);
   return {
-    start: start.toISOString(), end: end.toISOString(), summary: expectedStats(rows, start),
-    models: [...byModel].map(([model, list]) => ({ model, ...expectedStats(list, start) })),
+    start: start.toISOString(), end: end.toISOString(), summary: expectedStats(rows, start, end),
+    models: [...byModel].map(([model, list]) => ({ model, ...expectedStats(list, start, end) })),
   };
 }
 
@@ -155,12 +156,15 @@ try {
       cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [crypto.randomUUID(), row.time, crypto.randomUUID(), row.userId, row.model, row.type, row.input ?? 0, row.output ?? 0, row.cacheRead ?? 0, row.cacheWrite5m ?? 0, row.cacheWrite1h ?? 0]);
   }
-  const scopes: Array<{ name: string; scope: { userId?: string; groupId?: string }; query: string; filter: (row: Fixture) => boolean }> = [
+  const scopes: Array<{ name: string; scope: { userIds?: string[]; groupIds?: string[] }; query: string; filter: (row: Fixture) => boolean }> = [
     { name: "system", scope: {}, query: "", filter: () => true },
-    { name: "user", scope: { userId: "dora" }, query: "&userId=dora", filter: (row) => row.userId === "dora" },
-    { name: "group", scope: { groupId: "team" }, query: "&groupId=team", filter: (row) => row.userId === "dora" || row.userId === "erin" },
-    { name: "empty group", scope: { groupId: "empty" }, query: "&groupId=empty", filter: () => false },
-    { name: "unknown user", scope: { userId: "nobody" }, query: "&userId=nobody", filter: () => false },
+    { name: "user", scope: { userIds: ["dora"] }, query: "&userId=dora", filter: (row) => row.userId === "dora" },
+    { name: "group", scope: { groupIds: ["team"] }, query: "&groupId=team", filter: (row) => row.userId === "dora" || row.userId === "erin" },
+    { name: "users", scope: { userIds: ["dora", "frank"] }, query: "&userId=dora&userId=frank", filter: (row) => row.userId === "dora" || row.userId === "frank" },
+    // dora is selected directly and through the group: her requests count once.
+    { name: "users and group", scope: { userIds: ["dora", "frank"], groupIds: ["team"] }, query: "&userId=dora&userId=frank&groupId=team", filter: () => true },
+    { name: "empty group", scope: { groupIds: ["empty"] }, query: "&groupId=empty", filter: () => false },
+    { name: "unknown user", scope: { userIds: ["nobody"] }, query: "&userId=nobody", filter: () => false },
   ];
 
   // 1. A fixed past window with boundary, straddle, tie and overflow cases.
@@ -182,6 +186,15 @@ try {
   const modelBReport = expectedReport(fixtures, start0, now0, () => true).models.find((row) => row.model === "model-b")!;
   assert.equal(modelBReport.activeHours, 4, "fixture sanity: straddled minute spans periods 4 and 5");
 
+  // A custom window ending 45 minutes into its last period, which holds the window's last request.
+  const customStart = at(start0, 30 * MINUTE);
+  const customEnd = at(start0, 19 * HOUR + 15 * MINUTE);
+  for (const { name, scope, filter } of scopes) {
+    assertReport(await getThroughput({ start: customStart, end: customEnd }, scope), expectedReport(fixtures, customStart, customEnd, filter), `custom window, ${name}`);
+  }
+  const custom = await getThroughput({ start: customStart, end: customEnd }, { userIds: ["dora"] });
+  assert.equal(custom.models.find((row) => row.model === null)?.activeHours, 0.75, "a shorter last period counts its length");
+
   // 2. The management API for every time range and scope, at the current time.
   const { hashApiKey } = await import("../backend/api-key-utils");
   const key = `aigm_${runId}`;
@@ -201,11 +214,23 @@ try {
       checks++;
     }
   }
+  for (const { name, query, filter } of scopes) {
+    const response = await call(`/analytics/throughput?start=${encodeURIComponent(customStart.toISOString())}&end=${encodeURIComponent(customEnd.toISOString())}${query}`);
+    assert.equal(response.status, 200, `custom ${name}: ${await response.clone().text()}`);
+    const { data } = await response.json() as { data: Report };
+    assertReport(data, expectedReport(fixtures, customStart, customEnd, filter), `management API custom window, ${name}`);
+    checks++;
+  }
   const defaultRange = await (await call("/analytics/throughput")).json() as { data: Report };
   assert.equal(new Date(defaultRange.data.end).getTime() - new Date(defaultRange.data.start).getTime(), 30 * DAY, "timeRange defaults to month");
+  const tooMany = Array.from({ length: 101 }, (_, index) => `&userId=u${index}`).join("");
   for (const [path, status] of [
     ["/analytics/throughput?timeRange=decade", 400],
-    ["/analytics/throughput?timeRange=day&userId=dora&groupId=team", 400],
+    ["/analytics/throughput?timeRange=custom", 400],
+    ["/analytics/throughput?start=2026-10-02&end=2026-10-01", 400],
+    ["/analytics/throughput?timeRange=day&start=2026-10-01&end=2026-10-02", 400],
+    ["/analytics/throughput?start=2026-10-01T09:30&end=2026-10-02", 400],
+    [`/analytics/throughput?timeRange=day${tooMany}`, 400],
   ] as const) assert.equal((await call(path)).status, status, path);
   assert.equal((await call("/analytics/throughput?timeRange=day", limitedKey)).status, 403, "usage.read is required");
   const openapi = await (await call("/openapi.json")).json() as { paths: Record<string, unknown>; components: { schemas: Record<string, unknown> } };

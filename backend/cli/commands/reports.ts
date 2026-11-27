@@ -1,12 +1,12 @@
-import { TIME_RANGES, type TimeRange } from "../../../shared/analytics-time-ranges";
+import { AnalyticsQueryError, parseInstant, TIME_RANGES, validateCustomTimeRange, type TimeRange } from "../../../shared/analytics-time-ranges";
 import { call, type ManagementClient, type Query } from "../client";
 import { ApiError, UsageError } from "../errors";
-import type { Command, CommandContext, CommandGroup } from "../framework";
+import type { Command, CommandContext, CommandGroup, OptionValue } from "../framework";
 import { confirm, optionalInteger, stringOption, YES_OPTION } from "../inputs";
 import {
   formatCredits, formatDecimal, formatInteger, formatTime, printJson, printList, renderDetails, renderTable, type Column,
 } from "../output";
-import { listAliases, listAll, listApps, listModels, resolveGroup, resolveUser, type Group, type ManagementKey, type User } from "../resources";
+import { listAliases, listAll, listApps, listModels, resolveGroup, resolveGroups, resolveUser, resolveUsers, type Group, type ManagementKey, type User } from "../resources";
 import { report } from "./common";
 
 const TIME_RANGE_NAMES = Object.keys(TIME_RANGES) as TimeRange[];
@@ -20,10 +20,69 @@ const RANGE_OPTION = {
   range: { type: "string", value: "<range>", description: `Rolling window ending now: ${TIME_RANGE_NAMES.map((name) => `${name} (${TIME_RANGES[name].label.toLowerCase()})`).join(", ")}; default month` },
 } as const;
 
+const WINDOW_OPTIONS = {
+  ...RANGE_OPTION,
+  from: { type: "string", value: "<time>", description: "Start of a custom window instead of --range: a date (00:00 UTC), such as 2026-10-01, or a date and time with Z or a UTC offset, such as 2026-10-01T09:30:00+02:00" },
+  to: { type: "string", value: "<time>", description: "End of the custom window, excluded, in the same format (default: now)" },
+} as const;
+
+// Analytics select several users and groups; usage summary and events take one of either.
+const SELECTION_OPTIONS = {
+  user: { type: "string", multiple: true, value: "<user>", description: "Only this user (ID, username or email)" },
+  group: { type: "string", multiple: true, value: "<group>", description: "Only the current members of this group (ID or name); with --user, the users and groups together" },
+} as const;
+
 function timeRange(context: CommandContext): TimeRange {
   const value = stringOption(context.options.range)?.trim().toLowerCase() ?? "month";
   if (!(TIME_RANGE_NAMES as string[]).includes(value)) throw new UsageError(`--range must be one of ${TIME_RANGE_NAMES.join(", ")}`, context.commandName);
   return value as TimeRange;
+}
+
+interface Window {
+  query: { timeRange: TimeRange } | { start: string; end: string };
+  /** "Last 30 days", or the custom window's bounds. */
+  label: string;
+  /** Completes "No usage …": "in the last 30 days", or "from … to …". */
+  phrase: string;
+}
+
+function analyticsWindow(context: CommandContext, now = new Date()): Window {
+  const from = stringOption(context.options.from)?.trim();
+  const to = stringOption(context.options.to)?.trim();
+  if (!from && !to) {
+    const range = timeRange(context);
+    return { query: { timeRange: range }, label: TIME_RANGES[range].label, phrase: `in the ${TIME_RANGES[range].label.toLowerCase()}` };
+  }
+  if (stringOption(context.options.range) !== undefined) throw new UsageError("Choose either --range or --from and --to", context.commandName);
+  if (!from) throw new UsageError("--to needs --from", context.commandName);
+  try {
+    const window = validateCustomTimeRange({ start: parseInstant(from, "--from"), end: to ? parseInstant(to, "--to") : now });
+    const [start, end] = [window.start.toISOString(), window.end.toISOString()];
+    return { query: { start, end }, label: `${formatTime(start)} to ${formatTime(end)}`, phrase: `from ${formatTime(start)} to ${formatTime(end)}` };
+  } catch (error) {
+    if (error instanceof AnalyticsQueryError) throw new UsageError(error.message, context.commandName);
+    throw error;
+  }
+}
+
+interface Selection { query: { userId?: string[]; groupId?: string[] }; label: string }
+
+function repeated(value: OptionValue): string[] {
+  return (Array.isArray(value) ? value : typeof value === "string" ? [value] : []).map((entry) => entry.trim()).filter(Boolean);
+}
+
+/** The users and groups an analytics command covers, resolved to IDs. */
+async function selection(context: CommandContext, client: ManagementClient): Promise<Selection> {
+  const users = await resolveUsers(client, repeated(context.options.user));
+  const groups = await resolveGroups(client, repeated(context.options.group));
+  const names = [
+    ...(users.length ? [`${users.length === 1 ? "user" : "users"} ${users.map((user) => user.username).join(", ")}`] : []),
+    ...(groups.length ? [`${groups.length === 1 ? "group" : "groups"} ${groups.map((group) => group.name).join(", ")} (current members)`] : []),
+  ];
+  return {
+    query: { ...(users.length ? { userId: users.map((user) => user.id) } : {}), ...(groups.length ? { groupId: groups.map((group) => group.id) } : {}) },
+    label: names.length ? names.join(" and ") : "all users",
+  };
 }
 
 interface Scope { query: { userId?: string; groupId?: string }; label: string }
@@ -219,7 +278,7 @@ const THROUGHPUT_COLUMNS: Column<ThroughputStats & { model: string }>[] = [
   { header: "MODEL", value: (row) => row.model, maxWidth: 45 },
   { header: "REQUESTS", value: (row) => formatInteger(row.requests), align: "right" },
   { header: "TOKENS", value: (row) => formatInteger(row.tokens), align: "right" },
-  { header: "ACTIVE-HOURS", value: (row) => formatInteger(row.activeHours), align: "right" },
+  { header: "ACTIVE-HOURS", value: (row) => Number.isInteger(row.activeHours) ? formatInteger(row.activeHours) : formatDecimal(row.activeHours, 2), align: "right" },
   { header: "STEADY-TPM", value: (row) => formatInteger(row.steadyStateTpm), align: "right" },
   { header: "PEAK-TPM", value: (row) => formatInteger(row.peakTpm), align: "right" },
   { header: "PEAK-TPM-AT", value: (row) => formatTime(row.peakTpmAt), wide: true },
@@ -240,29 +299,34 @@ export const analyticsGroup: CommandGroup = {
       summary: "Steady-state and peak tokens and requests per minute, for Bedrock quota requests",
       details: `Tokens follow Bedrock's quota accounting: input, cache writes and output; cache reads are excluded.
 Steady state averages the hours that had traffic; peaks are the busiest UTC minute.`,
-      options: { ...RANGE_OPTION, ...SCOPE_OPTIONS },
-      examples: ["aigctl analytics throughput", "aigctl analytics throughput --range week -o wide"],
+      options: { ...WINDOW_OPTIONS, ...SELECTION_OPTIONS },
+      examples: [
+        "aigctl analytics throughput",
+        "aigctl analytics throughput --range week -o wide",
+        "aigctl analytics throughput --from 2026-10-01 --to 2026-11-01 --group engineering --group support",
+      ],
       async run(context) {
-        const range = timeRange(context);
+        const window = analyticsWindow(context);
         const client = await context.client();
-        const selected = await scope(context, client);
-        const { data } = await call<{ data: ThroughputReport }>(client, "GET", "/analytics/throughput", { query: { timeRange: range, ...selected.query } });
+        const selected = await selection(context, client);
+        const { data } = await call<{ data: ThroughputReport }>(client, "GET", "/analytics/throughput", { query: { ...window.query, ...selected.query } });
         if (context.output === "json") return printJson(context.io, data);
-        context.io.out(`${TIME_RANGES[range].label} (${formatTime(data.start)} to ${formatTime(data.end)}), ${selected.label}\n\n`);
+        const heading = "timeRange" in window.query ? `${window.label} (${formatTime(data.start)} to ${formatTime(data.end)})` : window.label;
+        context.io.out(`${heading}, ${selected.label}\n\n`);
         context.io.out(renderTable([{ ...data.summary, model: "all models" }, ...data.models.map((row) => ({ ...row, model: row.model ?? "(none)" }))], THROUGHPUT_COLUMNS, context.output === "wide"));
       },
     },
     {
       name: "users",
       summary: "Credits used per user",
-      options: { ...RANGE_OPTION, group: SCOPE_OPTIONS.group },
+      options: { ...WINDOW_OPTIONS, ...SELECTION_OPTIONS },
+      examples: ["aigctl analytics users --range week", "aigctl analytics users --from 2026-10-01 --group engineering"],
       async run(context) {
-        const range = timeRange(context);
+        const window = analyticsWindow(context);
         const client = await context.client();
-        const group = stringOption(context.options.group);
-        const groupId = group ? (await resolveGroup(client, group)).id : undefined;
+        const selected = await selection(context, client);
         const { data } = await call<{ data: { users: { userId: string; username: string; creditsUsed: number; activeDays: number; avgCreditsPerDay: number; lastActivity: string | null; percentOfTotal: number }[] } }>(
-          client, "GET", "/analytics/users", { query: { timeRange: range, groupId } });
+          client, "GET", "/analytics/users", { query: { ...window.query, ...selected.query } });
         printList(context.io, context.output, data.users, [
           { header: "USER-ID", value: (row) => row.userId, wide: true },
           { header: "USERNAME", value: (row) => row.username },
@@ -271,36 +335,39 @@ Steady state averages the hours that had traffic; peaks are the busiest UTC minu
           { header: "AVG/DAY", value: (row) => formatCredits(row.avgCreditsPerDay), align: "right" },
           { header: "LAST-ACTIVITY", value: (row) => formatTime(row.lastActivity) },
           { header: "SHARE", value: (row) => `${row.percentOfTotal.toFixed(1)}%`, align: "right" },
-        ], `No usage in the ${TIME_RANGES[range].label.toLowerCase()}.`, data);
+        ], `No usage ${window.phrase}.`, data);
       },
     },
     {
       name: "groups",
       summary: "Credits used per group (current members)",
-      options: { ...RANGE_OPTION },
+      details: "With --group, only those groups. With --user alone, the groups of those users, counting only their usage.",
+      options: { ...WINDOW_OPTIONS, ...SELECTION_OPTIONS },
       async run(context) {
-        const range = timeRange(context);
+        const window = analyticsWindow(context);
+        const client = await context.client();
+        const selected = await selection(context, client);
         const { data } = await call<{ data: { groups: { groupId: string; groupName: string; creditsUsed: number; activeUsers: number; avgCreditsPerUser: number }[] } }>(
-          await context.client(), "GET", "/analytics/groups", { query: { timeRange: range } });
+          client, "GET", "/analytics/groups", { query: { ...window.query, ...selected.query } });
         printList(context.io, context.output, data.groups, [
           { header: "GROUP-ID", value: (row) => row.groupId, wide: true },
           { header: "GROUP", value: (row) => row.groupName },
           { header: "CREDITS", value: (row) => formatCredits(row.creditsUsed), align: "right" },
           { header: "ACTIVE-USERS", value: (row) => row.activeUsers, align: "right" },
           { header: "AVG/USER", value: (row) => formatCredits(row.avgCreditsPerUser), align: "right" },
-        ], `No group usage in the ${TIME_RANGES[range].label.toLowerCase()}.`, data);
+        ], `No group usage ${window.phrase}.`, data);
       },
     },
     {
       name: "models",
       summary: "Credits and tokens per upstream model",
-      options: { ...RANGE_OPTION, ...SCOPE_OPTIONS },
+      options: { ...WINDOW_OPTIONS, ...SELECTION_OPTIONS },
       async run(context) {
-        const range = timeRange(context);
+        const window = analyticsWindow(context);
         const client = await context.client();
-        const selected = await scope(context, client);
+        const selected = await selection(context, client);
         const { data } = await call<{ data: { models: { model: string; totalCredits: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number; percentOfTotal: number }[] } }>(
-          client, "GET", "/analytics/model-summary", { query: { timeRange: range, ...selected.query } });
+          client, "GET", "/analytics/model-summary", { query: { ...window.query, ...selected.query } });
         printList(context.io, context.output, data.models, [
           { header: "MODEL", value: (row) => row.model, maxWidth: 50 },
           { header: "CREDITS", value: (row) => formatCredits(row.totalCredits), align: "right" },
@@ -309,7 +376,7 @@ Steady state averages the hours that had traffic; peaks are the busiest UTC minu
           { header: "CACHE-READ", value: (row) => formatInteger(row.cacheReadTokens), align: "right" },
           { header: "CACHE-WRITE", value: (row) => formatInteger(row.cacheWrite5mTokens + row.cacheWrite1hTokens), align: "right" },
           { header: "SHARE", value: (row) => `${row.percentOfTotal.toFixed(1)}%`, align: "right" },
-        ], `No model usage in the ${TIME_RANGES[range].label.toLowerCase()}.`, data);
+        ], `No model usage ${window.phrase}.`, data);
       },
     },
   ],

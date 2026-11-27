@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { getTimeRangeBounds, TIME_RANGES, type TimeRange } from "../shared/analytics-time-ranges";
-import { emptyThroughputStats, throughputPeriodCount, throughputStats, type ThroughputAggregate } from "./throughput-stats";
+import { activePeriodHours, emptyThroughputStats, throughputPeriods, throughputStats, type ThroughputAggregate } from "./throughput-stats";
 
 const aggregate = (values: Partial<ThroughputAggregate> = {}): ThroughputAggregate => ({
   requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, activeHours: 0,
@@ -10,15 +10,44 @@ const aggregate = (values: Partial<ThroughputAggregate> = {}): ThroughputAggrega
 describe("throughput windows", () => {
   test.each(Object.keys(TIME_RANGES) as TimeRange[])("%s consists of whole one-hour periods", (range) => {
     const { start, end } = getTimeRangeBounds(range, new Date("2026-10-25T01:30:12.345Z"));
-    expect(throughputPeriodCount(start, end)).toBe(TIME_RANGES[range].durationMs / 3_600_000);
+    const periods = throughputPeriods(start, end);
+    expect(periods.count).toBe(TIME_RANGES[range].durationMs / 3_600_000);
+    expect(periods.lastPeriodHours).toBe(1);
+    expect(periods.lastPeriodStart.getTime()).toBe(end.getTime() - 3_600_000);
   });
 
-  test("rejects windows that would leave a partial or no period", () => {
+  test("ends a custom window that is not a whole number of hours with a shorter period", () => {
     const start = new Date("2026-11-02T10:00:00.000Z");
-    expect(() => throughputPeriodCount(start, new Date("2026-11-02T10:30:00.000Z"))).toThrow("whole number of hours");
-    expect(() => throughputPeriodCount(start, new Date("2026-11-02T11:00:00.001Z"))).toThrow("whole number of hours");
-    expect(() => throughputPeriodCount(start, start)).toThrow("whole number of hours");
-    expect(() => throughputPeriodCount(start, new Date("2026-11-02T09:00:00.000Z"))).toThrow("whole number of hours");
+    expect(throughputPeriods(start, new Date("2026-11-02T10:30:00.000Z"))).toEqual({ count: 1, lastPeriodStart: start, lastPeriodHours: 0.5 });
+    expect(throughputPeriods(start, new Date("2026-11-02T12:45:00.000Z"))).toEqual({
+      count: 3, lastPeriodStart: new Date("2026-11-02T12:00:00.000Z"), lastPeriodHours: 0.75,
+    });
+  });
+
+  test("rejects empty and reversed windows", () => {
+    const start = new Date("2026-11-02T10:00:00.000Z");
+    expect(() => throughputPeriods(start, start)).toThrow("end after they start");
+    expect(() => throughputPeriods(start, new Date("2026-11-02T09:00:00.000Z"))).toThrow("end after they start");
+  });
+
+  test("counts a shorter last period by its length only when it had requests", () => {
+    const periods = throughputPeriods(new Date("2026-11-02T10:00:00.000Z"), new Date("2026-11-02T12:45:00.000Z"));
+    // Periods start at 10:00, 11:00 and 12:00; the last one lasts 45 minutes.
+    expect(activePeriodHours("3", new Date("2026-11-02T12:00:00.000Z"), periods)).toBe(2.75);
+    expect(activePeriodHours("1", "2026-11-02T12:00:00.000Z", periods)).toBe(0.75);
+    expect(activePeriodHours(2, new Date("2026-11-02T11:00:00.000Z"), periods)).toBe(2);
+    expect(activePeriodHours(0, null, periods)).toBe(0);
+    // Whole-hour windows count whole periods.
+    const whole = throughputPeriods(new Date("2026-11-02T10:00:00.000Z"), new Date("2026-11-02T13:00:00.000Z"));
+    expect(activePeriodHours("3", new Date("2026-11-02T12:00:00.000Z"), whole)).toBe(3);
+  });
+
+  test("steady state over a shorter last period divides by its minutes", () => {
+    const periods = throughputPeriods(new Date("2026-11-02T10:00:00.000Z"), new Date("2026-11-02T10:30:00.000Z"));
+    const stats = throughputStats(aggregate({ requests: 15, inputTokens: 3_000, activeHours: activePeriodHours(1, "2026-11-02T10:00:00.000Z", periods) }));
+    expect(stats.activeHours).toBe(0.5);
+    expect(stats.steadyStateRpm).toBe(0.5);
+    expect(stats.steadyStateTpm).toBe(100);
   });
 });
 
