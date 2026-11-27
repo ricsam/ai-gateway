@@ -3,11 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import dotenv from "dotenv";
-import { matchesPassthroughPath, matchesSpaPath, type SpaRoutesManifest } from "@richie-router/server";
 import { generateRoutes, getGeneratedDir, GENERATED_SPA_ROUTES_FILE, readSpaRoutesManifest } from "./route-generator";
-
-const RICHIE_ROUTER_HEAD_PLACEHOLDER = "<!--richie-router-head-->";
-const RICHIE_ROUTER_HEAD_RESPONSE_HEADER = "x-richie-router-head";
+import { createServeWrapper } from "./serve-wrapper";
 
 interface ServeOptions {
   projectRoot: string;
@@ -16,8 +13,6 @@ interface ServeOptions {
   baseUrl?: string;
   production: boolean;
 }
-
-type UserServeFetch = (this: unknown, request: Request, server: unknown) => Response | Promise<Response>;
 
 function parseServeOptions(): ServeOptions {
   const { values } = parseArgs({
@@ -75,71 +70,6 @@ function resolveServeBaseUrl(options: Pick<ServeOptions, "host" | "port" | "base
 function baseHrefFromUrl(baseUrl: URL): string {
   const pathname = baseUrl.pathname || "/";
   return pathname.endsWith("/") ? pathname : `${pathname}/`;
-}
-
-function buildExportedHeadApiPath(baseHref: string, manifest: SpaRoutesManifest | null): string {
-  const basePath = baseHref === "/" ? "" : baseHref.replace(/\/$/, "");
-  const headBasePath = manifest?.hostedRouting?.headBasePath ?? "/head-api";
-  return `${basePath}${headBasePath}`.replace(/\/{2,}/g, "/") || "/";
-}
-
-function buildExportedRichieHeadRequest(request: Request, baseHref: string, manifest: SpaRoutesManifest | null): Request {
-  const requestUrl = new URL(request.url);
-  const headUrl = new URL(request.url);
-  headUrl.pathname = buildExportedHeadApiPath(baseHref, manifest);
-  headUrl.search = new URLSearchParams({
-    href: `${requestUrl.pathname}${requestUrl.search}`,
-  }).toString();
-
-  return new Request(headUrl.toString(), {
-    method: "GET",
-    headers: request.headers,
-  });
-}
-
-function injectExportedHtmlHead(html: string, baseHref: string, richieRouterHead: string): string {
-  const htmlWithBase = /<base\s+[^>]*href=(["'])[^"']*\1[^>]*>/i.test(html)
-    ? html.replace(/<base\s+[^>]*href=(["'])[^"']*\1[^>]*>/i, `<base href="${baseHref}">`)
-    : html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}\n  <base href="${baseHref}">`);
-
-  return htmlWithBase.replace(RICHIE_ROUTER_HEAD_PLACEHOLDER, () => richieRouterHead);
-}
-
-async function resolveExportedRichieRouterHead(options: {
-  request: Request;
-  server: unknown;
-  fetch?: UserServeFetch;
-  thisArg: unknown;
-  baseHref: string;
-  manifest: SpaRoutesManifest | null;
-}): Promise<{ richieRouterHead: string } | { response: Response }> {
-  if (!options.fetch) {
-    return { richieRouterHead: "" };
-  }
-
-  const headResponse = await options.fetch.call(
-    options.thisArg,
-    buildExportedRichieHeadRequest(options.request, options.baseHref, options.manifest),
-    options.server,
-  );
-  const headResponseKind = headResponse.headers.get(RICHIE_ROUTER_HEAD_RESPONSE_HEADER);
-
-  if (headResponseKind !== "document") {
-    return { richieRouterHead: "" };
-  }
-
-  if (!headResponse.ok) {
-    return { response: headResponse };
-  }
-
-  const payload = (await headResponse.json()) as { richieRouterHead?: unknown };
-  if (typeof payload.richieRouterHead !== "string") {
-    throw new Error("Richie Router head response did not include a richieRouterHead string.");
-  }
-
-  return {
-    richieRouterHead: payload.richieRouterHead,
-  };
 }
 
 function resolveSecurePath(basePath: string, relativePath: string): string {
@@ -366,90 +296,17 @@ async function main() {
   }
 
   const frontendDir = path.join(options.projectRoot, "frontend");
-  const publicDir = path.join(frontendDir, "public");
   const htmlBundle = await import(path.join(frontendDir, "index.html"));
 
-  const redirectToIndexHtml = async (request: Request, richieRouterHead = ""): Promise<Response> => {
-    const url = new URL(request.url);
-    url.pathname = "/index.html";
-    const response = await fetch(
-      new Request(url.toString(), {
-        headers: request.headers,
-        method: request.method,
-        body: request.body,
-      }),
-    );
-    if (!response.headers.get("Content-Type")?.includes("text/html")) {
-      return response;
-    }
-
-    const rewrittenBody = injectExportedHtmlHead(await response.text(), baseHref, richieRouterHead);
-    return new Response(rewrittenBody, {
-      headers: {
-        "Content-Type": "text/html",
-        "Cache-Control": "no-cache",
-      },
-    });
-  };
-
-  const serveStaticAsset = async (request: Request): Promise<Response> => {
-    const url = new URL(request.url);
-    const relativePath = url.pathname.replace(/^\/public\//, "");
-    const filePath = path.join(publicDir, relativePath);
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      return new Response("Not found", { status: 404 });
-    }
-    return new Response(Bun.file(filePath));
-  };
-
-  const serveWrapper = ((optionsFromUser: Parameters<typeof Bun.serve>[0]) => {
-    return Bun.serve({
-      ...optionsFromUser,
-      routes: {
-        "/index.html": htmlBundle.default,
-        "/public/*": serveStaticAsset,
-      },
-      async fetch(request: Request, server: unknown) {
-        const url = new URL(request.url);
-        if (url.pathname === "/favicon.ico") {
-          return new Response("Not found", { status: 404 });
-        }
-        if (
-          url.pathname === "/" ||
-          (manifest &&
-            !matchesPassthroughPath(url.pathname, { spaRoutesManifest: manifest }) &&
-            matchesSpaPath(url.pathname, { spaRoutesManifest: manifest }))
-        ) {
-          const richieHead = await resolveExportedRichieRouterHead({
-            request,
-            server,
-            fetch: optionsFromUser.fetch as UserServeFetch | undefined,
-            thisArg: this,
-            baseHref,
-            manifest,
-          });
-          if ("response" in richieHead) {
-            return richieHead.response;
-          }
-          return redirectToIndexHtml(request, richieHead.richieRouterHead);
-        }
-        if (optionsFromUser.fetch) {
-          return await optionsFromUser.fetch.call(this, request, server as never);
-        }
-        return new Response("Not found", { status: 404 });
-      },
-      port: options.port,
-      hostname: options.host,
-      development: isProduction
-        ? false
-        : {
-            hmr: true,
-            console: true,
-          },
-    });
-  }) as typeof Bun.serve;
-
-  globalThis.serve = serveWrapper;
+  globalThis.serve = createServeWrapper({
+    htmlBundle: htmlBundle.default,
+    publicDir: path.join(frontendDir, "public"),
+    baseHref,
+    getManifest: () => manifest,
+    hostname: options.host,
+    port: options.port,
+    production: isProduction,
+  });
   const { startMonthlyCreditResetScheduler } = await import("../backend/monthly-credit-reset-scheduler");
   const monthlyCreditResetScheduler = startMonthlyCreditResetScheduler();
   const { startReasoningReplayCleanup } = await import("../backend/reasoning-replay-store");
