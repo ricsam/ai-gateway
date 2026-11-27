@@ -720,6 +720,9 @@ describe("lost upstream connections", () => {
     $metadata: { attempts: 3, totalRetryDelay: 184 },
   });
   const reset = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  /** The SDK appends this to errors it raises while reading a response, and records the response's status. */
+  const HINT = "\n  Deserialization error: to see the raw response, inspect the hidden field {error}.$response on this object.";
+  const whileReading = <T extends Error>(error: T) => Object.assign(error, { message: error.message + HINT, $metadata: { httpStatusCode: 200, attempts: 1, totalRetryDelay: 0 } });
 
   function request(body: Record<string, unknown>, requestId: string, auth: "api_key" | "session" = "api_key") {
     return handleOpenAIProxy(new Request("https://gateway.test/v1/chat/completions", {
@@ -779,6 +782,8 @@ describe("lost upstream connections", () => {
       new Error("Unexpected error: http2 request did not get a response"),
       Object.assign(new Error("getaddrinfo ENOTFOUND shim.internal"), { code: "ENOTFOUND" }),
       Object.assign(new Error("UnknownError"), { name: "UnknownError", $fault: "server", $metadata: { httpStatusCode: 502 } }),
+      // A non-streaming response cut off mid-body: the HTTP/2 stream ends cleanly and the JSON is incomplete.
+      whileReading(new SyntaxError("JSON Parse error: Expected '}'")),
     ];
     for (const stream of [false, true]) {
       for (const failure of failures) {
@@ -799,6 +804,9 @@ describe("lost upstream connections", () => {
         503, { type: "server_error", code: "service_unavailable", message: "Bedrock is unable to process your request." }],
       [Object.assign(new Error("The system encountered an unexpected error during processing."), { name: "InternalServerException", $fault: "server", $metadata: { httpStatusCode: 500 } }),
         500, { type: "server_error", code: "internal_error", message: "The system encountered an unexpected error during processing." }],
+      // An exception event that opens the stream: the SDK raises it from send() without its type.
+      [whileReading(new Error("Too many requests, please wait before trying again.")),
+        500, { type: "server_error", code: "internal_error", message: "Too many requests, please wait before trying again." }],
       [new TypeError("Cannot read properties of undefined (reading 'usage')"),
         500, { type: "server_error", code: "internal_error", message: "Internal server error" }],
     ];

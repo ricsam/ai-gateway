@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { describeError, isServiceException, isUpstreamConnectionError, isUpstreamGatewayStatus } from "./upstream-errors";
+import {
+  describeError,
+  isServiceException,
+  isUnreadableUpstreamResponse,
+  isUpstreamAnswer,
+  isUpstreamConnectionError,
+  isUpstreamGatewayStatus,
+  upstreamMessage,
+} from "./upstream-errors";
 
 const withCode = (message: string, code: string) => Object.assign(new Error(message), { code });
 const serviceException = (name: string, httpStatusCode: number, message = name) =>
   Object.assign(new Error(message), { name, $fault: httpStatusCode >= 500 ? "server" : "client", $metadata: { httpStatusCode } });
+/** What the AWS SDK makes of an error it raises while reading a response. */
+const HINT = "\n  Deserialization error: to see the raw response, inspect the hidden field {error}.$response on this object.";
+const whileReading = <T extends Error>(error: T) => Object.assign(error, { message: error.message + HINT, $metadata: { httpStatusCode: 200, attempts: 1 } });
 
 describe("upstream connection failures", () => {
   test("recognize refused, reset and timed-out connections, DNS and HTTP/2 failures", () => {
@@ -26,6 +37,8 @@ describe("upstream connection failures", () => {
       new Error("Frame type id 1 in stream id 3 has failed with code 7."),
       new Error("Truncated event message received."),
       new Error("socket hang up"),
+      // A socket error while the SDK reads a response still counts.
+      whileReading(withCode("read ECONNRESET", "ECONNRESET")),
     ]) {
       expect(isUpstreamConnectionError(error)).toBe(true);
     }
@@ -64,6 +77,23 @@ describe("upstream connection failures", () => {
     expect(isServiceException(serviceException("ThrottlingException", 429))).toBe(true);
     expect(isServiceException(new Error("x"))).toBe(false);
   });
+
+  test("a response the SDK could not parse was cut off; other errors raised from a response are answers", () => {
+    expect(isUnreadableUpstreamResponse(whileReading(new SyntaxError("JSON Parse error: Expected '}'")))).toBe(true);
+    expect(isUnreadableUpstreamResponse(new SyntaxError("Unexpected token"))).toBe(false);
+    expect(isUnreadableUpstreamResponse(whileReading(new Error("Too many requests")))).toBe(false);
+    expect(isUpstreamAnswer(whileReading(new Error("Too many requests")))).toBe(true);
+    expect(isUpstreamAnswer(serviceException("ThrottlingException", 429))).toBe(true);
+    expect(isUpstreamAnswer(Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:8080"), { $metadata: { attempts: 3 } }))).toBe(false);
+    expect(isUpstreamAnswer(new TypeError("x"))).toBe(false);
+  });
+
+  test("an upstream message drops the SDK's hint", () => {
+    expect(upstreamMessage(whileReading(new Error("Too many requests, please wait before trying again.")))).toBe("Too many requests, please wait before trying again.");
+    expect(upstreamMessage({ message: "Too many requests" })).toBe("Too many requests");
+    expect(upstreamMessage(new Error(""))).toBeUndefined();
+    expect(upstreamMessage({})).toBeUndefined();
+  });
 });
 
 describe("describeError", () => {
@@ -79,6 +109,7 @@ describe("describeError", () => {
 
   test("describes service exceptions, thrown objects and other values", () => {
     expect(describeError(serviceException("ThrottlingException", 429, "Too many requests"))).toBe("ThrottlingException status=429: Too many requests");
+    expect(describeError(whileReading(new SyntaxError("JSON Parse error: Expected '}'")))).toBe("SyntaxError status=200: JSON Parse error: Expected '}' attempts=1");
     expect(describeError({ message: "Too many requests" })).toBe("Object: Too many requests");
     expect(describeError({ reason: "unknown" })).toBe('Object: {"reason":"unknown"}');
     expect(describeError("boom")).toBe("boom");

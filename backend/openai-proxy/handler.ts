@@ -50,10 +50,12 @@ import { getBedrockClient } from "../bedrock";
 import { isControllerClosedError } from "../stream-utils";
 import {
   describeError,
-  isServiceException,
+  isUnreadableUpstreamResponse,
+  isUpstreamAnswer,
   isUpstreamConnectionError,
   isUpstreamGatewayStatus,
   UPSTREAM_UNAVAILABLE_MESSAGE,
+  upstreamMessage,
 } from "../upstream-errors";
 
 interface ModelInfo {
@@ -140,10 +142,11 @@ interface MappedUpstreamError {
 
 /**
  * Map a failed upstream call to the error a client gets. Bedrock's exceptions
- * keep their message. A connection that could not be opened or broke, and a
- * 502/503/504 from in front of the upstream, become 503 service_unavailable
- * with a neutral message: their own messages name the upstream's address.
- * The gateway's own failures keep their details in the log.
+ * keep their message. A connection that could not be opened or broke, a
+ * response cut off mid-body, and a 502/503/504 from in front of the upstream
+ * become 503 service_unavailable with a neutral message: their own messages
+ * name the upstream's address. The gateway's own failures keep their details
+ * in the log.
  */
 function mapUpstreamError(error: unknown): MappedUpstreamError {
   const name = error instanceof Error ? error.name : "";
@@ -151,12 +154,12 @@ function mapUpstreamError(error: unknown): MappedUpstreamError {
     return { status: 503, type: "server_error", code: "provider_not_configured", message: "AWS Bedrock is not configured", kind: "provider" };
   }
   const known = BEDROCK_ERRORS.get(name);
-  if (known) return { ...known, message: (error as Error).message || name, kind: "provider" };
-  if (isUpstreamConnectionError(error) || isUpstreamGatewayStatus(error)) {
+  if (known) return { ...known, message: upstreamMessage(error) ?? name, kind: "provider" };
+  if (isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error) || isUpstreamGatewayStatus(error)) {
     return { status: 503, type: "server_error", code: "service_unavailable", message: UPSTREAM_UNAVAILABLE_MESSAGE, kind: "unavailable" };
   }
-  if (isServiceException(error)) {
-    return { status: 500, type: "server_error", code: "internal_error", message: (error as Error).message || name || "Internal server error", kind: "provider" };
+  if (isUpstreamAnswer(error)) {
+    return { status: 500, type: "server_error", code: "internal_error", message: upstreamMessage(error) ?? (name || "Internal server error"), kind: "provider" };
   }
   return { status: 500, type: "server_error", code: "internal_error", message: "Internal server error", kind: "unexpected" };
 }
@@ -173,12 +176,13 @@ function logUpstreamError(mapped: MappedUpstreamError, error: unknown, requestId
   }
 }
 
-/** The upstream's own message for an error it sent: an AWS service exception, or an exception event of the stream. */
+/**
+ * The upstream's own message for an error it sent: an exception event of the
+ * stream, which the SDK throws as the event's bare structure, or an answer.
+ */
 function upstreamExceptionMessage(error: unknown): string | undefined {
-  // The SDK throws a stream's exception event as the event's bare structure.
   const fromEvent = !(error instanceof Error) && error !== null && typeof error === "object";
-  const message = (error as { message?: unknown } | null)?.message;
-  return (fromEvent || isServiceException(error)) && typeof message === "string" && message ? message : undefined;
+  return fromEvent || isUpstreamAnswer(error) ? upstreamMessage(error) : undefined;
 }
 
 const STREAM_INTERRUPTED_MESSAGE = "The upstream model provider's stream ended before the response was complete";
@@ -189,13 +193,13 @@ const STREAM_INTERRUPTED_MESSAGE = "The upstream model provider's stream ended b
  * or handling its events failed.
  */
 function streamFailureError(error: unknown): OpenAIError["error"] {
-  if (error === undefined || isUpstreamConnectionError(error)) {
+  if (error === undefined || isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error)) {
     return { message: STREAM_INTERRUPTED_MESSAGE, type: "server_error", code: "stream_interrupted", param: null };
   }
   const known = BEDROCK_ERRORS.get(error instanceof Error ? error.name : "");
-  if (known) return { message: (error as Error).message || STREAM_INTERRUPTED_MESSAGE, type: known.type, code: known.code, param: null };
-  const upstreamMessage = upstreamExceptionMessage(error);
-  if (upstreamMessage) return { message: upstreamMessage, type: "server_error", code: "upstream_error", param: null };
+  if (known) return { message: upstreamMessage(error) ?? STREAM_INTERRUPTED_MESSAGE, type: known.type, code: known.code, param: null };
+  const message = upstreamExceptionMessage(error);
+  if (message) return { message, type: "server_error", code: "upstream_error", param: null };
   return { message: "The response failed before it was complete", type: "server_error", code: "internal_error", param: null };
 }
 

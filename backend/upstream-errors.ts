@@ -38,6 +38,9 @@ const CONNECTION_ERROR_MESSAGES = [
 
 type ErrorFields = { name?: unknown; code?: unknown; message?: unknown; cause?: unknown; $fault?: unknown; $metadata?: { httpStatusCode?: unknown; attempts?: unknown } };
 
+/** The hint the AWS SDK appends to the message of an error it raised while reading a response. */
+const SDK_DESERIALIZATION_HINT = /\n\s*Deserialization error: to see the raw response[\s\S]*$/;
+
 function fields(value: unknown): ErrorFields | undefined {
   return value !== null && typeof value === "object" ? value as ErrorFields : undefined;
 }
@@ -53,6 +56,23 @@ function json(value: unknown): string {
 /** Whether the upstream answered with an error response of its own (an AWS service exception). */
 export function isServiceException(error: unknown): boolean {
   return fields(error)?.$fault !== undefined;
+}
+
+/**
+ * Whether an error came from the upstream's answer: an AWS service exception,
+ * or an error the SDK raised from a response it received, such as an
+ * exception event that opened a stream. The SDK records the response's HTTP
+ * status on both.
+ */
+export function isUpstreamAnswer(error: unknown): boolean {
+  const value = fields(error);
+  return value?.$fault !== undefined || typeof value?.$metadata?.httpStatusCode === "number";
+}
+
+/** An upstream error's message without the hint the SDK appends; undefined when it has none. */
+export function upstreamMessage(error: unknown): string | undefined {
+  const message = fields(error)?.message;
+  return typeof message === "string" ? message.replace(SDK_DESERIALIZATION_HINT, "").trim() || undefined : undefined;
 }
 
 /**
@@ -85,6 +105,16 @@ export function isUpstreamGatewayStatus(error: unknown): boolean {
 }
 
 /**
+ * Whether the SDK could not parse a response the upstream had begun to send.
+ * When the connection drops mid-body, the HTTP/2 stream can end without an
+ * error, and the cut-off JSON is what fails.
+ */
+export function isUnreadableUpstreamResponse(error: unknown): boolean {
+  const value = fields(error);
+  return value?.name === "SyntaxError" && value.$fault === undefined && typeof value.$metadata?.httpStatusCode === "number";
+}
+
+/**
  * One line describing an error and its causes for the gateway log, such as
  * `Error(ERR_HTTP2_STREAM_CANCEL): The pending stream has been canceled (caused by:
  * connect ECONNREFUSED 10.0.0.1:8080) <- Error(ECONNREFUSED): connect ECONNREFUSED
@@ -102,7 +132,7 @@ export function describeError(error: unknown): string {
     const name = typeof value.name === "string" && value.name ? value.name : value instanceof Error ? "Error" : "Object";
     const code = typeof value.code === "string" || typeof value.code === "number" ? `(${value.code})` : "";
     const status = typeof value.$metadata?.httpStatusCode === "number" ? ` status=${value.$metadata.httpStatusCode}` : "";
-    const message = typeof value.message === "string" ? value.message : value instanceof Error ? "" : json(value);
+    const message = typeof value.message === "string" ? value.message.replace(SDK_DESERIALIZATION_HINT, "") : value instanceof Error ? "" : json(value);
     parts.push(`${name}${code}${status}: ${message}`);
     current = value.cause;
   }

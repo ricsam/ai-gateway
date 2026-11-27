@@ -28,10 +28,12 @@ import {
 import { isControllerClosedError } from "./stream-utils";
 import {
   describeError,
-  isServiceException,
+  isUnreadableUpstreamResponse,
+  isUpstreamAnswer,
   isUpstreamConnectionError,
   isUpstreamGatewayStatus,
   UPSTREAM_UNAVAILABLE_MESSAGE,
+  upstreamMessage,
 } from "./upstream-errors";
 
 export type BedrockProxyEndpoint = "invoke" | "invoke-stream" | "converse" | "converse-stream";
@@ -57,12 +59,12 @@ function mapError(error: unknown, context: { requestId: string; modelId: string;
   if (error instanceof ProviderNotConfiguredError) return failure(error.message, 503, "provider_not_configured");
   const where = `request=${context.requestId} model=${context.modelId} endpoint=${context.endpoint}`;
   // A failed or broken connection names the upstream's address: keep it in the log.
-  if (isUpstreamConnectionError(error) || isUpstreamGatewayStatus(error)) {
+  if (isUpstreamConnectionError(error) || isUnreadableUpstreamResponse(error) || isUpstreamGatewayStatus(error)) {
     console.error(`[Bedrock Proxy] Upstream unavailable: ${where} error=${describeError(error)}`);
     return failure(UPSTREAM_UNAVAILABLE_MESSAGE, 503, "service_unavailable");
   }
   const name = error instanceof Error ? error.name : "";
-  const message = error instanceof Error ? error.message : "Bedrock request failed";
+  const message = upstreamMessage(error) ?? "Bedrock request failed";
   const mapped: Record<string, [number, string]> = {
     AccessDeniedException: [403, "access_denied"],
     ThrottlingException: [429, "rate_limit_exceeded"],
@@ -74,8 +76,8 @@ function mapError(error: unknown, context: { requestId: string; modelId: string;
   const [status, code] = Object.hasOwn(mapped, name) ? mapped[name]! : [500, "internal_error"];
   if (status !== 500) return failure(message, status, code);
   console.error(`[Bedrock Proxy] Request failed: ${where} error=${describeError(error)}`);
-  // An error response from Bedrock keeps its message; the gateway's own errors don't leak theirs.
-  return failure(isServiceException(error) && message ? message : "Internal server error", status, code);
+  // An answer from Bedrock keeps its message; the gateway's own errors don't leak theirs.
+  return failure(isUpstreamAnswer(error) ? message : "Internal server error", status, code);
 }
 
 function bodyBytes(value: unknown): Uint8Array {
